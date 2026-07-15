@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 from typing import Dict, List, Tuple
 
 from tqdm import tqdm
@@ -83,6 +84,9 @@ def process_batch(
 
 
 def main():
+    # For the sake of web connection issues
+    os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+
     parser = argparse.ArgumentParser()
 
     # core args for experiments
