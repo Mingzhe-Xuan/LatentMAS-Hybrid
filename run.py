@@ -1,5 +1,8 @@
 import argparse
 import json
+import logging
+from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Tuple
 
 from tqdm import tqdm
@@ -30,6 +33,58 @@ def evaluate(preds: List[Dict]) -> Tuple[float, int]:
     acc = correct / total if total > 0 else 0.0
     return acc, correct
 
+def configure_run_files(args: argparse.Namespace) -> Tuple[logging.Logger, Path]:
+    """Create per-run detail and summary output files."""
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_name = f"{args.task}_{args.method}_{run_id}"
+
+    log_dir = Path("logging")
+    result_dir = Path("result")
+    log_dir.mkdir(exist_ok=True)
+    result_dir.mkdir(exist_ok=True)
+
+    logger = logging.getLogger("run_details")
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+    logger.propagate = False
+
+    file_handler = logging.FileHandler(log_dir / f"{run_name}.log", encoding="utf-8")
+    file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
+    logger.addHandler(file_handler)
+    logger.info("Run configuration:\n%s", json.dumps(vars(args), ensure_ascii=False, indent=2))
+
+    return logger, result_dir / f"{run_name}.json"
+
+
+def log_problem_detail(logger: logging.Logger, problem_idx: int, result: Dict) -> None:
+    """Write the full result for one problem to the per-run detail log."""
+    lines = [
+        "=" * 20 + f" Problem #{problem_idx} " + "=" * 20,
+        "Question:",
+        result.get("question", "").strip(),
+    ]
+    for agent in result.get("agents", []):
+        name = agent.get("name", "Agent")
+        role = agent.get("role", "")
+        lines.extend([
+            f"----- Agent: {name} ({role}) -----",
+            "[To Tokenize]",
+            agent.get("input", "").rstrip(),
+        ])
+        latent_steps = agent.get("latent_steps")
+        if latent_steps is not None:
+            lines.extend(["[Latent Steps]", str(latent_steps)])
+        lines.extend([
+            "[Output]",
+            agent.get("output", "").rstrip(),
+            "-" * 46,
+        ])
+    lines.append(
+        f"Result: Pred={result.get('prediction')} | Gold={result.get('gold')} | "
+        f"OK={result.get('correct')}"
+    )
+    logger.info("\n".join(lines))
+
 # Main processing function for each batch
 def process_batch(
     method,
@@ -39,6 +94,7 @@ def process_batch(
     progress,
     max_samples: int,
     args: argparse.Namespace,
+    logger: logging.Logger,
 ) -> Tuple[int, List[Dict]]:
     remaining = max_samples - processed
     if remaining <= 0:
@@ -54,27 +110,7 @@ def process_batch(
     for offset, res in enumerate(results):
         preds.append(res)
         problem_idx = batch_start + offset + 1
-        print(f"\n==================== Problem #{problem_idx} ====================")
-        print("Question:")
-        print(res.get("question", "").strip())
-        agents = res.get("agents", [])
-        for a in agents:
-            name = a.get("name", "Agent")
-            role = a.get("role", "")
-            agent_header = f"----- Agent: {name} ({role}) -----"
-            print(agent_header)
-            agent_input = a.get("input", "").rstrip()
-            agent_output = a.get("output", "").rstrip()
-            latent_steps = a.get("latent_steps", None)
-            print("[To Tokenize]")
-            print(agent_input)
-            if latent_steps is not None:
-                print("[Latent Steps]")
-                print(latent_steps)
-            print("[Output]")
-            print(agent_output)
-            print("----------------------------------------------")
-        print(f"Result: Pred={res.get('prediction')} | Gold={res.get('gold')} | OK={res.get('correct')}")
+        log_problem_detail(logger, problem_idx, res)
 
     processed += len(results)
     if progress is not None:
@@ -131,6 +167,7 @@ def main():
         args.enable_prefix_caching = True
     
     set_seed(args.seed)
+    logger, result_path = configure_run_files(args)
     device = auto_device(args.device)
     model = ModelWrapper(args.model_name, device, use_vllm=args.use_vllm, args=args)
     
@@ -209,7 +246,7 @@ def main():
         dataset_iter = list(dataset_iter)  
         args.max_samples = len(dataset_iter)
 
-    progress = tqdm(total=args.max_samples)
+    progress = tqdm(total=args.max_samples, desc="Evaluating", unit="problem")
 
     for item in dataset_iter:
         if processed >= args.max_samples:
@@ -224,6 +261,7 @@ def main():
                 progress,
                 args.max_samples,
                 args,
+                logger,
             )
             batch = []
             if processed >= args.max_samples:
@@ -238,6 +276,7 @@ def main():
             progress,
             max_samples=args.max_samples,
             args=args,
+            logger=logger,
         )
     progress.close()
     
@@ -245,24 +284,26 @@ def main():
 
     acc, correct = evaluate(preds)
     
-    # Load results in JSON format
-    print(
-        json.dumps(
-            {
-                "method": args.method,
-                "model": args.model_name,
-                "split": args.split,
-                "seed": args.seed,
-                "max_samples": args.max_samples,
-                "accuracy": acc,
-                "correct": correct,
-                "total_time_sec": round(total_time,4),
-                "time_per_sample_sec": round(total_time / args.max_samples, 4),
-            },
-            ensure_ascii=False,
-        )
-    )
-
+    summary = {
+        "run": {
+            "method": args.method,
+            "model": args.model_name,
+            "task": args.task,
+            "split": args.split,
+            "seed": args.seed,
+        },
+        "results": {
+            "processed": processed,
+            "correct": correct,
+            "accuracy": round(acc, 6),
+        },
+        "timing": {
+            "total_seconds": round(total_time, 4),
+            "seconds_per_sample": round(total_time / processed, 4) if processed else 0.0,
+        },
+    }
+    result_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    logger.info("Final summary written to %s:\n%s", result_path, json.dumps(summary, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
