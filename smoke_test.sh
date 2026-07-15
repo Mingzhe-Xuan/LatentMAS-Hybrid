@@ -1,0 +1,11 @@
+python run.py \
+  --method latent_mas_hybrid \
+  --model_name Qwen/Qwen3-4B \
+  --agent_models Qwen/Qwen3-4B Qwen/Qwen3-8B Qwen/Qwen3-4B Qwen/Qwen3-8B \
+  --task gsm8k \
+  --prompt sequential \
+  --max_samples 4 \
+  --generate_bs 1 \
+  --latent_steps 4 \
+  --max_new_tokens 512 \
+  --seed 42
