@@ -1,12 +1,9 @@
 import argparse
 import json
-<<<<<<< HEAD
 import os
-=======
 import logging
 from datetime import datetime
 from pathlib import Path
->>>>>>> 1ac2f39daef3200529c8becf497016ccf74c5ad7
 from typing import Dict, List, Tuple
 
 from tqdm import tqdm
