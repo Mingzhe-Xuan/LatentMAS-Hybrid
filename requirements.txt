@@ -1,14 +1,26 @@
+## python >= 3.9
+
 # 基础数学库
-numpy>=1.24.3,<2.0.0
+numpy==2.2.6
  
-# 推理加速库（会自动带入匹配的 torch/torchvision/torchaudio）
-vllm
+# ------------------------------------------------------------
+# 推理加速库 vLLM
+# vLLM 官方自 v0.17.0 起对 RTX 5090 (SM120) 提供原生 FP8/GEMM 优化，
+# 默认发布的 wheel 已按 CUDA 12.9 编译，会自动带入匹配的
+# torch / torchvision / torchaudio（无需再手动指定 nightly 版本）。
+# 直接 pip install 即可，若默认源较慢可换成官方 wheel 源：
+#   pip install vllm --extra-index-url https://download.pytorch.org/whl/cu128
+vllm==0.17.0
  
+# ------------------------------------------------------------
 # HuggingFace 生态库
-transformers>=4.44.0
-accelerate>=0.33.0
-datasets>=2.20.0
+# 注：transformers/tokenizers 版本需满足 vllm==0.17.0 的硬性要求，
+# 否则会出现 pip 依赖冲突报错（transformers<5,>=4.56.0 / tokenizers>=0.21.1）
+transformers==4.56.0
+tokenizers==0.21.1
+accelerate==0.34.0
+datasets==2.20.0
  
 # 实用工具
-tqdm>=4.66.0
-matplotlib>=3.8.0
+tqdm==4.66.3
+matplotlib==3.9.0
