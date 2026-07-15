@@ -1,6 +1,10 @@
 import argparse
 import json
 import os
+
+# Must be set before importing transformers/huggingface_hub.
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -120,9 +124,6 @@ def process_batch(
 
 
 def main():
-    # For the sake of web connection issues
-    os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
-
     parser = argparse.ArgumentParser()
 
     # core args for experiments
