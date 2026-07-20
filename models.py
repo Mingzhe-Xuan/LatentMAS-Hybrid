@@ -19,6 +19,9 @@ def _ensure_pad_token(tokenizer: AutoTokenizer) -> None:
             tokenizer.pad_token = tokenizer.eos_token
         else:
             tokenizer.add_special_tokens({"pad_token": "<pad>"})
+    # Decoder-only batch generation and latent rollout read the final sequence
+    # position, so every row must end at its final non-padding token.
+    tokenizer.padding_side = "left"
 
 
 def _past_length(past_key_values: Optional[Tuple]) -> int:
@@ -58,7 +61,7 @@ class ModelWrapper:
             if use_second_hf:
                 self.HF_model = AutoModelForCausalLM.from_pretrained(
                     model_name,
-                    torch_dtype=(torch.bfloat16 if torch.cuda.is_available() else torch.float32),
+                    dtype=(torch.bfloat16 if torch.cuda.is_available() else torch.float32),
                     token=False,
                 ).to(args.device2).eval() 
                 self.embedding_layer = self.HF_model.get_input_embeddings()
@@ -75,7 +78,7 @@ class ModelWrapper:
         with torch.no_grad():
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_name,
-                torch_dtype=(torch.bfloat16 if torch.cuda.is_available() else torch.float32),
+                dtype=(torch.bfloat16 if torch.cuda.is_available() else torch.float32),
                 token=False,
             )
         if len(self.tokenizer) != self.model.get_input_embeddings().weight.shape[0]:
