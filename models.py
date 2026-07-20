@@ -4,6 +4,7 @@ import torch
 import matplotlib.pyplot as plt
 from typing import Dict, List, Optional, Tuple
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from alignment import AlignmentState, apply_alignment, build_kernel_state, build_linear_state
 
 try:
     from vllm import LLM, SamplingParams
@@ -33,8 +34,9 @@ class ModelWrapper:
         self.device = device
         self.use_vllm = use_vllm and _HAS_VLLM
         self.vllm_engine = None
-        self.latent_space_realign = bool(getattr(args, "latent_space_realign", False)) if args else False
-        self._latent_realign_matrices: Dict[int, Tuple[torch.Tensor, torch.Tensor]] = {}
+        legacy_realign = bool(getattr(args, "latent_space_realign", False)) if args else False
+        self.align_method = getattr(args, "align_method", None) or ("linear" if legacy_realign else "identical")
+        self._alignment_states: Dict[Tuple[int, int, str], AlignmentState] = {}
         self.args = args
 
         # for ablation
@@ -60,10 +62,9 @@ class ModelWrapper:
                 ).to(args.device2).eval() 
                 self.embedding_layer = self.HF_model.get_input_embeddings()
                 self.HF_device = args.device2
-                # if self.latent_space_realign:
-                self._ensure_latent_realign_matrix(self.HF_model, torch.device(self.HF_device), args)
-            elif self.latent_space_realign:
-                raise ValueError("latent_space_realign requires --use_second_HF_model when using vLLM backend.")
+                self._ensure_alignment_state(self.HF_model, self.HF_model)
+            elif self.align_method != "identical":
+                raise ValueError("Non-identical alignment requires --use_second_HF_model when using vLLM backend.")
             _ensure_pad_token(self.tokenizer)
             return  # skip loading transformers model
 
@@ -81,8 +82,7 @@ class ModelWrapper:
         self.model.eval()
         if hasattr(self.model.config, "use_cache"):
             self.model.config.use_cache = True
-        if self.latent_space_realign:
-            self._ensure_latent_realign_matrix(self.model, self.device, args)
+        self._ensure_alignment_state(self.model, self.model)
 
     def render_chat(self, messages: List[Dict], add_generation_prompt: bool = True) -> str:
         tpl = getattr(self.tokenizer, "chat_template", None)
@@ -155,63 +155,57 @@ class ModelWrapper:
         generations = [out.outputs[0].text.strip() for out in outputs]
         return generations
     
-    def _build_latent_realign_matrix(self, model, device, args) -> Tuple[torch.Tensor, torch.Tensor]:
-        input_embeds = model.get_input_embeddings() if hasattr(model, "get_input_embeddings") else None
-        output_embeds = model.get_output_embeddings() if hasattr(model, "get_output_embeddings") else None
+    @staticmethod
+    def _embedding_weights(source_model, target_model) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+        input_embeds = target_model.get_input_embeddings() if hasattr(target_model, "get_input_embeddings") else None
+        output_embeds = source_model.get_output_embeddings() if hasattr(source_model, "get_output_embeddings") else None
         if output_embeds is None:
-            output_embeds = getattr(model, "lm_head", None)
+            output_embeds = getattr(source_model, "lm_head", None)
         if (
-            input_embeds is None
-            or output_embeds is None
-            or not hasattr(input_embeds, "weight")
-            or not hasattr(output_embeds, "weight")
+            input_embeds is None or output_embeds is None
+            or not hasattr(input_embeds, "weight") or not hasattr(output_embeds, "weight")
         ):
-            raise RuntimeError("Cannot build latent realignment matrix: embedding weights not accessible.")
-        input_weight = input_embeds.weight.detach().to(device=device, dtype=torch.float32)
-        output_weight = output_embeds.weight.detach().to(device=device, dtype=torch.float32)
-        gram = torch.matmul(output_weight.T, output_weight)
-        reg = 1e-5 * torch.eye(gram.shape[0], device=gram.device, dtype=gram.dtype)
-        gram = gram + reg
-        rhs = torch.matmul(output_weight.T, input_weight)
-        realign_matrix = torch.linalg.solve(gram, rhs)
-        target_norm = input_weight.norm(dim=1).mean().detach()
+            raise RuntimeError("Cannot build alignment: embedding weights not accessible.")
+        return output_embeds.weight, input_embeds.weight, getattr(output_embeds, "bias", None)
 
-        if self.args.latent_space_realign:
-            pass
-        else:
-            # keep the matrix, for further normalization
-            realign_matrix = torch.eye(realign_matrix.shape[0], device=realign_matrix.device, dtype=realign_matrix.dtype)
+    def _build_alignment_state(self, source_model, target_model) -> AlignmentState:
+        output_weight, input_weight, output_bias = self._embedding_weights(source_model, target_model)
+        if self.align_method == "identical":
+            if output_weight.shape[1] != input_weight.shape[1]:
+                raise ValueError("identical alignment requires source and target hidden dimensions to match")
+            return AlignmentState("identical", input_weight.detach().float().norm(dim=1).mean())
+        if self.align_method == "linear":
+            return build_linear_state(output_weight, input_weight, ridge=float(getattr(self.args, "align_ridge", 1e-5)))
+        if self.align_method == "kernel":
+            return build_kernel_state(
+                output_weight, input_weight, output_bias,
+                feature_count=int(getattr(self.args, "kernel_features", 1024)),
+                temperature=float(getattr(self.args, "kernel_temperature", 1.0)),
+                seed=int(getattr(self.args, "kernel_seed", getattr(self.args, "seed", 42))),
+                chunk_size=int(getattr(self.args, "kernel_chunk_size", 4096)),
+            )
+        raise ValueError(f"Unsupported align method: {self.align_method}")
 
-        return realign_matrix, target_norm
-
-    def _ensure_latent_realign_matrix(self, model, device, args) -> Tuple[torch.Tensor, torch.Tensor]:
-        key = id(model)
-        info = self._latent_realign_matrices.get(key)
-        target_device = torch.device(device)
-
-        if info is None:
-            matrix, target_norm = self._build_latent_realign_matrix(model, target_device, args)
-        else:
-            matrix, target_norm = info
-            if matrix.device != target_device:
-                matrix = matrix.to(target_device)
-
-        target_norm = target_norm.to(device=target_device, dtype=matrix.dtype) if isinstance(target_norm, torch.Tensor) else torch.as_tensor(target_norm, device=target_device, dtype=matrix.dtype)
-        self._latent_realign_matrices[key] = (matrix, target_norm)
-
-        return matrix, target_norm
+    def _ensure_alignment_state(self, source_model, target_model) -> AlignmentState:
+        key = (id(source_model), id(target_model), self.align_method)
+        state = self._alignment_states.get(key)
+        if state is None:
+            state = self._build_alignment_state(source_model, target_model)
+            self._alignment_states[key] = state
+        return state
 
     def _apply_latent_realignment(self, hidden: torch.Tensor, model: torch.nn.Module) -> torch.Tensor:
-        matrix, target_norm = self._ensure_latent_realign_matrix(model, hidden.device, self.args)
-        hidden_fp32 = hidden.to(torch.float32)
-        aligned = torch.matmul(hidden_fp32, matrix)
+        aligned = apply_alignment(hidden, self._ensure_alignment_state(model, model))
+        self.pre_aligned = aligned.detach().clone()
+        return aligned
 
-        aligned_norm = aligned.norm(dim=-1, keepdim=True).clamp_min(1e-6)
-        pre_aligned = aligned.detach().clone()
-        self.pre_aligned = pre_aligned
-        aligned = aligned * (target_norm / aligned_norm)
-        return aligned.to(hidden.dtype)
-
+    def align_hidden_to(self, hidden: torch.Tensor, target: "ModelWrapper") -> torch.Tensor:
+        """Align hidden states to target input embeddings; token IDs must match exactly."""
+        if self.tokenizer.get_vocab() != target.tokenizer.get_vocab():
+            raise ValueError("Alignment currently requires identical token-to-ID vocabularies.")
+        source_model = self.HF_model if hasattr(self, "HF_model") else self.model
+        target_model = target.HF_model if hasattr(target, "HF_model") else target.model
+        return apply_alignment(hidden, self._ensure_alignment_state(source_model, target_model))
     @torch.no_grad()
     def generate_text_batch(
         self,

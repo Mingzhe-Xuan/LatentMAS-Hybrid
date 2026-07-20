@@ -19,85 +19,11 @@ def transfer_via_realignment(
     hidden_states: torch.Tensor,
     model_from: ModelWrapper,
     model_to: ModelWrapper,
-    lambda_reg: float = 1e-5
+    lambda_reg: float = 1e-5,
 ) -> torch.Tensor:
-    """
-    Transfer hidden states from Model A to Model B using cross-model realignment.
-    
-    Following the paper's realignment math (equation 8):
-    W_a = (W_out^T @ W_out + λI)^-1 @ W_out^T @ W_in
-    
-    For cross-model transfer:
-    W_cross = (W_out_A^T @ W_out_A + λI)^-1 @ W_out_A^T @ W_in_B
-    
-    Then: embedding_B = hidden_A @ W_cross
-    
-    This is should be equivalent to: hidden_A @ W_out_A^+ @ W_in_B
-    
-    Args:
-        hidden_states: [batch, seq_len, dim_A] - Hidden states from model A
-        model_from: Source model (Model A)
-        model_to: Target model (Model B)
-        lambda_reg: Regularization for numerical stability (paper uses 1e-5)
-    
-    Returns:
-        embeddings_B: [batch, seq_len, dim_B] - Input embeddings for model B
-    """
-    batch_size, seq_len, dim_A = hidden_states.shape
-    original_dtype = hidden_states.dtype
-    
-    # Get weights from both models
-    W_out_A = model_from.model.get_output_embeddings().weight  # [vocab_A, dim_A]
-    W_in_B = model_to.model.get_input_embeddings().weight      # [vocab_B, dim_B]
-    
-    dim_B = W_in_B.shape[1]
-    
-    # Convert to float32 for numerical stability (BFloat16 not supported in linalg.solve)
-    W_out_A_f32 = W_out_A.float()
-    W_in_B_f32 = W_in_B.float()
-    
-    # Compute cross-model realignment matrix:
-    # W_cross = (W_out_A^T @ W_out_A + λI)^-1 @ W_out_A^T @ W_in_B
-    
-    # Step 1: Gram matrix with regularization
-    gram = torch.matmul(W_out_A_f32.T, W_out_A_f32)  # [dim_A, dim_A]
-    reg = lambda_reg * torch.eye(gram.shape[0], device=gram.device, dtype=torch.float32)
-    gram_reg = gram + reg
-    
-    # Step 2: Right-hand side: W_out_A^T @ W_in_B
-    # For Qwen models, vocab sizes should be the same (they share tokenizer)
-    # But handle dimension mismatch gracefully
-    vocab_A, _ = W_out_A.shape
-    vocab_B, _ = W_in_B.shape
-    
-    if vocab_A != vocab_B:
-        # Vocabulary size mismatch - use minimum common vocab
-        min_vocab = min(vocab_A, vocab_B)
-        W_out_A_f32 = W_out_A_f32[:min_vocab, :]
-        W_in_B_f32 = W_in_B_f32[:min_vocab, :]
-        print(f"[WARNING] Vocab size mismatch: {vocab_A} vs {vocab_B}, using first {min_vocab} tokens")
-    
-    # Compute W_out_A^T @ W_in_B [dim_A, dim_B]
-    rhs = torch.matmul(W_out_A_f32.T, W_in_B_f32)
-    
-    # Step 3: Solve: (gram_reg) @ W_cross = rhs
-    W_cross = torch.linalg.solve(gram_reg, rhs)  # [dim_A, dim_B]
-    
-    # Step 4: Apply cross-model alignment: embedding_B = hidden_A @ W_cross
-    hidden_flat = hidden_states.reshape(-1, dim_A).float()
-    embeddings_B_flat = torch.matmul(hidden_flat, W_cross)  # [batch*seq, dim_B]
-    
-    # Step 5: Normalize to match target embedding scale (critical for quality!)
-    # This follows the paper's approach in _apply_latent_realignment
-    target_norm = W_in_B_f32.norm(dim=1).mean()
-    current_norms = torch.norm(embeddings_B_flat, dim=1, keepdim=True)
-    embeddings_B_flat = embeddings_B_flat * (target_norm / (current_norms + 1e-8))
-    
-    # Reshape and convert back to original dtype
-    embeddings_B = embeddings_B_flat.reshape(batch_size, seq_len, dim_B).to(original_dtype)
-    
-    return embeddings_B
-
+    """Compatibility wrapper for the shared identical/linear/kernel aligner."""
+    del lambda_reg  # configured by --align-ridge on the shared aligner
+    return model_from.align_hidden_to(hidden_states, model_to)
 
 class LatentMASMethod:
     def __init__(
