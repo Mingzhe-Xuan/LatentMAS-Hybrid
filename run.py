@@ -41,7 +41,7 @@ def evaluate(preds: List[Dict]) -> Tuple[float, int]:
 def configure_run_files(args: argparse.Namespace) -> Tuple[logging.Logger, Path]:
     """Create per-run detail and summary output files."""
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_name = f"{args.task}_{args.method}_{run_id}"
+    run_name = f"{args.task}_{args.method}_align_{args.align_method}_{run_id}"
 
     log_dir = Path("logging")
     result_dir = Path("result")
@@ -306,6 +306,7 @@ def main():
     summary = {
         "run": {
             "method": args.method,
+            "align_method": args.align_method,
             "model": args.model_name,
             "task": args.task,
             "split": args.split,
