@@ -415,3 +415,50 @@ GPU 1: HF 辅助模型（latent 推理）
 | `text_mas` | 支持，每个 Agent 由 vLLM 生成文本 |
 | `latent_mas` | 支持，HF 负责 latent、vLLM 负责 Judger 最终生成 |
 | `latent_mas_hybrid` | 主运行流程未接入 vLLM；跨模型路径使用 HF 模型 |
+
+## 12. `run.py` 命令行参数速查
+
+入口是 `python run.py`；以下以当前代码实际行为为准。`--method` 与 `--model_name` 是仅有的两个必填参数。
+
+### 12.1 实验与数据集
+
+| 参数 | 默认值 / 可选值 | 含义与适用范围 |
+| --- | --- | --- |
+| `--method` | 必填：`baseline`、`text_mas`、`latent_mas`、`latent_mas_hybrid` | 选择单模型、文本通信、同模型 latent 通信或异构 latent 通信的方法实现。 |
+| `--model_name` | 必填 | Hugging Face 模型名/本地路径，亦为未指定 `--agent_models` 时各 Agent 的模型。当前 TextMAS/LatentMAS 提示词主路径要求 Qwen。 |
+| `--task` | `gsm8k` | 数据集、提示词和评测规则；可选 `gsm8k`、`aime2024`、`aime2025`、`gpqa`、`arc_easy`、`arc_challenge`、`mbppplus`、`humanevalplus`、`medqa`。 |
+| `--split` | `test` | 仅 GSM8K 实际使用；AIME 固定 `train`，其余当前入口固定 `test`。 |
+| `--max_samples` | `-1` | 评测题数；`-1` 表示任务全部样本。 |
+| `--seed` | `42` | 随机种子。HF/vLLM、硬件和采样实现仍可能造成细小差异。 |
+
+### 12.2 Agent 结构与文本生成
+
+| 参数 | 默认值 / 可选值 | 含义与适用范围 |
+| --- | --- | --- |
+| `--prompt` | `sequential`；或 `hierarchical` | 多 Agent 的提示词结构；影响 TextMAS 的文本上下文组织，以及 LatentMAS 的角色提示词。`baseline` 不使用。 |
+| `--max_new_tokens` | `4096` | 生成上限：Baseline 为直接输出，TextMAS 为每个 Agent，LatentMAS/Hybrid 为 Judger 最终输出。 |
+| `--temperature` | `0.6` | 采样温度；越高越随机。 |
+| `--top_p` | `0.95` | nucleus sampling 阈值。 |
+| `--generate_bs` | `20` | 外层 `run_batch()` 的题目数量，也作为生成 batch size；增大吞吐但提高显存。对 LatentMAS，变长样本批处理还需留意第 7.2 节的 mask/cache 限制。 |
+| `--text_mas_context_length` | `-1` | TextMAS 传给后续 Agent 的已有文本长度，代码为 `context[:value]`。默认 `-1` 会删掉最后一个字符，**不是**无限长度；请设足够大的正数以保留全文，`0` 为不传上下文。 |
+
+### 12.3 LatentMAS 参数
+
+| 参数 | 默认值 / 可选值 | 含义与适用范围 |
+| --- | --- | --- |
+| `--latent_steps` | `0` | Planner、Critic、Refiner 各自的连续 latent embedding rollout 步数；会增长耗时、KV cache 和显存。仅 LatentMAS/Hybrid。 |
+| `--think` | 关闭；指定即开启 | 为 latent Agent 手动追加 think token，改变 latent rollout 起点。仅 LatentMAS/Hybrid。 |
+| `--latent_space_realign` | 关闭；指定即开启 | 把 hidden state 线性映射并缩放至输入 embedding 空间；关闭时仍做范数缩放、但使用单位映射。vLLM 下需要 HF 辅助模型。 |
+| `--agent_models` | `None` | 仅 Hybrid。按 `Planner Critic Refiner Judger` 顺序给出四个模型名；未给则全部用 `--model_name`，数量不是 4 会断言失败。应选 tokenizer 兼容的同族模型。 |
+
+### 12.4 设备与 vLLM
+
+| 参数 | 默认值 / 可选值 | 含义与适用范围 |
+| --- | --- | --- |
+| `--device` | `cuda` | 主 HF 模型或 vLLM 引擎的设备（如 `cuda:0`、`cpu`）。 |
+| `--use_vllm` | 关闭；指定即开启 | 请求 vLLM；未安装时 `ModelWrapper` 回退 HF。Hybrid 的附加模型仍强制为 HF，因而不等同完整 Hybrid-vLLM 支持。 |
+| `--tensor_parallel_size` | `1` | vLLM 切分同一个模型的 GPU 数，不是每卡一题。 |
+| `--gpu_memory_utilization` | `0.9` | vLLM 单卡目标显存比例；调高可扩大其 cache 空间，也更易 OOM。 |
+| `--device2` | 缺省时同 `--device` | HF 辅助模型的设备；建议 latent+vLLM 时与 vLLM 分置两卡。 |
+| `--use_second_HF_model` | 关闭；指定即开启 | vLLM 同时使用时加载 HF 辅助模型，完成 latent hidden state、embedding 与 KV cache 计算。 |
+| `--enable_prefix_caching` | 关闭；指定即开启 | 启用 vLLM prefix cache；当前只在 `latent_mas` 时传给 vLLM，不能控制 HF `past_key_values`。 |
