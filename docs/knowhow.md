@@ -147,7 +147,7 @@ outputs = self.model(
 )
 ```
 
-`_apply_latent_realignment()` 将最终 hidden state 调整到输入 embedding 的空间与范数尺度。若未启用 `--latent_space_realign`，该仓库会使用单位映射再做范数缩放；启用后则使用由输入/输出 embedding 求得的线性映射。
+`_apply_latent_realignment()` 依据 `--align_method` 将最终 hidden state 调整为可作为输入的 embedding。`identical` 使用单位映射并缩放到目标 embedding 的平均范数；`linear` 使用输入/输出 embedding 构造岭回归线性映射后缩放；`kernel` 按 `docs/algo_detail.md` 预聚合 ORF 核近似统计量，在在线阶段直接输出目标 embedding 空间向量而不扫描全词表。
 
 LatentMAS 的 Agent 链是：
 
@@ -448,7 +448,12 @@ GPU 1: HF 辅助模型（latent 推理）
 | --- | --- | --- |
 | `--latent_steps` | `0` | Planner、Critic、Refiner 各自的连续 latent embedding rollout 步数；会增长耗时、KV cache 和显存。仅 LatentMAS/Hybrid。 |
 | `--think` | 关闭；指定即开启 | 为 latent Agent 手动追加 think token，改变 latent rollout 起点。仅 LatentMAS/Hybrid。 |
-| `--latent_space_realign` | 关闭；指定即开启 | 把 hidden state 线性映射并缩放至输入 embedding 空间；关闭时仍做范数缩放、但使用单位映射。vLLM 下需要 HF 辅助模型。 |
+| `--align_method` | `identical`；`identical` / `linear` / `kernel` | latent hidden→目标输入 embedding 的对齐策略。`identical` 为单位映射加范数缩放；`linear` 为岭回归线性映射加范数缩放；`kernel` 使用 ORF 正随机特征的预聚合核近似。跨模型时当前要求 token 到 ID 的词表映射完全一致。非 `identical` 的 vLLM 路径需要 HF 辅助模型。 |
+| `--align_ridge` | `1e-5` | `linear` 对齐的岭回归正则系数。 |
+| `--kernel_features` | `1024` | `kernel` 的随机特征数 $\mathit{m}$；越大通常近似越好，但预计算、显存与在线计算开销也越大。 |
+| `--kernel_temperature` | `1.0` | `kernel` 中 softmax 映射的温度 $\tau$，独立于文本生成的 `--temperature`。 |
+| `--kernel_seed` | 继承 `--seed` | ORF 随机方向的种子，保证离线统计量与实验可复现。 |
+| `--kernel_chunk_size` | `4096` | 构建 kernel 统计量时每次处理的词表行数，用于控制预计算峰值显存。 |
 | `--agent_models` | `None` | 仅 Hybrid。按 `Planner Critic Refiner Judger` 顺序给出四个模型名；未给则全部用 `--model_name`，数量不是 4 会断言失败。应选 tokenizer 兼容的同族模型。 |
 
 ### 12.4 设备与 vLLM

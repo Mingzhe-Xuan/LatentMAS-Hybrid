@@ -146,17 +146,17 @@ def main():
     parser.add_argument("--generate_bs", type=int, default=20, help="Batch size for generation")
     parser.add_argument("--text_mas_context_length", type=int, default=-1, help="TextMAS context length limit")
     parser.add_argument("--think", action="store_true", help="Manually add think token in the prompt for LatentMAS")
-    parser.add_argument("--align-method", dest="align_method", choices=["identical", "linear", "kernel"], default="identical",
+    parser.add_argument("--align_method", dest="align_method", choices=["identical", "linear", "kernel"], default="identical",
                         help="Latent-to-input alignment: identity with norm scaling, linear least-squares, or ORF kernel approximation.")
-    parser.add_argument("--align-ridge", dest="align_ridge", type=float, default=1e-5,
-                        help="Ridge regularization for --align-method linear.")
-    parser.add_argument("--kernel-features", dest="kernel_features", type=int, default=1024,
-                        help="Number m of orthogonal random features for --align-method kernel.")
-    parser.add_argument("--kernel-temperature", dest="kernel_temperature", type=float, default=1.0,
+    parser.add_argument("--align_ridge", dest="align_ridge", type=float, default=1e-5,
+                        help="Ridge regularization for --align_method linear.")
+    parser.add_argument("--kernel_features", dest="kernel_features", type=int, default=1024,
+                        help="Number m of orthogonal random features for --align_method kernel.")
+    parser.add_argument("--kernel_temperature", dest="kernel_temperature", type=float, default=1.0,
                         help="Kernel softmax temperature tau; distinct from generation temperature.")
-    parser.add_argument("--kernel-seed", dest="kernel_seed", type=int, default=None,
+    parser.add_argument("--kernel_seed", dest="kernel_seed", type=int, default=None,
                         help="ORF seed; defaults to --seed when omitted.")
-    parser.add_argument("--kernel-chunk-size", dest="kernel_chunk_size", type=int, default=4096,
+    parser.add_argument("--kernel_chunk_size", dest="kernel_chunk_size", type=int, default=4096,
                         help="Vocabulary chunk size used to precompute kernel statistics.")
     parser.add_argument("--seed", type=int, default=42)
 

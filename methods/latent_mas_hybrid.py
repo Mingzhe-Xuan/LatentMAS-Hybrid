@@ -22,7 +22,7 @@ def transfer_via_realignment(
     lambda_reg: float = 1e-5,
 ) -> torch.Tensor:
     """Compatibility wrapper for the shared identical/linear/kernel aligner."""
-    del lambda_reg  # configured by --align-ridge on the shared aligner
+    del lambda_reg  # configured by --align_ridge on the shared aligner
     return model_from.align_hidden_to(hidden_states, model_to)
 
 class LatentMASMethod:
