@@ -446,7 +446,7 @@ GPU 1: HF 辅助模型（latent 推理）
 
 | 参数 | 默认值 / 可选值 | 含义与适用范围 |
 | --- | --- | --- |
-| `--latent_steps` | `0` | Planner、Critic、Refiner 各自的连续 latent embedding rollout 步数；会增长耗时、KV cache 和显存。仅 LatentMAS/Hybrid。 |
+| `--latent_steps` | `50` | Planner、Critic、Refiner 各自的连续 latent embedding rollout 步数；会增长耗时、KV cache 和显存。仅 LatentMAS/Hybrid。 |
 | `--think` | 关闭；指定即开启 | 为 latent Agent 手动追加 think token，改变 latent rollout 起点。仅 LatentMAS/Hybrid。 |
 | `--align_method` | `identical`；`identical` / `linear` / `kernel` | latent hidden→目标输入 embedding 的对齐策略。`identical` 为单位映射加范数缩放；`linear` 为岭回归线性映射加范数缩放；`kernel` 使用 ORF 正随机特征的预聚合核近似。跨模型时当前要求 token 到 ID 的词表映射完全一致。非 `identical` 的 vLLM 路径需要 HF 辅助模型。 |
 | `--align_ridge` | `1e-5` | `linear` 对齐的岭回归正则系数。 |

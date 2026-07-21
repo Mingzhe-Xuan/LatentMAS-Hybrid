@@ -31,7 +31,7 @@ class LatentMASMethod:
         model: ModelWrapper,
         *,
         agent_models: Optional[List[str]] = None,  # NEW: Specify model per agent
-        latent_steps: int = 10,
+        latent_steps: int = 50,
         judger_max_new_tokens: int = 256,
         temperature: float = 0.7,
         top_p: float = 0.95,

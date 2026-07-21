@@ -17,7 +17,7 @@ vllm==0.17.0
 # 注：transformers/tokenizers 版本需满足 vllm==0.17.0 的硬性要求，
 # 否则会出现 pip 依赖冲突报错（transformers<5,>=4.56.0 / tokenizers>=0.21.1）
 transformers==4.56.0
-tokenizers==0.21.1
+tokenizers==0.22.0
 accelerate==0.34.0
 datasets==2.20.0
  
