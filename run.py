@@ -146,7 +146,7 @@ def main():
     # other args
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--split", type=str, default="test")
-    parser.add_argument("--max_new_tokens", type=int, default=16384, help="Maximum number of new tokens to generate for each agent's output")
+    parser.add_argument("--max_new_tokens", type=int, default=8192, help="Maximum number of new tokens to generate for each agent's output")
     parser.add_argument("--latent_steps", type=int, default=0, help="Number of latent steps for LatentMAS method")
     parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--top_p", type=float, default=0.95)
