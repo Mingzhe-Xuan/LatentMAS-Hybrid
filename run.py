@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 
 # Must be set before importing transformers/huggingface_hub.
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
@@ -41,7 +42,13 @@ def evaluate(preds: List[Dict]) -> Tuple[float, int]:
 def configure_run_files(args: argparse.Namespace) -> Tuple[logging.Logger, Path]:
     """Create per-run detail and summary output files."""
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_name = f"{args.task}_{args.method}_align_{args.align_method}_{run_id}"
+    # Model identifiers commonly contain path separators (for example,
+    # ``Qwen/Qwen3-8B``), which cannot be used directly in a filename.
+    model_name = re.sub(r"[^A-Za-z0-9._-]+", "_", args.model_name).strip("._-")
+    run_name = (
+        f"{args.task}_{args.method}_model_{model_name}_"
+        f"align_{args.align_method}_{run_id}"
+    )
 
     log_dir = Path("logging")
     result_dir = Path("result")
@@ -139,7 +146,7 @@ def main():
     # other args
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--split", type=str, default="test")
-    parser.add_argument("--max_new_tokens", type=int, default=4096)
+    parser.add_argument("--max_new_tokens", type=int, default=16384, help="Maximum number of new tokens to generate for each agent's output")
     parser.add_argument("--latent_steps", type=int, default=0, help="Number of latent steps for LatentMAS method")
     parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--top_p", type=float, default=0.95)
