@@ -35,7 +35,8 @@ module purge
 ## Activate the virtual environment. If you don't have one, create it with:
 ## python3 -m venv .venv, and then install the requirements with:
 ## pip install -r requirements.txt
-source .venv/bin/activate
+module load python/3.12.13
+source /home/n2501945g/LatentMAS-Hybrid/.venv/bin/activate
 
 cd "${PBS_O_WORKDIR}" || exit 1
 if [ ! -f run.py ] && [ -f LatentMAS/run.py ]; then
