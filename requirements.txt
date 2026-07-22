@@ -10,7 +10,7 @@ numpy==2.2.6
 # torch / torchvision / torchaudio（无需再手动指定 nightly 版本）。
 # 直接 pip install 即可，若默认源较慢可换成官方 wheel 源：
 #   pip install vllm --extra-index-url https://download.pytorch.org/whl/cu128
-vllm==0.17.0
+# vllm==0.17.0
  
 # ------------------------------------------------------------
 # HuggingFace 生态库
