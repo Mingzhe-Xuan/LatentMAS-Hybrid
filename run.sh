@@ -50,9 +50,9 @@ export PYTHONUNBUFFERED=1
 
 ## Optional Hugging Face cache location. Uncomment and edit if your cluster
 ## recommends a project scratch/cache directory.
-# export HF_HOME=/path/to/huggingface_cache
-# export TRANSFORMERS_CACHE="${HF_HOME}"
-# export HF_DATASETS_CACHE="${HF_HOME}"
+export HF_HOME=/home/n2501945g/.cache/huggingface
+export HF_HUB_CACHE="${HF_HOME}/hub"
+export HF_DATASETS_CACHE="${HF_HOME}/datasets"
 
 ## ========================== Debug Info ======================================
 echo "PBS_NODEFILE: ${PBS_NODEFILE}"
