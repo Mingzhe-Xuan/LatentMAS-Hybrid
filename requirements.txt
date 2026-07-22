@@ -22,5 +22,5 @@ accelerate==0.34.0
 datasets==2.20.0
  
 # 实用工具
-tqdm==4.66.3
+tqdm==4.69.0
 matplotlib==3.9.0
