@@ -169,6 +169,8 @@ def main():
 
     # vLLM support
     parser.add_argument("--use_vllm", action="store_true", help="Use vLLM backend for generation")
+    parser.add_argument("--trust_remote_code", action="store_true",
+                        help="Allow a model repository to provide custom Python code.")
     parser.add_argument("--enable_prefix_caching", action="store_true", help="Enable prefix caching in vLLM for latent_mas")
     parser.add_argument("--use_second_HF_model", action="store_true", help="Use a second HF model for latent generation in latent_mas")
     parser.add_argument("--device2", type=str, default=None, help="Second device for HF model (defaults to same as --device)")

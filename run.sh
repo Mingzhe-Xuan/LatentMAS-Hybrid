@@ -81,6 +81,7 @@ COMMON=(
     --generate_bs 10
     --max_samples -1
     --max_new_tokens 16384
+    --trust_remote_code
 )
 
 echo "========================================================================"
