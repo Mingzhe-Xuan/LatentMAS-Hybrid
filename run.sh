@@ -78,7 +78,7 @@ fi
 COMMON=(
     --model_name Qwen/Qwen3-8B
     --task aime2025
-    --generate_bs 10
+    --generate_bs 2
     --max_samples -1
     --max_new_tokens 16384
     --trust_remote_code
@@ -88,7 +88,7 @@ echo "========================================================================"
 echo "  Job ID       : ${PBS_JOBID}"
 echo "  Model        : Qwen/Qwen3-8B"
 echo "  Task         : aime2025"
-echo "  Generate BS  : 10"
+echo "  Generate BS  : 2"
 echo "  Max samples  : -1 (all)"
 echo "  Max tokens   : 16384"
 echo "  CUDA devices : ${CUDA_VISIBLE_DEVICES:-unset}"
