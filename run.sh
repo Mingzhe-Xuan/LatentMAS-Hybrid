@@ -17,7 +17,7 @@
 #PBS -q gpu_ded
 
 ## Walltime - HH:MM:SS
-#PBS -l walltime=01:00:00
+#PBS -l walltime=48:00:00
 
 ## Resources - select 12 CPUs per GPU selected
 #PBS -l select=1:ncpus=12:ngpus=1
