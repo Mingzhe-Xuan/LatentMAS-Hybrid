@@ -115,6 +115,8 @@ SEED=42               # Random seed for reproducibility.
 TEXT_MAS_CONTEXT_LENGTH=-1  # TextMAS context limit; -1 means unlimited.
 LATENT_STEPS=80             # Number of latent reasoning steps.
 TRUST_REMOTE_CODE=true      # Pass --trust_remote_code when the model requires it.
+SEQUENTIAL_INFO_ONLY=false   # Retain only each agent's own prompt + latent KV before the next agent.
+LATENT_ONLY=false            # Retain only latent KV before the next agent (implies SEQUENTIAL_INFO_ONLY).
 
 ## --- Alignment settings ---
 ALIGN_RIDGE=1e-5           # Ridge regularization for linear alignment.
@@ -166,9 +168,21 @@ if [ "${TRUST_REMOTE_CODE}" = true ]; then
 fi
 
 ## Boolean / optional arguments not enabled in this standard HF run:
+# These options apply only to LatentMAS methods. LATENT_ONLY implies
+# SEQUENTIAL_INFO_ONLY in the Python implementation, so both flags may safely
+# be passed when both variables are true.
+LATENT_CACHE_ARGS=()
+if [ "${SEQUENTIAL_INFO_ONLY}" = true ]; then
+    LATENT_CACHE_ARGS+=(--sequential_info_only)
+fi
+if [ "${LATENT_ONLY}" = true ]; then
+    LATENT_CACHE_ARGS+=(--latent_only)
+fi
 ##   --think                  default: false; add it to COMMON to insert <think>.
 ##   --kernel_seed SEED       default: None; omitted uses --seed.
 ##   --use_vllm               default: false; enables vLLM backend.
+##   --sequential_info_only   default: false; preserve only the current agent's prompt + latent KV cache.
+##   --latent_only            default: false; preserve only latent KV cache; implies --sequential_info_only.
 ##   --enable_prefix_caching  default: false; only relevant with vLLM.
 ##   --use_second_HF_model    default: false; only relevant with latent_mas + vLLM.
 ##   --device2 DEVICE         default: None, then run.py uses --device.
@@ -188,6 +202,8 @@ echo "  Max tokens   : ${MAX_NEW_TOKENS}"
 echo "  Latent steps : ${LATENT_STEPS}"
 echo "  vLLM         : ${USE_VLLM}"
 echo "  CUDA devices : ${CUDA_VISIBLE_DEVICES:-unset}"
+echo "  Sequential info only: ${SEQUENTIAL_INFO_ONLY}"
+echo "  Latent only  : ${LATENT_ONLY}"
 echo "========================================================================"
 echo ""
 ## ========================== Run Experiment Suite =============================
@@ -198,12 +214,12 @@ echo ""
     python3 run.py --method baseline --prompt "${PROMPT_SEQUENTIAL}" "${COMMON[@]}" &&
     python3 run.py --method text_mas --prompt "${PROMPT_SEQUENTIAL}" "${COMMON[@]}" &&
     # Run all LatentMAS alignment methods sequentially before hierarchical.
-    python3 run.py --method latent_mas --prompt "${PROMPT_SEQUENTIAL}" --align_method identical "${COMMON[@]}" &&
-    python3 run.py --method latent_mas --prompt "${PROMPT_SEQUENTIAL}" --align_method linear "${COMMON[@]}" &&
-    python3 run.py --method latent_mas --prompt "${PROMPT_SEQUENTIAL}" --align_method kernel "${COMMON[@]}" &&
-    python3 run.py --method latent_mas --prompt "${PROMPT_HIERARCHICAL}" --align_method identical "${COMMON[@]}" &&
-    python3 run.py --method latent_mas --prompt "${PROMPT_HIERARCHICAL}" --align_method linear "${COMMON[@]}" &&
-    python3 run.py --method latent_mas --prompt "${PROMPT_HIERARCHICAL}" --align_method kernel "${COMMON[@]}"
+    python3 run.py --method latent_mas --prompt "${PROMPT_SEQUENTIAL}" --align_method identical "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" &&
+    python3 run.py --method latent_mas --prompt "${PROMPT_SEQUENTIAL}" --align_method linear "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" &&
+    python3 run.py --method latent_mas --prompt "${PROMPT_SEQUENTIAL}" --align_method kernel "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" &&
+    python3 run.py --method latent_mas --prompt "${PROMPT_HIERARCHICAL}" --align_method identical "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" &&
+    python3 run.py --method latent_mas --prompt "${PROMPT_HIERARCHICAL}" --align_method linear "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" &&
+    python3 run.py --method latent_mas --prompt "${PROMPT_HIERARCHICAL}" --align_method kernel "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}"
     STATUS=$?
 
     echo ""

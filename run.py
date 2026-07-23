@@ -163,6 +163,22 @@ def main():
     parser.add_argument("--split", type=str, default="test")
     parser.add_argument("--max_new_tokens", type=int, default=None, help="Maximum new tokens per agent; defaults to max_token_dict.json for the selected task, otherwise 20000.")
     parser.add_argument("--latent_steps", type=int, default=80, help="Number of latent steps for LatentMAS method")
+    parser.add_argument(
+        "--sequential_info_only",
+        action="store_true",
+        help=(
+            "For LatentMAS methods, retain only the current agent's prompt and "
+            "latent KV cache before passing context to the next agent."
+        ),
+    )
+    parser.add_argument(
+        "--latent_only",
+        action="store_true",
+        help=(
+            "For LatentMAS methods, retain only latent-step KV cache before "
+            "passing context to the next agent; implies --sequential_info_only."
+        ),
+    )
     parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--top_p", type=float, default=0.95)
     parser.add_argument("--generate_bs", type=int, default=20, help="Batch size for generation")
