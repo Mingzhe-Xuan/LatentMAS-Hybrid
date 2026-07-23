@@ -1,0 +1,11 @@
+{
+    "aime2024": 20000,
+    "aime2025": 20000,
+    "arc_challenge": 2048,
+    "arc_easy": 2048,
+    "gpqa": 8000,
+    "gsm8k": 2048,
+    "humanevalplus": 4096,
+    "mbppplus": 4096,
+    "medqa": 4096
+}

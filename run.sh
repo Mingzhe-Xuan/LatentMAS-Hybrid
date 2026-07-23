@@ -87,7 +87,25 @@ SPLIT="test"                 # Dataset split requested from the task loader.
 DEVICE="cuda"                # PyTorch device used by the HF backend.
 
 ## --- Generation settings ---
-MAX_NEW_TOKENS=20000  # Maximum tokens generated per response.
+# Empty means use max_token_dict.json[TASK]; an absent/unknown task falls back
+# to 20000. Set a number here to explicitly override the task default.
+MAX_NEW_TOKENS=""
+if [ -z "${MAX_NEW_TOKENS}" ]; then
+    MAX_NEW_TOKENS="$(python3 - "${TASK}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+fallback = 20000
+try:
+    limits = json.loads(Path("max_token_dict.json").read_text(encoding="utf-8"))
+    value = limits.get(sys.argv[1], fallback)
+    print(value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else fallback)
+except (OSError, json.JSONDecodeError):
+    print(fallback)
+PY
+)"
+fi
 TEMPERATURE=0.6       # Sampling temperature.
 TOP_P=0.95            # Nucleus-sampling probability threshold.
 GENERATE_BS=2         # Generation batch size.
@@ -121,7 +139,7 @@ COMMON=(
     --device "${DEVICE}"                     # run.py default: cuda
 
     # Generation settings
-    --max_new_tokens "${MAX_NEW_TOKENS}"     # run.py default: 20000
+    --max_new_tokens "${MAX_NEW_TOKENS}"     # Task default from max_token_dict.json; fallback: 20000
     --temperature "${TEMPERATURE}"           # run.py default: 0.6
     --top_p "${TOP_P}"                       # run.py default: 0.95
     --generate_bs "${GENERATE_BS}"           # run.py default: 20

@@ -32,6 +32,21 @@ from models import ModelWrapper
 from utils import auto_device, set_seed
 import time
 
+DEFAULT_MAX_NEW_TOKENS = 20000
+MAX_TOKEN_CONFIG_PATH = Path(__file__).with_name("max_token_dict.json")
+
+
+def default_max_new_tokens(task: str) -> int:
+    """Return the task-specific generation limit, or the safe fallback."""
+    try:
+        token_limits = json.loads(MAX_TOKEN_CONFIG_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return DEFAULT_MAX_NEW_TOKENS
+
+    value = token_limits.get(task, DEFAULT_MAX_NEW_TOKENS)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return DEFAULT_MAX_NEW_TOKENS
+    return value
 
 def evaluate(preds: List[Dict]) -> Tuple[float, int]:
     total = len(preds)
@@ -146,7 +161,7 @@ def main():
     # other args
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--split", type=str, default="test")
-    parser.add_argument("--max_new_tokens", type=int, default=20000, help="Maximum number of new tokens to generate for each agent's output")
+    parser.add_argument("--max_new_tokens", type=int, default=None, help="Maximum new tokens per agent; defaults to max_token_dict.json for the selected task, otherwise 20000.")
     parser.add_argument("--latent_steps", type=int, default=80, help="Number of latent steps for LatentMAS method")
     parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--top_p", type=float, default=0.95)
@@ -182,6 +197,10 @@ def main():
                         help="List of models for each agent in hybrid mode (e.g., 'Qwen/Qwen2.5-0.5B-Instruct Qwen/Qwen3-8B Qwen/Qwen2.5-0.5B-Instruct')")
 
     args = parser.parse_args()
+
+    # An explicit --max_new_tokens value takes precedence over the task default.
+    if args.max_new_tokens is None:
+        args.max_new_tokens = default_max_new_tokens(args.task)
     
     # Default device2 to device if not specified
     if args.device2 is None:
