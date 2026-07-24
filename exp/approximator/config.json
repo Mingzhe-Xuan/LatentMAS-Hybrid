@@ -1,9 +1,16 @@
 {
-  "model_pair": "x1",
-  "m": 2048,
-  "tau": 1.0,
+  "agent_models": ["Qwen/Qwen3-4B"],
+  "prompt": "sequential",
+  "latent_steps": 50,
+  "temperature": 0.6,
+  "top_p": 0.95,
+  "max_new_tokens": 512,
+  "kernel_features": 2048,
+  "kernel_temperature": 1.0,
+  "kernel_seed": 101,
   "kernel_chunk_size": 4096,
-  "orf_seed": 101,
+  "max_questions": 10,
+  "max_states_per_question": 20,
   "probe_seed": 42,
-  "generation": {"temperature": 0.0, "top_p": 1.0, "seed": 77}
+  "study": "all"
 }

@@ -1,30 +1,51 @@
-# S0--S4 approximator experiments
+# Two-stage approximator experiments
 
-`exp/approximator/run.py` implements the operator layer in `docs/plan_v2.md`.
-It verifies full tokenizer-ID compatibility before loading an experiment; a
-mismatch stops the run. Exact `F` always scans the full vocabulary.
+`run.py` first executes the repository's real sequential
+`latent_mas_hybrid` flow and caches sampled observations from its four roles.
+It then reloads that `.pt` trajectory and runs S0--S4. S1--S4 always analyse
+the semantic edge:
 
-All artefacts are outside the source tree, under `exp_result/approximator/`:
-
-- `metrics/`: raw Parquet tables (mapping, single-kernel, calibration,
-  variance, embeddings and performance), plus cluster-bootstrap summaries;
-- `figures/`: stratified S0/S1/S2 distributions and S4 shared-PCA plots;
-- `manifests/`: arguments, models, compatibility, versions and git commit.
-
-Examples:
-
-```bash
-python exp/approximator/run.py --study s0 --model_pair x1 --dataset arc_easy --split test
-python exp/approximator/run.py --study s2 --model_pair x1 --dataset arc_easy --split train --run_s2_calibration
-python exp/approximator/run.py --study s3 --model_pair x1 --dataset arc_easy --split train
-python exp/approximator/run.py --study s4 --model_pair x1 --dataset arc_easy --split test
+```text
+Refiner latent_reply_hidden
+  with Refiner W_out -> Judger W_in
 ```
 
-S3 uses the fixed 32 ORF seeds and retains each question's last prompt state
-plus up to 16 evenly spaced reply states. S4 fits a single PCA over equal-sized
-prompt/reply state samples; Qwen3-4B/8B have different hidden dimensions, so
-there is intentionally no `identical` baseline for X1/X2.
+One model name is copied to all four roles. Four names are assigned in
+Planner, Critic, Refiner, Judger order.
 
-Progress is appended, never overwritten, to
-`exp_result/approximator/exp_state.txt`. PBS submissions use the same fixed
-filename; follow it with `tail -f exp_result/approximator/exp_state.txt`.
+```bash
+python exp/approximator/run.py \
+  --agent_models Qwen/Qwen3-4B \
+  --dataset arc_easy --split test --study all
+```
+
+Trajectories and their strict configuration manifests are stored under
+`exp_result/approximator/cache/trajectories/`. Full S1/S2 mapping caches live
+under `exp_result/approximator/cache/mappings/`. A matching cache is reused by default.
+Use `--force_recollect` to replace it, or `--reuse_trajectory` to require a
+matching existing cache and prohibit Phase A.
+
+S1 and S2 share one full mapping cache. Its filename records
+the feature count, kernel temperature, seed, chunk size, and a configuration
+digest. The digest also covers the trajectory manifest, source/target models,
+probe seed, and mapping implementation. A valid cache is reused across runs;
+S1 and S2 summaries and figures are both derived from those cached rows.
+
+Every invocation creates an independent directory under
+`exp_result/approximator/runs/`. The directory name contains the dataset,
+split, study, model assignment, generation and kernel parameters, sampling
+limits, a `YYYYMMDD_HHMMSS` timestamp, and a short complete-configuration hash.
+It contains:
+
+- `run_manifest.json`: full arguments, versions, status, timing, and cache hits;
+- `exp_state.log`: progress for this invocation only;
+- `metrics/`: raw Parquet tables;
+- `summaries/`: scalar-only JSON summaries for S0--S4;
+- `figures/`: plots;
+- `manifests/`: trajectory, mapping, and analysis provenance.
+
+Summary JSON files never contain hidden vectors, embeddings, PCA/t-SNE
+coordinates, per-state rows, or per-seed arrays. Continuous metrics report
+count, mean, median, sample variance, standard deviation, quantiles, and
+question-cluster bootstrap confidence intervals. State values are averaged
+within each question before cross-question statistics are computed.

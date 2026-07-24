@@ -1,28 +1,32 @@
 #!/usr/bin/env python
-"""Operator-layer S0--S4 experiments from ``docs/plan_v2.md``.
-
-Exact softmax always scans the complete vocabulary.  See
-``exp/approximator/IMPLEMENTATION_STATUS.md`` for explicit implemented/pending
-stage requirements; this entry point must not be treated as experimental evidence
-until artifacts are produced by an actual HPC run.  Every raw table, summary,
-figure and manifest is written under ``exp_result/approximator``.
-"""
+"""Two-stage Refiner-to-Judger approximator experiment."""
 
 from __future__ import annotations
 
-import argparse, json, logging, random, subprocess, sys, time
+import argparse
+import hashlib
+import json
+import logging
+import random
+import re
+import subprocess
+import sys
+import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Dict, Iterable, List, Tuple
 
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+import transformers
+from transformers import AutoTokenizer
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT)) if str(ROOT) not in sys.path else None
-from alignment import apply_alignment, build_kernel_state
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from alignment import build_kernel_state
 from data import (
     load_arc_challenge,
     load_arc_easy,
@@ -31,195 +35,202 @@ from data import (
     load_mbppplus,
     load_medqa,
 )
-from methods import default_agents
-from prompts import (
-    build_agent_message_hierarchical_latent_mas,
-    build_agent_message_sequential_latent_mas,
-)
-from stages import common
-from stages import s0, s1, s2, s3, s4
+from models import _ensure_pad_token
+from stages import common, s0, s1, s2, s3, s4
+from stages.mapping import mapping_rows
+from trajectory import collect, load_hybrid
+from utils import auto_device
 
-RESULT = ROOT / "exp_result" / "approximator"
-SOURCES = ("prompt", "reply")
+OUTPUT_ROOT = ROOT / "exp_result" / "approximator"
+CACHE_ROOT = OUTPUT_ROOT / "cache"
+TRAJECTORY_DIR = CACHE_ROOT / "trajectories"
+MAPPING_CACHE_DIR = CACHE_ROOT / "mappings"
+RUNS_DIR = OUTPUT_ROOT / "runs"
+RESULT = OUTPUT_ROOT
+ROLES = ("planner", "critic", "refiner", "judger")
+MAPPING_CACHE_SCHEMA = 1
 
 
 @dataclass
 class State:
     vector: torch.Tensor
     item_id: int
-    source: str
+    role: str
+    agent_id: int
+    turn_id: int
+    state_kind: str
     position: int
-    prompt_length: int
-    reply_length: int
-    turn_id: int = 0
-    agent_id: int = 0
+    model_name: str
+
+    @property
+    def source(self):
+        return f"{self.role}_{self.state_kind}"
 
 
-def configure_logger():
-    RESULT.mkdir(parents=True, exist_ok=True)
+def configure_logger(run_dir):
+    run_dir.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger("approximator")
     logger.setLevel(logging.INFO)
     logger.handlers.clear()
     logger.propagate = False
-    formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
-    file_handler = logging.FileHandler(
-        RESULT / "exp_state.txt", mode="a", encoding="utf-8"
-    )
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
+    handler = logging.FileHandler(run_dir / "exp_state.log", mode="a", encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
+    logger.addHandler(handler)
     return logger
 
 
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument(
-        "--study", choices=["s0", "s1", "s2", "s3", "s4", "all"], default="all"
+def safe_name(value):
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", str(value)).strip("._-") or "unknown"
+
+
+def short_float(value):
+    return format(float(value), ".12g").replace("-", "m").replace(".", "p")
+
+
+def model_tag(agent_models):
+    short = [safe_name(name.replace("\\", "/").rsplit("/", 1)[-1]) for name in agent_models]
+    if len(set(short)) == 1:
+        tag = short[0]
+    else:
+        tag = "_".join(
+            f"{role}-{name}" for role, name in zip(("P", "C", "R", "J"), short)
+        )
+    if len(tag) > 80:
+        digest = hashlib.sha256(
+            json.dumps(agent_models, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()[:8]
+        tag = f"{tag[:71]}-{digest}"
+    return tag
+
+
+def run_implementation_fingerprint():
+    return files_fingerprint(
+        (
+            ROOT / "alignment.py",
+            ROOT / "models.py",
+            ROOT / "prompts.py",
+            ROOT / "methods" / "latent_mas_hybrid.py",
+            ROOT / "exp" / "approximator" / "trajectory.py",
+            ROOT / "exp" / "approximator" / "run.py",
+            ROOT / "exp" / "approximator" / "stages" / "common.py",
+            ROOT / "exp" / "approximator" / "stages" / "mapping.py",
+            ROOT / "exp" / "approximator" / "stages" / "s0.py",
+            ROOT / "exp" / "approximator" / "stages" / "s1.py",
+            ROOT / "exp" / "approximator" / "stages" / "s2.py",
+            ROOT / "exp" / "approximator" / "stages" / "s3.py",
+            ROOT / "exp" / "approximator" / "stages" / "s4.py",
+        )
     )
-    p.add_argument("--model_pair", choices=["x1", "x2"], default="x1", help=argparse.SUPPRESS)
-    p.add_argument("--source_model")
-    p.add_argument("--target_model")
-    p.add_argument(
+
+
+def create_run_dir(args):
+    config_payload = {
+        "args": vars(args),
+        "git_commit": git_commit(),
+        "implementation_sha256": run_implementation_fingerprint(),
+    }
+    config_hash = hashlib.sha256(
+        json.dumps(config_payload, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()[:8]
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_name = "_".join(
+        (
+            safe_name(args.dataset),
+            safe_name(args.split),
+            safe_name(args.study),
+            model_tag(args.agent_models),
+            f"lat{args.latent_steps}",
+            f"genT{short_float(args.temperature)}",
+            f"topP{short_float(args.top_p)}",
+            f"tok{args.max_new_tokens}",
+            f"km{args.kernel_features}",
+            f"kt{short_float(args.kernel_temperature)}",
+            f"ks{args.kernel_seed}",
+            f"probe{args.probe_seed}",
+            f"q{args.max_questions}",
+            f"states{args.max_states_per_question}",
+            timestamp,
+            config_hash,
+        )
+    )
+    run_dir = RUNS_DIR / run_name
+    suffix = 1
+    while run_dir.exists():
+        run_dir = RUNS_DIR / f"{run_name}_{suffix:02d}"
+        suffix += 1
+    run_dir.mkdir(parents=True)
+    return run_dir, config_hash, timestamp
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--agent_models", nargs="+", required=True)
+    parser.add_argument("--prompt", choices=["sequential"], default="sequential")
+    parser.add_argument("--latent_steps", type=int, default=50)
+    parser.add_argument("--temperature", type=float, default=0.6)
+    parser.add_argument("--top_p", type=float, default=0.95)
+    parser.add_argument("--max_new_tokens", type=int, default=512)
+    parser.add_argument("--kernel_features", type=int, default=2048)
+    parser.add_argument("--kernel_temperature", type=float, default=1.0)
+    parser.add_argument("--kernel_seed", type=int, default=101)
+    parser.add_argument("--kernel_chunk_size", type=int, default=4096)
+    parser.add_argument(
         "--dataset",
         choices=["arc_easy", "arc_challenge", "gsm8k", "medqa", "mbppplus", "gpqa"],
         default="arc_easy",
     )
-    p.add_argument("--split", default="test")
-    p.add_argument("--max_questions", type=int, default=10)
-    p.add_argument("--max_states_per_question", type=int, default=20)
-    p.add_argument("--max_reply_tokens", type=int, default=512)
-    p.add_argument("--prompt_limit", type=int, default=512)
-    p.add_argument(
-        "--prompt",
-        choices=["sequential"],
-        default="sequential",
-        help="Only sequential latent-MAS is supported by this experiment.",
+    parser.add_argument("--split", default="test")
+    parser.add_argument("--max_questions", type=int, default=10)
+    parser.add_argument("--max_states_per_question", type=int, default=20)
+    parser.add_argument("--probe_seed", type=int, default=42)
+    parser.add_argument(
+        "--study", choices=["s0", "s1", "s2", "s3", "s4", "all"], default="all"
     )
-    p.add_argument(
-        "--role", choices=["planner", "critic", "refiner", "judger"], default="planner",
-        help=argparse.SUPPRESS,
-    )
-    p.add_argument(
-        "--agent_models",
-        nargs="+",
-        default=["Qwen/Qwen3-4B"],
-        help="One shared model, or four models in Planner/Critic/Refiner/Judger order.",
-    )
-    p.add_argument("--latent_steps", type=int, default=50)
-    p.add_argument("--temperature", type=float, default=0.6)
-    p.add_argument("--top_p", type=float, default=0.95)
-    p.add_argument("--reuse_trajectory", action="store_true")
-    p.add_argument("--force_recollect", action="store_true")
-    p.add_argument("--kernel_features", type=int, default=2048)
-    p.add_argument("--kernel_temperature", type=float, default=1.0)
-    p.add_argument("--kernel_seed", type=int, default=101)
-    p.add_argument("--kernel_chunk_size", type=int, default=4096)
-    p.add_argument("--probe_seed", type=int, default=42)
-    p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    p.add_argument("--trust_remote_code", action="store_true")
-    p.add_argument("--skip_float64_audit", action="store_true")
-    p.add_argument("--s3_replicates", type=int, default=32)
-    p.add_argument("--s3_max_questions", type=int, default=50)
-    p.add_argument("--bootstrap_replicates", type=int, default=1000)
-    p.add_argument("--run_s2_calibration", action="store_true")
-    p.add_argument("--run_s1_performance", action="store_true")
-    p.add_argument(
-        "--s4_tsne",
+    parser.add_argument(
+        "--reuse_trajectory",
         action="store_true",
-        help="Optional shared t-SNE; requires scikit-learn.",
+        help="Require a matching cache and skip Phase A.",
     )
-    return p.parse_args()
-
-
-def resolve_model_names(args):
-    default_model_names = {
-        "x1": ("Qwen/Qwen3-4B", "Qwen/Qwen3-8B"),
-        "x2": ("Qwen/Qwen3-8B", "Qwen/Qwen3-4B"),
-    }[args.model_pair]
-    return (
-        args.source_model or default_model_names[0],
-        args.target_model or default_model_names[1],
-    )
-
-
-def resolve_agent_models(args):
+    parser.add_argument("--force_recollect", action="store_true")
+    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--trust_remote_code", action="store_true")
+    parser.add_argument("--skip_float64_audit", action="store_true")
+    parser.add_argument("--s3_replicates", type=int, default=32)
+    parser.add_argument("--s3_max_questions", type=int, default=50)
+    parser.add_argument("--bootstrap_replicates", type=int, default=1000)
+    parser.add_argument("--run_s2_calibration", action="store_true")
+    parser.add_argument("--run_s1_performance", action="store_true")
+    parser.add_argument("--s4_tsne", action="store_true")
+    args = parser.parse_args(argv)
     if len(args.agent_models) == 1:
-        return tuple(args.agent_models * len(default_agents()))
-    if len(args.agent_models) != len(default_agents()):
-        raise ValueError("--agent_models requires one model or four role-ordered models")
-    return tuple(args.agent_models)
+        args.agent_models *= 4
+    elif len(args.agent_models) != 4:
+        parser.error("--agent_models must contain exactly one or four model names")
+    if args.reuse_trajectory and args.force_recollect:
+        parser.error("--reuse_trajectory and --force_recollect are mutually exclusive")
+    if args.max_questions < 1 or args.max_states_per_question < 1:
+        parser.error("question/state limits must be positive")
+    if args.latent_steps < 0 or args.max_new_tokens < 1:
+        parser.error("generation lengths are invalid")
+    if args.temperature <= 0 or not 0 < args.top_p <= 1:
+        parser.error("--temperature must be > 0 and --top_p must be in (0, 1]")
+    if args.s3_replicates < 2:
+        parser.error("--s3_replicates must be at least 2 for sample variance")
 
-
-def write_json(path, x):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            x,
-            indent=2,
-            ensure_ascii=False,
-            default=lambda v: v.item() if isinstance(v, np.generic) else str(v),
-        )
-        + "\n",
-        encoding="utf8",
-    )
-
-
-def write_rows(rows, stem):
-    import pyarrow as pa, pyarrow.parquet as pq
-
-    path = RESULT / "metrics" / f"{stem}.parquet"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(pa.Table.from_pylist(rows), path, compression="zstd")
-    return path
-
-
-def commit():
-    try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
-        ).strip()
-    except Exception:
-        return None
-
-
-def check_compatibility(
-    source_tokenizer, target_tokenizer, source_model, target_model, args
-):
-    failures = []
-    if len(source_tokenizer) != len(target_tokenizer):
-        failures.append("vocab_size")
-    if source_tokenizer.get_vocab() != target_tokenizer.get_vocab():
-        failures.append("token_to_id")
-    source_special_token_ids = {
-        key: getattr(source_tokenizer, key, None)
-        for k in ("bos_token_id", "eos_token_id", "pad_token_id", "unk_token_id")
-    }
-    target_special_token_ids = {
-        key: getattr(target_tokenizer, key, None) for key in source_special_token_ids
-    }
-    if source_special_token_ids != target_special_token_ids:
-        failures.append("special_token_ids")
-    payload = {
-        "source_model": resolve_model_names(args)[0],
-        "target_model": resolve_model_names(args)[1],
-        "source_vocab_size": len(source_tokenizer),
-        "target_vocab_size": len(target_tokenizer),
-        "source_special_token_ids": source_special_token_ids,
-        "target_special_token_ids": target_special_token_ids,
-        "source_hidden_size": source_model.config.hidden_size,
-        "target_hidden_size": target_model.config.hidden_size,
-        "source_tied_word_embeddings": bool(
-            getattr(source_model.config, "tie_word_embeddings", False)
-        ),
-        "target_tied_word_embeddings": bool(
-            getattr(target_model.config, "tie_word_embeddings", False)
-        ),
-        "torch": torch.__version__,
-        "transformers": __import__("transformers").__version__,
-        "failures": failures,
-    }
-    write_json(RESULT / "manifests" / "compatibility.json", payload)
-    if failures:
-        raise RuntimeError("Stopped: incompatible tokenizer(s): " + ", ".join(failures))
+    args.agent_models = tuple(args.agent_models)
+    args.task = args.dataset
+    args.method = "latent_mas_hybrid"
+    args.model_name = args.agent_models[0]
+    args.device = auto_device(args.device)
+    args.device2 = args.device
+    args.align_method = "kernel"
+    args.align_ridge = 1e-5
+    args.seed = args.probe_seed
+    args.think = True
+    args.latent_only = False
+    args.sequential_info_only = False
+    args.use_vllm = False
+    return args
 
 
 def load_data(name, split):
@@ -233,212 +244,556 @@ def load_data(name, split):
     }[name](split=split)
 
 
-def positions(n, limit):
-    return (
-        list(range(n))
-        if n <= limit
-        else sorted(set(np.linspace(0, n - 1, limit, dtype=int).tolist() + [n - 1]))
-    )
-
-
-def trim(ids, limit):
-    return ids if len(ids) <= limit else torch.cat((ids[: limit - 32], ids[-32:]))
-
-
-def sample_token(logits, temperature, top_p):
-    """Sample one token using the same temperature/top-p policy as latent-MAS."""
-    if temperature <= 0 or not 0 < top_p <= 1:
-        raise ValueError("generation_temperature must be > 0 and generation_top_p in (0, 1]")
-    sorted_logits, sorted_ids = torch.sort(logits / temperature, descending=True)
-    sorted_probs = torch.softmax(sorted_logits, dim=-1)
-    remove = sorted_probs.cumsum(dim=-1) - sorted_probs > top_p
-    sorted_probs = sorted_probs.masked_fill(remove, 0)
-    probs = torch.zeros_like(sorted_probs).scatter(-1, sorted_ids, sorted_probs)
-    return torch.multinomial(probs, 1).squeeze(-1)
-
-
-@torch.inference_mode()
-def collect(model, tok, items, args, logger):
-    """First-turn source-model states from the sequential latent-MAS prompt.
-
-    Gold answers are never injected. Text decoding uses the repository's normal
-    temperature/top-p sampling policy rather than greedy decoding.
-    """
-    states = []
-    eos = tok.eos_token_id
-    for item_id, item in enumerate(items):
-        started = time.time()
-        logger.info(
-            "State collection: question %d/%d started.", item_id + 1, len(items)
-        )
-        shim = argparse.Namespace(
-            model_name=resolve_model_names(args)[0], task=args.dataset
-        )
-        messages = build_agent_message_sequential_latent_mas(
-            args.role, item["question"], method="latent_mas", args=shim
-        )
-        text = (
-            tok.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
-            if tok.chat_template
-            else item["question"]
-        )
-        ids = trim(
-            tok(text, add_special_tokens=False, return_tensors="pt")["input_ids"][0],
-            args.prompt_limit,
-        ).to(model.device)
-        out = model(
-            input_ids=ids[None],
-            output_hidden_states=True,
-            use_cache=True,
-            return_dict=True,
-        )
-        for p in positions(
-            out.hidden_states[-1].shape[1], args.max_states_per_question
-        ):
-            states.append(
-                State(
-                    out.hidden_states[-1][0, p].float().cpu(),
-                    item_id,
-                    "prompt",
-                    p,
-                    len(ids),
-                    0,
-                )
-            )
-        past, logits = out.past_key_values, out.logits[:, -1]
-        reply = []
-        for _ in range(args.max_reply_tokens):
-            token = sample_token(
-                logits, args.temperature, args.top_p
-            )
-            if eos is not None and int(token.item()) == eos:
-                break
-            step = model(
-                input_ids=token[:, None],
-                past_key_values=past,
-                output_hidden_states=True,
-                use_cache=True,
-                return_dict=True,
-            )
-            reply.append(step.hidden_states[-1][0, -1].float().cpu())
-            past, logits = step.past_key_values, step.logits[:, -1]
-        for p in positions(len(reply), args.max_states_per_question):
-            states.append(State(reply[p], item_id, "reply", p, len(ids), len(reply)))
-        logger.info(
-            "State collection: question %d/%d completed (prompt=%d, reply=%d, %.1fs).",
-            item_id + 1,
-            len(items),
-            len(ids),
-            len(reply),
-            time.time() - started,
-        )
-    return states
-
-
-def get_weights(source_model, target_model):
-    """Return source output weights and target input weights for the operator."""
-    source_output_embeddings = source_model.get_output_embeddings()
-    if source_output_embeddings is None:
-        raise ValueError("Source model does not expose output embeddings.")
-    output_bias = getattr(source_output_embeddings, "bias", None)
-    return (
-        source_output_embeddings.weight.detach().float(),
-        target_model.get_input_embeddings().weight.detach().float(),
-        None if output_bias is None else output_bias.detach().float(),
-    )
-
-
-def main():
-    args = parse_args()
-    logger = configure_logger()
-    started = time.time()
-    logger.info("=" * 72)
-    logger.info(
-        "Operator experiment started: study=%s, pair=%s, dataset=%s/%s",
-        args.study,
-        args.model_pair,
-        args.dataset,
-        args.split,
-    )
-    logger.info(
-        "Configuration: %s", json.dumps(vars(args), ensure_ascii=False, sort_keys=True)
-    )
-
-    # Set random seeds
-    random.seed(args.probe_seed)
-    np.random.seed(args.probe_seed)
-    torch.manual_seed(args.probe_seed)
-    source_model_name, target_model_name = resolve_model_names(args)
-    dtype = torch.bfloat16 if str(args.device).startswith("cuda") else torch.float32
-    logger.info(
-        "Loading tokenizers: source=%s; target=%s",
-        source_model_name,
-        target_model_name,
-    )
-    # Load tokenizers with trust_remote_code if specified
-    source_tokenizer = AutoTokenizer.from_pretrained(
-        source_model_name, token=False, trust_remote_code=args.trust_remote_code
-    )
-    target_tokenizer = AutoTokenizer.from_pretrained(
-        target_model_name, token=False, trust_remote_code=args.trust_remote_code
-    )
-    logger.info("Loading source model on %s (%s).", args.device, dtype)
-    source_model = (
-        AutoModelForCausalLM.from_pretrained(
-            source_model_name,
-            dtype=dtype,
-            token=False,
-            trust_remote_code=args.trust_remote_code,
-        )
-        .to(args.device)
-        .eval()
-    )
-    logger.info("Loading target model on %s (%s).", args.device, dtype)
-    target_model = (
-        AutoModelForCausalLM.from_pretrained(
-            target_model_name,
-            dtype=dtype,
-            token=False,
-            trust_remote_code=args.trust_remote_code,
-        )
-        .to(args.device)
-        .eval()
-    )
-
-    # Check tokenizer and model compatibility (the tokenizer vocab and special tokens must match, and the hidden sizes must match)
-    check_compatibility(
-        source_tokenizer, target_tokenizer, source_model, target_model, args
-    )
-    logger.info("Tokenizer compatibility check passed.")
-    split = args.split
-    logger.info(
-        "Loading %s split %s; sampling at most %d questions with seed %d.",
-        args.dataset,
-        split,
-        args.max_questions,
-        args.probe_seed,
-    )
-    items = list(load_data(args.dataset, split))
+def sampled_items(args):
+    items = list(enumerate(load_data(args.dataset, args.split)))
     random.Random(args.probe_seed).shuffle(items)
-    items = items[: args.max_questions]
-    states = collect(source_model, source_tokenizer, items, args, logger)
-    logger.info(
-        "State collection complete: %d states from %d questions.",
-        len(states),
-        len(items),
+    return items[: args.max_questions]
+
+
+def git_commit():
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+        ).strip()
+    except Exception:
+        return None
+
+
+def tokenizer_fingerprint(model_name, trust_remote_code):
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name,
+        use_fast=True,
+        token=False,
+        trust_remote_code=trust_remote_code,
     )
-    wo, wi, bias = get_weights(source_model, target_model)
-    wo, wi = wo.to(args.device), wi.to(args.device)
-    bias = None if bias is None else bias.float().to(args.device)
-    audit_p99 = common.audit(states, wo, wi, bias, args)
-    logger.info("Float64 exact-F audit passed: relative-L2 p99=%.3e.", audit_p99)
+    _ensure_pad_token(tokenizer)
+    payload = {
+        "vocab": sorted(tokenizer.get_vocab().items()),
+        "special_tokens": tokenizer.special_tokens_map,
+        "chat_template": getattr(tokenizer, "chat_template", None),
+        "padding_side": tokenizer.padding_side,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+
+def files_fingerprint(paths):
+    digest = hashlib.sha256()
+    for path in paths:
+        digest.update(str(path.relative_to(ROOT)).encode("utf-8"))
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def trajectory_paths(args, manifest_identity):
+    digest = hashlib.sha256(
+        json.dumps(
+            manifest_identity, sort_keys=True, ensure_ascii=False, default=str
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+    stem = f"{args.dataset}_{args.split}_{digest}"
+    return TRAJECTORY_DIR / f"{stem}.pt", TRAJECTORY_DIR / f"{stem}.manifest.json"
+
+
+def generation_config(args):
+    return {
+        "prompt": "sequential",
+        "latent_steps": args.latent_steps,
+        "temperature": args.temperature,
+        "top_p": args.top_p,
+        "max_new_tokens": args.max_new_tokens,
+        "do_sample": True,
+        "think": True,
+        "latent_only": False,
+        "sequential_info_only": False,
+    }
+
+
+def alignment_config(args):
+    return {
+        "align_method": "kernel",
+        "kernel_features": args.kernel_features,
+        "kernel_temperature": args.kernel_temperature,
+        "kernel_seed": args.kernel_seed,
+        "kernel_chunk_size": args.kernel_chunk_size,
+    }
+
+
+def expected_manifest(args, indexed_items):
+    fingerprints = {
+        name: tokenizer_fingerprint(name, args.trust_remote_code)
+        for name in dict.fromkeys(args.agent_models)
+    }
+    return {
+        "schema_version": 1,
+        "dataset": args.dataset,
+        "split": args.split,
+        "question_ids": [item_id for item_id, _ in indexed_items],
+        "question_content_sha256": hashlib.sha256(
+            json.dumps(
+                indexed_items, sort_keys=True, ensure_ascii=False, default=str
+            ).encode("utf-8")
+        ).hexdigest(),
+        "max_questions": args.max_questions,
+        "max_states_per_question": args.max_states_per_question,
+        "agent_models": list(args.agent_models),
+        "role_mapping": dict(zip(ROLES, args.agent_models)),
+        "tokenizer_fingerprint": fingerprints,
+        "generation_config": generation_config(args),
+        "alignment_config": alignment_config(args),
+        "probe_seed": args.probe_seed,
+        "pytorch_version": torch.__version__,
+        "transformers_version": transformers.__version__,
+        "git_commit": git_commit(),
+        "trajectory_implementation_sha256": files_fingerprint(
+            (
+                ROOT / "alignment.py",
+                ROOT / "models.py",
+                ROOT / "prompts.py",
+                ROOT / "methods" / "latent_mas_hybrid.py",
+                ROOT / "exp" / "approximator" / "trajectory.py",
+            )
+        ),
+    }
+
+
+def write_json(path, payload):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False, default=str) + "\n",
+        encoding="utf-8",
+    )
+
+
+def manifest_differences(expected, actual, prefix=""):
+    output = []
+    if isinstance(expected, dict) and isinstance(actual, dict):
+        for key in sorted(set(expected) | set(actual)):
+            if key == "generated_at":
+                continue
+            field = f"{prefix}.{key}" if prefix else key
+            if key not in expected or key not in actual:
+                output.append(
+                    {
+                        "field": field,
+                        "expected": expected.get(key),
+                        "actual": actual.get(key),
+                    }
+                )
+            else:
+                output.extend(manifest_differences(expected[key], actual[key], field))
+    elif expected != actual:
+        output.append({"field": prefix, "expected": expected, "actual": actual})
+    return output
+
+
+def load_or_collect_trajectory(args, indexed_items, logger):
+    expected = expected_manifest(args, indexed_items)
+    trajectory_path, manifest_path = trajectory_paths(args, expected)
+    have_trajectory = trajectory_path.exists()
+    have_manifest = manifest_path.exists()
+    if have_trajectory != have_manifest and not args.force_recollect:
+        raise RuntimeError(
+            "Incomplete trajectory cache; pass --force_recollect to replace it: "
+            f"{trajectory_path}"
+        )
+    have_cache = have_trajectory and have_manifest
+    method = None
+    cache_hit = False
+    if have_cache and not args.force_recollect:
+        actual = json.loads(manifest_path.read_text(encoding="utf-8"))
+        differences = manifest_differences(expected, actual)
+        if differences:
+            raise RuntimeError(
+                "Refusing to reuse incompatible trajectory manifest. Differences:\n"
+                + json.dumps(differences, indent=2, ensure_ascii=False, default=str)
+            )
+        logger.info("Phase A skipped: reusing %s", trajectory_path)
+        cache_hit = True
+    else:
+        if args.reuse_trajectory:
+            raise FileNotFoundError(
+                f"--reuse_trajectory requested but cache is absent: {trajectory_path}"
+            )
+        logger.info("Phase A: real latent-MAS-hybrid collection started.")
+        method = load_hybrid(args)
+        states, questions = collect(method, indexed_items, args, logger)
+        trajectory_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            {
+                "states": states,
+                "questions": questions,
+                "agent_models": list(args.agent_models),
+                "generation_config": generation_config(args),
+                "alignment_config": alignment_config(args),
+            },
+            trajectory_path,
+        )
+        write_json(
+            manifest_path,
+            {**expected, "generated_at": datetime.now().isoformat(timespec="seconds")},
+        )
+        logger.info("Phase A: saved %d states to %s", len(states), trajectory_path)
+    trajectory = torch.load(trajectory_path, map_location="cpu", weights_only=True)
+    return trajectory_path, trajectory, method, cache_hit
+
+
+def get_weights(refiner, judger):
+    if refiner.tokenizer.get_vocab() != judger.tokenizer.get_vocab():
+        raise ValueError("Refiner and Judger token-to-ID vocabularies must match.")
+    output = refiner.model.get_output_embeddings()
+    inputs = judger.model.get_input_embeddings()
+    if output is None or inputs is None:
+        raise ValueError("Refiner/Judger embedding weights are unavailable.")
+    if output.weight.shape[0] != inputs.weight.shape[0]:
+        raise ValueError("Refiner W_out and Judger W_in vocabulary rows differ.")
+    bias = getattr(output, "bias", None)
+    return (
+        output.weight.detach().float(),
+        inputs.weight.detach().float(),
+        None if bias is None else bias.detach().float(),
+    )
+
+
+def mapping_metadata(path, args):
+    return {
+        "trajectory": str(path),
+        "mapping": "refiner_to_judger",
+        "mapping_source_role": "refiner",
+        "mapping_target_role": "judger",
+        "mapping_source_model": args.agent_models[2],
+        "mapping_target_model": args.agent_models[3],
+    }
+
+
+def mapping_cache_identity(path, args, state_count):
+    manifest_path = path.with_suffix(".manifest.json")
+    trajectory_manifest_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    implementation_hash = hashlib.sha256()
+    for implementation_path in (
+        ROOT / "alignment.py",
+        ROOT / "exp" / "approximator" / "stages" / "common.py",
+        ROOT / "exp" / "approximator" / "stages" / "mapping.py",
+    ):
+        implementation_hash.update(implementation_path.read_bytes())
+    payload = {
+        "schema_version": MAPPING_CACHE_SCHEMA,
+        "trajectory": str(path.resolve()),
+        "trajectory_manifest_sha256": trajectory_manifest_sha256,
+        "mapping_implementation_sha256": implementation_hash.hexdigest(),
+        "state_count": state_count,
+        "mapping_source_role": "refiner",
+        "mapping_target_role": "judger",
+        "mapping_source_model": args.agent_models[2],
+        "mapping_target_model": args.agent_models[3],
+        "kernel_features": args.kernel_features,
+        "kernel_temperature": args.kernel_temperature,
+        "kernel_seed": args.kernel_seed,
+        "kernel_chunk_size": args.kernel_chunk_size,
+        "probe_seed": args.probe_seed,
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()[:12]
+    temperature = format(args.kernel_temperature, ".12g").replace("-", "m").replace(
+        ".", "p"
+    )
+    cache_id = (
+        f"m{args.kernel_features}_tau{temperature}_seed{args.kernel_seed}"
+        f"_chunk{args.kernel_chunk_size}_{digest}"
+    )
+    return cache_id, payload
+
+
+def load_or_compute_mapping_cache(
+    states, wo, wi, bias, kernel, args, logger, cache_id
+):
+    mapping_path = MAPPING_CACHE_DIR / f"{cache_id}.full.parquet"
+    single_path = MAPPING_CACHE_DIR / f"{cache_id}.single_kernel.parquet"
+    if mapping_path.exists() and single_path.exists():
+        try:
+            rows = common.read_rows(mapping_path)
+            single = common.read_rows(single_path)
+            if len(rows) != len(states):
+                raise ValueError(
+                    f"cached mapping has {len(rows)} rows; expected {len(states)}"
+                )
+            logger.info("Full mapping cache hit: %s", mapping_path)
+            return rows, single, True, mapping_path, single_path
+        except Exception as error:
+            logger.warning("Ignoring invalid full mapping cache: %s", error)
+
+    logger.info("Full mapping cache miss; computing %d states once.", len(states))
+    rows, single = mapping_rows(
+        states, wo, wi, bias, kernel, args, include_s2=True, logger=logger
+    )
+    common.write_rows_path(rows, mapping_path)
+    common.write_rows_path(single, single_path)
     logger.info(
-        "Building main ORF kernel (m=%d, tau=%s, seed=%d).",
-        args.kernel_features,
-        args.kernel_temperature,
-        args.kernel_seed,
+        "Full mapping cache saved: %d mapping rows, %d single-kernel rows.",
+        len(rows),
+        len(single),
+    )
+    return rows, single, False, mapping_path, single_path
+
+
+def summary_header(stage, metadata):
+    return {
+        "metadata": {
+            "stage": stage,
+            **metadata,
+        },
+        "aggregation": {
+            "independent_unit": "question",
+            "within_question": "mean",
+            "variance_ddof": 1,
+            "bootstrap_unit": "question",
+        },
+    }
+
+
+def metric_summaries(rows, metrics, args):
+    return {
+        output_name: common.clustered_metric(rows, source_name, args)
+        for output_name, source_name in metrics.items()
+    }
+
+
+def rank_metric_summaries(rows, metrics, args):
+    output = {}
+    for rank_band in sorted({row["rank_band"] for row in rows}):
+        subset = [row for row in rows if row["rank_band"] == rank_band]
+        output[rank_band] = metric_summaries(subset, metrics, args)
+    return output
+
+
+def s0_summary(rows, wo, wi, args, metadata):
+    hidden_norm = {}
+    for role, state_kind in sorted(
+        {(row["role"], row["state_kind"]) for row in rows}
+    ):
+        subset = [
+            row
+            for row in rows
+            if row["role"] == role and row["state_kind"] == state_kind
+        ]
+        hidden_norm[f"{role}.{state_kind}"] = common.clustered_metric(
+            subset, "hidden_norm", args
+        )
+    return {
+        **summary_header("s0", metadata),
+        "metrics": {
+            "hidden_norm": hidden_norm,
+            "weight_norm": {
+                "refiner_output_embedding": common.describe_values(
+                    wo.norm(dim=1).float().cpu().numpy()
+                ),
+                "judger_input_embedding": common.describe_values(
+                    wi.norm(dim=1).float().cpu().numpy()
+                ),
+            },
+        },
+    }
+
+
+def s1_summary(rows, single_rows, performance_rows, args, metadata):
+    payload = {
+        **summary_header("s1", metadata),
+        "metrics": {
+            "mapping": metric_summaries(
+                rows,
+                {
+                    "f_relative_l2_error": "f_rel_l2",
+                    "f_cosine": "f_cosine",
+                    "confidence": "confidence",
+                    "entropy": "entropy",
+                },
+                args,
+            ),
+            "quality_rates": {
+                "denominator_valid": common.rate_summary(rows, "denom_valid"),
+                "nan_inf": common.rate_summary(rows, "nan_inf"),
+            },
+            "single_kernel_by_rank": rank_metric_summaries(
+                single_rows,
+                {
+                    "absolute_error": "kernel_abs_error",
+                    "relative_error": "kernel_relative_error",
+                    "log_error": "kernel_log_error",
+                    "kernel_ratio": "kernel_ratio",
+                },
+                args,
+            ),
+        },
+    }
+    if performance_rows:
+        payload["metrics"]["performance_latency_us"] = {
+            method: common.clustered_metric(
+                [row for row in performance_rows if row["method"] == method],
+                "latency_us",
+                args,
+            )
+            for method in ("exact", "kernel")
+        }
+    return payload
+
+
+def s2_summary(rows, args, metadata):
+    return {
+        **summary_header("s2", metadata),
+        "metrics": {
+            "distribution_error": metric_summaries(
+                rows,
+                {
+                    "kl_p_to_phat": "kl_p_phat",
+                    "js_divergence": "js",
+                    "total_variation": "tv",
+                    "l1_error": "l1",
+                    "top10_overlap": "top10_overlap",
+                    "top100_overlap": "top100_overlap",
+                    "exact_top10_mass": "exact_top10_mass",
+                },
+                args,
+            ),
+            "top1_agreement": common.rate_summary(rows, "top1_agree"),
+        },
+    }
+
+
+def s2_calibration_summary(rows, args, metadata):
+    groups = {}
+    for family, feature_count, temperature in sorted(
+        {
+            (row["feature_family"], row["m"], row["tau"])
+            for row in rows
+        }
+    ):
+        subset = [
+            row
+            for row in rows
+            if row["feature_family"] == family
+            and row["m"] == feature_count
+            and row["tau"] == temperature
+        ]
+        key = f"{family}.m{feature_count}.tau{short_float(temperature)}"
+        groups[key] = {
+            "relative_l2_error": common.clustered_metric(
+                subset, "rel_l2", args
+            ),
+            "denominator_valid": common.rate_summary(subset, "denom_valid"),
+        }
+    return {
+        **summary_header("s2_calibration", metadata),
+        "configurations": groups,
+    }
+
+
+def s3_metric_block(rows, args):
+    f_rows = [row for row in rows if row["kind"] == "F"]
+    kernel_rows = [row for row in rows if row["kind"] == "kernel"]
+    return {
+        "F": metric_summaries(
+            f_rows,
+            {
+                "variance": "variance",
+                "std": "std",
+                "relative_std": "relative_std",
+                "bias_squared": "bias2",
+                "mse": "mse",
+            },
+            args,
+        ),
+        "single_kernel_by_rank": rank_metric_summaries(
+            kernel_rows,
+            {
+                "variance": "variance",
+                "std": "std",
+                "relative_std": "relative_std",
+                "bias_squared": "bias2",
+                "mse": "mse",
+            },
+            args,
+        ),
+    }
+
+
+def s3_summaries(rows, args, metadata):
+    headline_rows = [
+        row
+        for row in rows
+        if row["m"] == 2048 and abs(row["tau"] - 1.0) < 1e-8
+    ]
+    headline = {
+        **summary_header("s3", metadata),
+        "configuration": {"m": 2048, "tau": 1.0},
+        "metrics": s3_metric_block(headline_rows, args),
+    }
+    grid = {}
+    for feature_count, temperature in sorted(
+        {(row["m"], row["tau"]) for row in rows}
+    ):
+        subset = [
+            row
+            for row in rows
+            if row["m"] == feature_count and row["tau"] == temperature
+        ]
+        grid[f"m{feature_count}.tau{short_float(temperature)}"] = s3_metric_block(
+            subset, args
+        )
+    return headline, {
+        **summary_header("s3_grid", metadata),
+        "configurations": grid,
+    }
+
+
+def run_phase_b(path, trajectory, method, args, logger):
+    all_states = [State(**record) for record in trajectory["states"]]
+    analysis_states = [
+        state
+        for state in all_states
+        if state.role == "refiner" and state.state_kind == "latent_reply_hidden"
+    ]
+    if not analysis_states:
+        raise RuntimeError("No Refiner latent_reply_hidden states in trajectory.")
+    logger.info("Phase B: %d saved Refiner latent reply states.", len(analysis_states))
+    if method is None:
+        method = load_hybrid(args)
+    refiner = method.models[args.agent_models[2]]
+    judger = method.models[args.agent_models[3]]
+    wo, wi, bias = get_weights(refiner, judger)
+    wo, wi = wo.to(args.device), wi.to(args.device)
+    bias = None if bias is None else bias.to(args.device)
+    cache_id, cache_payload = mapping_cache_identity(
+        path, args, len(analysis_states)
+    )
+    metadata = {
+        **mapping_metadata(path, args),
+        "mapping_cache_id": cache_id,
+        **{
+            key: cache_payload[key]
+            for key in (
+                "kernel_features",
+                "kernel_temperature",
+                "kernel_seed",
+                "kernel_chunk_size",
+                "probe_seed",
+            )
+        },
+    }
+    common.set_artifact_context(metadata)
+    write_json(
+        RESULT / "manifests" / "analysis.json",
+        {
+            **metadata,
+            "study": args.study,
+            "analysis_state_count": len(analysis_states),
+            "complete_trajectory_state_count": len(all_states),
+        },
+    )
+    logger.info(
+        "Float64 audit p99=%s",
+        common.audit(analysis_states, wo, wi, bias, args),
     )
     kernel = build_kernel_state(
         wo,
@@ -449,98 +804,197 @@ def main():
         seed=args.kernel_seed,
         chunk_size=args.kernel_chunk_size,
     )
-    write_json(
-        RESULT / "manifests" / f"{args.study}_{args.model_pair}_{args.dataset}.json",
-        {
-            "args": vars(args),
-            "source": source_model_name,
-            "target": target_model_name,
-            "git_commit": commit(),
-            "questions": len(items),
-            "states": len(states),
-            "timestamp": time.time(),
-        },
-    )
     studies = [args.study] if args.study != "all" else ["s0", "s1", "s2", "s3", "s4"]
-    for index, study in enumerate(studies, start=1):
-        logger.info("Stage %d/%d (%s) started.", index, len(studies), study.upper())
-        stage_started = time.time()
+    cached_rows = cached_single = None
+    mapping_cache_info = None
+    if any(study in ("s1", "s2") for study in studies):
+        (
+            cached_rows,
+            cached_single,
+            mapping_cache_hit,
+            mapping_path,
+            single_path,
+        ) = load_or_compute_mapping_cache(
+            analysis_states,
+            wo,
+            wi,
+            bias,
+            kernel,
+            args,
+            logger,
+            cache_id,
+        )
+        mapping_cache_info = {
+            "cache_id": cache_id,
+            "cache_hit": mapping_cache_hit,
+            "mapping_file": str(mapping_path),
+            "single_kernel_file": str(single_path),
+        }
+        cache_manifest = {
+            **cache_payload,
+            "cache_id": cache_id,
+            "mapping_file": str(mapping_path),
+            "single_kernel_file": str(single_path),
+            "mapping_rows": len(cached_rows),
+            "single_kernel_rows": len(cached_single),
+        }
+        write_json(
+            MAPPING_CACHE_DIR / f"{cache_id}.manifest.json",
+            cache_manifest,
+        )
+        write_json(
+            RESULT / "manifests" / "mapping.json",
+            {**cache_manifest, "cache_hit": mapping_cache_hit},
+        )
+    for study in studies:
+        logger.info("Phase B %s started.", study.upper())
         if study == "s0":
-            rows = s0.run(states, wo, wi, args, logger)
-            common.write_rows(rows, f"s0_states_{args.model_pair}_{args.dataset}")
-            common.write_rows(
-                s0.hidden_norm_summary(rows),
-                f"s0_hidden_norm_summary_{args.model_pair}_{args.dataset}",
-            )
-            common.write_rows(
-                s0.weight_norm_summary(wo, wi),
-                f"s0_embedding_norm_summary_{args.model_pair}_{args.dataset}",
+            rows = s0.run(all_states, wo, wi, args, logger)
+            common.write_rows(rows, "s0_hidden_states")
+            common.write_summary(
+                s0_summary(rows, wo, wi, args, metadata),
+                "s0_summary",
             )
         elif study == "s1":
-            rows, single = s1.run(states, wo, wi, bias, kernel, args, logger)
-            common.write_rows(rows, f"s1_mapping_{args.model_pair}_{args.dataset}")
-            common.write_rows(
-                single, f"s1_single_kernel_{args.model_pair}_{args.dataset}"
-            )
-            common.write_rows(
-                common.stat_rows(rows, "f_rel_l2", args),
-                f"s1_summary_{args.model_pair}_{args.dataset}",
-            )
-            common.histogram_ecdf(rows, "f_rel_l2", "s1")
-            s1.plot(rows)
+            common.write_rows(cached_rows, "s1_mapping")
+            common.write_rows(cached_single, "s1_single_kernel")
+            common.histogram_ecdf(cached_rows, "f_rel_l2", "s1")
+            s1.plot(cached_rows)
+            performance_rows = None
             if args.run_s1_performance:
-                common.write_rows(
-                    s1.performance(states, wo, wi, bias, kernel, args, logger),
-                    "s1_performance",
+                performance_rows = s1.performance(
+                    analysis_states, wo, wi, bias, kernel, args, logger
                 )
-        elif study == "s2":
-            rows, single = s2.run(states, wo, wi, bias, kernel, args, logger)
-            common.write_rows(rows, f"s2_mapping_{args.model_pair}_{args.dataset}")
-            common.write_rows(
-                single, f"s2_single_kernel_{args.model_pair}_{args.dataset}"
-            )
-            common.write_rows(
-                common.stat_rows(rows, "f_rel_l2", args),
-                f"s2_summary_{args.model_pair}_{args.dataset}",
-            )
-            common.histogram_ecdf(rows, "f_rel_l2", "s2")
-            s2.plot(rows)
-            if args.run_s2_calibration:
-                if not (args.dataset == "arc_easy" and args.split == "train"):
-                    raise ValueError(
-                        "S2 calibration is prescribed only for ARC-Easy train"
-                    )
-                logger.info(
-                    "S2 calibration grid started (ORF/iid, 5 m values, 3 tau values, 5 seeds)."
-                )
-                calibration = s2.calibration(states, wo, wi, bias, args, logger)
-                common.write_rows(calibration, "s2_calibration")
-                logger.info("S2 calibration completed: %d rows.", len(calibration))
-        elif study == "s3":
-            rows = s3.run(states, wo, wi, bias, args, logger)
-            common.write_rows(rows, f"s3_variance_{args.model_pair}_{args.dataset}")
-            common.write_rows(
-                common.stat_rows(
-                    [x for x in rows if x["kind"] == "F"],
-                    "variance",
+                common.write_rows(performance_rows, "s1_performance")
+            common.write_summary(
+                s1_summary(
+                    cached_rows,
+                    cached_single,
+                    performance_rows,
                     args,
-                    extra=("m", "tau", "kind"),
+                    metadata,
                 ),
-                f"s3_summary_{args.model_pair}_{args.dataset}",
+                "s1_summary",
             )
+        elif study == "s2":
+            common.write_rows(cached_rows, "s2_mapping")
+            common.write_rows(cached_single, "s2_single_kernel")
+            common.histogram_ecdf(cached_rows, "f_rel_l2", "s2")
+            s2.plot(cached_rows)
+            common.write_summary(
+                s2_summary(cached_rows, args, metadata),
+                "s2_summary",
+            )
+            if args.run_s2_calibration:
+                calibration_rows = s2.calibration(
+                    analysis_states, wo, wi, bias, args, logger
+                )
+                common.write_rows(calibration_rows, "s2_calibration")
+                common.write_summary(
+                    s2_calibration_summary(
+                        calibration_rows, args, metadata
+                    ),
+                    "s2_calibration_summary",
+                )
+        elif study == "s3":
+            rows = s3.run(analysis_states, wo, wi, bias, args, logger)
+            common.write_rows(rows, "s3_variance")
+            headline, grid = s3_summaries(rows, args, metadata)
+            common.write_summary(headline, "s3_summary")
+            common.write_summary(grid, "s3_grid_summary")
             s3.plot_s3(rows)
+            s3.plot_kernel_variance(rows)
             s3.plot_forest(rows)
         else:
-            rows = s4.run(states, wo, wi, bias, kernel, args, logger)
-            common.write_rows(rows, f"s4_embeddings_{args.model_pair}_{args.dataset}")
-        logger.info(
-            "Stage %s completed in %.1fs.", study.upper(), time.time() - stage_started
+            rows, summary = s4.run(
+                analysis_states, wo, wi, bias, kernel, args, logger
+            )
+            common.write_rows(rows, "s4_embeddings")
+            common.write_summary(
+                {
+                    **summary_header("s4", metadata),
+                    "metrics": summary,
+                },
+                "s4_summary",
+            )
+        logger.info("Phase B %s completed.", study.upper())
+    return {
+        "mapping_cache": mapping_cache_info,
+        "analysis_state_count": len(analysis_states),
+        "complete_trajectory_state_count": len(all_states),
+    }
+
+
+def main(argv=None):
+    global RESULT
+    args = parse_args(argv)
+    run_dir, config_hash, timestamp = create_run_dir(args)
+    RESULT = run_dir
+    common.set_result_root(run_dir)
+    logger = configure_logger(run_dir)
+    started = time.time()
+    run_manifest_path = run_dir / "run_manifest.json"
+    run_manifest = {
+        "status": "running",
+        "run_name": run_dir.name,
+        "run_directory": str(run_dir),
+        "started_at": datetime.now().isoformat(timespec="seconds"),
+        "directory_timestamp": timestamp,
+        "config_hash": config_hash,
+        "implementation_sha256": run_implementation_fingerprint(),
+        "args": vars(args),
+        "git_commit": git_commit(),
+        "pytorch_version": torch.__version__,
+        "transformers_version": transformers.__version__,
+    }
+    write_json(run_manifest_path, run_manifest)
+    logger.info("Run directory: %s", run_dir)
+    random.seed(args.probe_seed)
+    np.random.seed(args.probe_seed)
+    torch.manual_seed(args.probe_seed)
+    try:
+        items = sampled_items(args)
+        path, trajectory, method, trajectory_cache_hit = load_or_collect_trajectory(
+            args, items, logger
         )
-    logger.info(
-        "Operator experiment completed successfully in %.1fs. State log: %s",
-        time.time() - started,
-        RESULT / "exp_state.txt",
-    )
+        trajectory_manifest = path.with_suffix(".manifest.json")
+        write_json(
+            run_dir / "manifests" / "trajectory.json",
+            {
+                "cache_hit": trajectory_cache_hit,
+                "trajectory_file": str(path),
+                "manifest_file": str(trajectory_manifest),
+                "manifest_sha256": hashlib.sha256(
+                    trajectory_manifest.read_bytes()
+                ).hexdigest(),
+            },
+        )
+        phase_b = run_phase_b(path, trajectory, method, args, logger)
+        elapsed = time.time() - started
+        run_manifest.update(
+            status="completed",
+            completed_at=datetime.now().isoformat(timespec="seconds"),
+            elapsed_seconds=elapsed,
+            trajectory_cache={
+                "cache_hit": trajectory_cache_hit,
+                "trajectory_file": str(path),
+                "manifest_file": str(trajectory_manifest),
+            },
+            **phase_b,
+        )
+        write_json(run_manifest_path, run_manifest)
+        logger.info("Two-stage experiment completed in %.1fs.", elapsed)
+    except Exception as error:
+        run_manifest.update(
+            status="failed",
+            failed_at=datetime.now().isoformat(timespec="seconds"),
+            elapsed_seconds=time.time() - started,
+            error_type=type(error).__name__,
+            error=str(error),
+        )
+        write_json(run_manifest_path, run_manifest)
+        logger.exception("Two-stage experiment failed.")
+        raise
 
 
 if __name__ == "__main__":

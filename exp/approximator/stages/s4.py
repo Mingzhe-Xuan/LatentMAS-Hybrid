@@ -1,104 +1,201 @@
-# PLAN-V2 STATUS: see ../IMPLEMENTATION_STATUS.md#s4----communication-space-geometry.
 from .common import *
 
-def s4(states, wo, wi, bias, k, args):
-    lin = build_linear_state(wo, wi, ridge=1e-5)
+
+def run(states, wo, wi, bias, kernel, args, logger):
+    linear = build_linear_state(wo, wi, ridge=1e-5)
     rows = []
-    for s in states:
-        f, _ = exact(s.vector, wo, wi, bias, args.tau)
-        h, _ = kernel_map(s.vector, k)
-        l = s.vector.to(wo.device) @ lin.matrix
-        l = l * (lin.target_norm / l.norm().clamp_min(1e-6))
-        logits = wo @ (s.vector.to(wo.device) / args.tau)
-        if bias is not None: logits = logits + bias
-        p = torch.softmax(logits, 0)
-        entropy = float(-(p * p.clamp_min(1e-30).log()).sum())
-        for name, v in (("exact", f), ("linear", l), ("kernel", h)):
+    for state in states:
+        exact_value, probabilities = exact(
+            state.vector, wo, wi, bias, args.kernel_temperature
+        )
+        kernel_value, _ = kernel_map(state.vector, kernel)
+        linear_value = state.vector.to(wo.device) @ linear.matrix
+        linear_value *= linear.target_norm / linear_value.norm().clamp_min(1e-6)
+        entropy = float(
+            -(probabilities * probabilities.clamp_min(1e-30).log()).sum()
+        )
+        for method, value in (
+            ("exact", exact_value),
+            ("linear", linear_value),
+            ("kernel", kernel_value),
+        ):
             rows.append(
                 {
-                    **base(s),
-                    "method": name,
+                    **base(state),
+                    "method": method,
                     "entropy": entropy,
-                    "embedding": v.cpu().tolist(),
+                    "embedding": value.cpu().tolist(),
                 }
             )
-    return rows
+    logger.info("S4: generated exact/linear/kernel Refiner-to-Judger outputs.")
+    summary = plot_s4(rows, args)
+    return rows, summary
+
+
 def plot_s4(rows, args):
-    # Sample state identities first, so each selected state contributes all three
-    # methods and prompt/reply have equal weight in the PCA fitting population.
-    rng = random.Random(args.probe_seed)
-    chosen = []
-    for src in SOURCES:
-        by_state = {}
-        for r in rows:
-            if r["source"] == src:
-                by_state.setdefault(
-                    (r["item_id"], r["position"], r["turn_id"], r["agent_id"]), []
-                ).append(r)
-        keys = list(by_state)
-        rng.shuffle(keys)
-        for key in keys[: min(2000, len(keys))]:
-            chosen.extend(by_state[key])
-    X = np.array([r["embedding"] for r in chosen], dtype=np.float32)
-    X -= X.mean(0)
-    _, _, v = np.linalg.svd(X, full_matrices=False)
-    Z = X @ v[:2].T
-    for r, z in zip(chosen, Z):
-        r["pc1"], r["pc2"] = float(z[0]), float(z[1])
-    entropy = np.array([r["entropy"] for r in chosen]); cuts = np.quantile(entropy, [.25, .5, .75])
-    for r in chosen: r["entropy_quartile"] = int(np.searchsorted(cuts, r["entropy"], side="right") + 1)
-    fig, axs = plt.subplots(1, 3, figsize=(15, 4), sharex=True, sharey=True)
-    exact_by_key={(r["item_id"],r["source"],r["position"],r["turn_id"],r["agent_id"]):r for r in chosen if r["method"]=="exact"}
-    colors=["#440154", "#31688e", "#35b779", "#fde725"]
-    for ax, m in zip(axs, ("exact", "linear", "kernel")):
-        q = [r for r in chosen if r["method"] == m]
-        if m != "exact":
-            ax.scatter([r["pc1"] for r in exact_by_key.values()], [r["pc2"] for r in exact_by_key.values()], c="lightgray", s=5, alpha=.35, label="exact")
-        for source, marker in (("prompt", "o"), ("reply", "^")):
-            for quartile in range(1,5):
-                z=[r for r in q if r["source"]==source and r["entropy_quartile"]==quartile]
-                ax.scatter([r["pc1"] for r in z], [r["pc2"] for r in z], color=colors[quartile-1], marker=marker, s=8, alpha=.7)
-        if m != "exact":
-            for r in q[:100]:
-                key=(r["item_id"],r["source"],r["position"],r["turn_id"],r["agent_id"]); e=exact_by_key.get(key)
-                if e: ax.annotate("", xy=(r["pc1"],r["pc2"]), xytext=(e["pc1"],e["pc2"]), arrowprops={"arrowstyle":"->","color":"gray","alpha":.2,"lw":.4})
-        ax.set_title(m); ax.set_xlabel("PC1")
-    axs[0].set_ylabel("PC2")
-    (RESULT / "figures").mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
-    fig.savefig(RESULT / "figures" / "s4_shared_pca.pdf")
-    plt.close(fig)
+    by_state = {}
+    for row in rows:
+        key = (
+            row["item_id"],
+            row["position"],
+            row["turn_id"],
+            row["agent_id"],
+        )
+        by_state.setdefault(key, []).append(row)
+    all_keys = list(by_state)
+    keys = [
+        key
+        for key, state_rows in by_state.items()
+        if len(state_rows) == 3
+        and all(
+            np.isfinite(np.asarray(row["embedding"], dtype=np.float32)).all()
+            for row in state_rows
+        )
+    ]
+    random.Random(args.probe_seed).shuffle(keys)
+    chosen = [
+        row for key in keys[: min(2000, len(keys))] for row in by_state[key]
+    ]
+    if not chosen:
+        return {
+            "input_state_count": len(all_keys),
+            "valid_state_count": 0,
+            "invalid_state_count": len(all_keys),
+            "mapped_embedding_count": 0,
+        }
+    matrix = np.asarray([row["embedding"] for row in chosen], dtype=np.float32)
+    centered = matrix - matrix.mean(0)
+    _, singular_values, components = np.linalg.svd(centered, full_matrices=False)
+    coordinates = centered @ components[:2].T
+    if coordinates.shape[1] < 2:
+        coordinates = np.pad(
+            coordinates, ((0, 0), (0, 2 - coordinates.shape[1]))
+        )
+    for row, coordinate in zip(chosen, coordinates):
+        row["pc1"], row["pc2"] = float(coordinate[0]), float(coordinate[1])
+
+    figure, axes = plt.subplots(1, 3, figsize=(15, 4), sharex=True, sharey=True)
+    for axis, method in zip(axes, ("exact", "linear", "kernel")):
+        subset = [row for row in chosen if row["method"] == method]
+        axis.scatter(
+            [row["pc1"] for row in subset],
+            [row["pc2"] for row in subset],
+            c=[row["entropy"] for row in subset],
+            cmap="viridis",
+            s=8,
+            alpha=0.7,
+        )
+        axis.set_title(method)
+        axis.set_xlabel("PC1")
+    axes[0].set_ylabel("PC2")
+    figure.tight_layout()
+    save_figure(figure, "s4_shared_pca")
+    plt.close(figure)
     write_rows(
-        [{k: v for k, v in r.items() if k != "embedding"} for r in chosen],
-        "s4_pca_coordinates",
+        [{key: value for key, value in row.items() if key != "embedding"} for row in chosen],
+        contextual_stem("s4_pca_coordinates"),
     )
+
+    explained = singular_values.square()
+    explained /= explained.sum().clip(min=np.finfo(np.float64).eps)
+    pc1_ratio = float(explained[0]) if len(explained) else 0.0
+    pc2_ratio = float(explained[1]) if len(explained) > 1 else 0.0
+    summary = {
+        "input_state_count": len(all_keys),
+        "valid_state_count": len(keys),
+        "invalid_state_count": len(all_keys) - len(keys),
+        "mapped_embedding_count": len(chosen),
+        "pca": {
+            "pc1_explained_variance_ratio": pc1_ratio,
+            "pc2_explained_variance_ratio": pc2_ratio,
+            "pc1_pc2_cumulative_ratio": pc1_ratio + pc2_ratio,
+            "by_method": {},
+        },
+        "paired_geometry": {},
+    }
+    for method in ("exact", "linear", "kernel"):
+        subset = [row for row in chosen if row["method"] == method]
+        summary["pca"]["by_method"][method] = {
+            "pc1": clustered_metric(subset, "pc1", args),
+            "pc2": clustered_metric(subset, "pc2", args),
+            "entropy": clustered_metric(subset, "entropy", args),
+        }
+
+    by_all_state = {}
+    for row in rows:
+        key = (
+            row["item_id"],
+            row["position"],
+            row["turn_id"],
+            row["agent_id"],
+        )
+        by_all_state.setdefault(key, {})[row["method"]] = row
+    for first, second in (
+        ("exact", "linear"),
+        ("exact", "kernel"),
+        ("linear", "kernel"),
+    ):
+        pair_rows = []
+        for methods in by_all_state.values():
+            if first not in methods or second not in methods:
+                continue
+            left = np.asarray(methods[first]["embedding"], dtype=np.float64)
+            right = np.asarray(methods[second]["embedding"], dtype=np.float64)
+            left_norm = np.linalg.norm(left)
+            right_norm = np.linalg.norm(right)
+            absolute = np.linalg.norm(left - right)
+            pair_rows.append(
+                {
+                    "item_id": methods[first]["item_id"],
+                    "absolute_l2_error": float(absolute),
+                    "relative_l2_error": float(absolute / max(left_norm, 1e-12)),
+                    "cosine_similarity": float(
+                        np.dot(left, right) / max(left_norm * right_norm, 1e-12)
+                    ),
+                }
+            )
+        summary["paired_geometry"][f"{first}_vs_{second}"] = {
+            metric: clustered_metric(pair_rows, metric, args)
+            for metric in (
+                "absolute_l2_error",
+                "relative_l2_error",
+                "cosine_similarity",
+            )
+        }
+
     if args.s4_tsne:
         try:
             from sklearn.manifold import TSNE
-        except ImportError as exc:
-            raise RuntimeError("--s4_tsne requires scikit-learn") from exc
-        if len(X) <= 50:
-            raise ValueError("S4 t-SNE needs more than 50 sampled mapping rows")
-        Zt = TSNE(
+        except ImportError as error:
+            raise RuntimeError("--s4_tsne requires scikit-learn") from error
+        if len(matrix) <= 50:
+            raise ValueError("S4 t-SNE needs more than 50 mapping rows")
+        estimator = TSNE(
             n_components=2,
             init="pca",
             perplexity=50,
             learning_rate="auto",
-            n_iter=1500,
+            max_iter=1500,
             random_state=101,
-        ).fit_transform(X)
-        for r, z in zip(chosen, Zt):
-            r["tsne1"], r["tsne2"] = float(z[0]), float(z[1])
-        write_rows(
-            [{k: v for k, v in r.items() if k != "embedding"} for r in chosen],
-            "s4_tsne_coordinates",
         )
-
-
-def run(states, wo, wi, bias, kernel, args, logger):
-    logger.info("S4: B-space mappings and shared PCA start for %d states.", len(states))
-    rows = s4(states, wo, wi, bias, kernel, args)
-    logger.info("S4: mappings completed (%d rows); fitting shared PCA.", len(rows))
-    plot_s4(rows, args)
-    logger.info("S4: shared PCA%s completed.", " and t-SNE" if args.s4_tsne else "")
-    return rows
+        tsne = estimator.fit_transform(matrix)
+        for row, coordinate in zip(chosen, tsne):
+            row["tsne1"], row["tsne2"] = float(coordinate[0]), float(coordinate[1])
+        write_rows(
+            [
+                {key: value for key, value in row.items() if key != "embedding"}
+                for row in chosen
+            ],
+            contextual_stem("s4_tsne_coordinates"),
+        )
+        summary["tsne"] = {
+            "kl_divergence": float(estimator.kl_divergence_),
+            "by_method": {},
+        }
+        for method in ("exact", "linear", "kernel"):
+            subset = [row for row in chosen if row["method"] == method]
+            summary["tsne"]["by_method"][method] = {
+                "tsne1": clustered_metric(subset, "tsne1", args),
+                "tsne2": clustered_metric(subset, "tsne2", args),
+            }
+    return summary

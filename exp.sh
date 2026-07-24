@@ -29,6 +29,7 @@ Usage:
 Options override the plan_v2 main-experiment defaults for the selected target:
   --study NAME              S0--S4, C0--C4, or M0--M4 study name
   --model-pair NAME         x1/x2 for operator/communication; c0/c1 for CoT
+  --agent-models "NAMES"    One or four space-separated models for approximator
   --dataset NAME --split NAME
   --method NAME             e.g. identical, linear, kernel, exact, all
   --orf-seed INT --m INT --tau FLOAT
@@ -45,6 +46,7 @@ SPLIT="${SPLIT:-}"; METHOD="${METHOD:-}"; ORF_SEED="${ORF_SEED:-}"
 M="${M:-}"; TAU="${TAU:-}"; PROBE_SEED="${PROBE_SEED:-}"
 MAX_QUESTIONS="${MAX_QUESTIONS:-}"; LATENT_STEPS="${LATENT_STEPS:-}"
 DEVICE="${DEVICE:-}"; EXP_EXTRA_ARGS="${EXP_EXTRA_ARGS:-}"
+AGENT_MODELS="${AGENT_MODELS:-}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -53,6 +55,7 @@ while [[ $# -gt 0 ]]; do
         --latent_comm) EXP_TARGET="latent_comm"; shift ;;
         --study) STUDY="$2"; shift 2 ;;
         --model-pair) MODEL_PAIR="$2"; shift 2 ;;
+        --agent-models) AGENT_MODELS="$2"; shift 2 ;;
         --dataset) DATASET="$2"; shift 2 ;;
         --split) SPLIT="$2"; shift 2 ;;
         --method) METHOD="$2"; shift 2 ;;
@@ -104,9 +107,11 @@ case "${EXP_TARGET}" in
         STUDY="${STUDY:-s1}"; MODEL_PAIR="${MODEL_PAIR:-x1}"
         DATASET="${DATASET:-arc_easy}"; SPLIT="${SPLIT:-test}"
         METHOD="${METHOD:-kernel}"; MAX_QUESTIONS="${MAX_QUESTIONS:-50}"
-        LATENT_STEPS="${LATENT_STEPS:-0}"
+        LATENT_STEPS="${LATENT_STEPS:-50}"
+        AGENT_MODELS="${AGENT_MODELS:-Qwen/Qwen3-4B}"
+        read -r -a APPROX_MODELS <<< "${AGENT_MODELS}"
         ENTRY="exp/approximator/run.py"
-        ARGS=(--study "${STUDY}" --model_pair "${MODEL_PAIR}" --dataset "${DATASET}" --split "${SPLIT}" --m "${M}" --tau "${TAU}" --orf_seed "${ORF_SEED}" --probe_seed "${PROBE_SEED}" --max_questions "${MAX_QUESTIONS}" --max_states_per_question "${MAX_STATES_PER_QUESTION}" --max_reply_tokens "${MAX_REPLY_TOKENS}" --prompt_limit "${PROMPT_LIMIT}" --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" --device "${DEVICE}")
+        ARGS=(--study "${STUDY}" --agent_models "${APPROX_MODELS[@]}" --dataset "${DATASET}" --split "${SPLIT}" --kernel_features "${M}" --kernel_temperature "${TAU}" --kernel_seed "${ORF_SEED}" --probe_seed "${PROBE_SEED}" --max_questions "${MAX_QUESTIONS}" --max_states_per_question "${MAX_STATES_PER_QUESTION}" --max_new_tokens "${MAX_REPLY_TOKENS}" --latent_steps "${LATENT_STEPS}" --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" --device "${DEVICE}")
         ;;
     latent_cot)
         STUDY="${STUDY:-c1}"; MODEL_PAIR="${MODEL_PAIR:-c0}"
@@ -130,7 +135,11 @@ if [[ -n "${EXP_EXTRA_ARGS}" ]]; then read -r -a EXTRA <<< "${EXP_EXTRA_ARGS}"; 
 echo "========================================================================"
 echo "PBS job       : ${PBS_JOBID:-interactive}"
 echo "Target/study  : ${EXP_TARGET}/${STUDY}"
-echo "Model pair    : ${MODEL_PAIR}"
+if [[ "${EXP_TARGET}" == "approximator" ]]; then
+    echo "Agent models  : ${AGENT_MODELS}"
+else
+    echo "Model pair    : ${MODEL_PAIR}"
+fi
 echo "Dataset/split : ${DATASET}/${SPLIT}"
 echo "Method        : ${METHOD}"
 echo "ORF (m,tau,seed): ${M}, ${TAU}, ${ORF_SEED}"

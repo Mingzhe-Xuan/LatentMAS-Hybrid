@@ -1,116 +1,103 @@
 from .common import *
 
 
-def s0(states, wo, wi, args):
+def _summary(values):
+    values = np.asarray(values)
+    return {
+        "count": len(values),
+        "mean": float(values.mean()),
+        "std": float(values.std()),
+        "min": float(values.min()),
+        "p01": float(np.quantile(values, 0.01)),
+        "p05": float(np.quantile(values, 0.05)),
+        "p25": float(np.quantile(values, 0.25)),
+        "p50": float(np.quantile(values, 0.50)),
+        "p75": float(np.quantile(values, 0.75)),
+        "p95": float(np.quantile(values, 0.95)),
+        "p99": float(np.quantile(values, 0.99)),
+        "max": float(values.max()),
+    }
+
+
+def run(states, wo, wi, args, logger):
+    del args
+    logger.info("S0: complete-trajectory hidden norms (%d states).", len(states))
     rows = []
-    for s in states:
-        r = base(s)
-        r.update(hidden_norm=float(s.vector.norm()))
-        rows.append(r)
-    histogram_ecdf(rows, "hidden_norm", "s0")
+    for state in states:
+        rows.append({**base(state), "hidden_norm": float(state.vector.norm())})
+    plot(rows, wo, wi)
     return rows
 
 
 def weight_norm_summary(wo, wi):
-    """Summarize embedding norms without retaining a row for every token."""
-    summaries = []
-    for embedding_name, embedding_matrix in (
-        ("source_output_embedding", wo),
-        ("target_input_embedding", wi),
-    ):
-        norms = embedding_matrix.norm(dim=1).float().cpu().numpy()
-        summaries.append(
-            {
-                "embedding": embedding_name,
-                "count": len(norms),
-                "mean": float(norms.mean()),
-                "std": float(norms.std()),
-                "min": float(norms.min()),
-                "p01": float(np.quantile(norms, 0.01)),
-                "p05": float(np.quantile(norms, 0.05)),
-                "p50": float(np.quantile(norms, 0.50)),
-                "p95": float(np.quantile(norms, 0.95)),
-                "p99": float(np.quantile(norms, 0.99)),
-                "max": float(norms.max()),
-            }
-        )
-    return summaries
+    return [
+        {
+            "embedding": "refiner_output_embedding",
+            "mapping": "refiner_to_judger",
+            **_summary(wo.norm(dim=1).float().cpu().numpy()),
+        },
+        {
+            "embedding": "judger_input_embedding",
+            "mapping": "refiner_to_judger",
+            **_summary(wi.norm(dim=1).float().cpu().numpy()),
+        },
+    ]
 
 
 def hidden_norm_summary(rows):
-    """Describe the sampled hidden-state norm distribution by source."""
     summaries = []
-    for source in SOURCES:
-        norms = np.array(
-            [row["hidden_norm"] for row in rows if row["source"] == source]
-        )
-        if not len(norms):
-            continue
+    groups = sorted({(row["role"], row["state_kind"]) for row in rows})
+    for role, state_kind in groups:
+        norms = [
+            row["hidden_norm"]
+            for row in rows
+            if row["role"] == role and row["state_kind"] == state_kind
+        ]
         summaries.append(
-            {
-                "source": source,
-                "count": len(norms),
-                "mean": float(norms.mean()),
-                "std": float(norms.std()),
-                "min": float(norms.min()),
-                "p01": float(np.quantile(norms, 0.01)),
-                "p05": float(np.quantile(norms, 0.05)),
-                "p25": float(np.quantile(norms, 0.25)),
-                "p50": float(np.quantile(norms, 0.50)),
-                "p75": float(np.quantile(norms, 0.75)),
-                "p95": float(np.quantile(norms, 0.95)),
-                "p99": float(np.quantile(norms, 0.99)),
-                "max": float(norms.max()),
-            }
+            {"role": role, "state_kind": state_kind, **_summary(norms)}
         )
     return summaries
 
 
-def run(states, wo, wi, args, logger):
-    logger.info("S0: norm diagnostics start for %d sampled states.", len(states))
-    rows = s0(states, wo, wi, args)
-    plot(rows, wo, wi)
-    logger.info("S0: norm diagnostics completed with %d state rows.", len(rows))
-    return rows
-
-
 def plot(rows, wo, wi):
-    figure_dir = RESULT / "figures"
-    figure_dir.mkdir(parents=True, exist_ok=True)
 
-    fig, ax = plt.subplots(figsize=(6, 4))
-    ax.hist(
+    figure, axis = plt.subplots(figsize=(7, 4))
+    axis.hist(
         wo.norm(dim=1).detach().cpu().numpy(),
         bins=60,
         histtype="step",
-        label="W_out (source output embedding)",
+        label="Refiner W_out",
     )
-    ax.hist(
+    axis.hist(
         wi.norm(dim=1).detach().cpu().numpy(),
         bins=60,
         histtype="step",
-        label="W_in (target input embedding)",
+        label="Judger W_in",
     )
-    ax.set_title("Embedding L2-norm distributions")
-    ax.set_xlabel("L2 norm")
-    ax.set_ylabel("Token count")
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(figure_dir / "s0_embedding_norm_hist.pdf")
-    plt.close(fig)
+    axis.set(xlabel="row L2 norm", ylabel="token count")
+    axis.legend()
+    figure.tight_layout()
+    save_figure(figure, "s0_embedding_norm_hist")
+    plt.close(figure)
 
-    fig, ax = plt.subplots(figsize=(6, 4))
-    for source, label in (
-        ("prompt", "Prompt hidden states"),
-        ("reply", "Reply hidden states"),
-    ):
-        norms = [row["hidden_norm"] for row in rows if row["source"] == source]
-        if norms:
-            ax.hist(norms, bins=60, histtype="step", label=label)
-    ax.set_title("Hidden-state L2-norm distributions")
-    ax.set_xlabel("L2 norm")
-    ax.set_ylabel("State count")
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(figure_dir / "s0_hidden_norm_hist.pdf")
-    plt.close(fig)
+    groups = sorted({(row["role"], row["state_kind"]) for row in rows})
+    columns = 3
+    row_count = max(1, (len(groups) + columns - 1) // columns)
+    figure, axes = plt.subplots(
+        row_count, columns, figsize=(5 * columns, 3.2 * row_count), squeeze=False
+    )
+    for axis, (role, state_kind) in zip(axes.flat, groups):
+        norms = [
+            row["hidden_norm"]
+            for row in rows
+            if row["role"] == role and row["state_kind"] == state_kind
+        ]
+        axis.hist(norms, bins=min(30, max(5, len(norms))), color="tab:blue", alpha=0.8)
+        axis.set_title(f"{role} × {state_kind}", fontsize=9)
+        axis.set_xlabel("hidden L2 norm")
+        axis.set_ylabel("state count")
+    for axis in list(axes.flat)[len(groups) :]:
+        axis.set_visible(False)
+    figure.tight_layout()
+    save_figure(figure, "s0_hidden_norm_hist")
+    plt.close(figure)
