@@ -113,7 +113,7 @@ SEED=42               # Random seed for reproducibility.
 
 ## --- TextMAS / LatentMAS settings ---
 TEXT_MAS_CONTEXT_LENGTH=-1  # TextMAS context limit; -1 means unlimited.
-LATENT_STEPS=80             # Number of latent reasoning steps.
+LATENT_STEPS=45             # Number of latent reasoning steps.
 TRUST_REMOTE_CODE=true      # Pass --trust_remote_code when the model requires it.
 SEQUENTIAL_INFO_ONLY=false   # Retain only each agent's own prompt + latent KV before the next agent.
 LATENT_ONLY=true             # Retain only latent KV before the next agent (implies SEQUENTIAL_INFO_ONLY).
@@ -150,7 +150,7 @@ COMMON=(
 
     # TextMAS / LatentMAS settings
     --text_mas_context_length "${TEXT_MAS_CONTEXT_LENGTH}" # run.py default: -1 (unlimited)
-    --latent_steps "${LATENT_STEPS}"         # run.py default: 80
+    --latent_steps "${LATENT_STEPS}"         # run.py default: 45
 
     # Alignment settings. --align_method is varied per LatentMAS command below.
     --align_ridge "${ALIGN_RIDGE}"           # run.py default: 1e-5; used by linear

@@ -162,7 +162,7 @@ def main():
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--split", type=str, default="test")
     parser.add_argument("--max_new_tokens", type=int, default=None, help="Maximum new tokens per agent; defaults to max_token_dict.json for the selected task, otherwise 20000.")
-    parser.add_argument("--latent_steps", type=int, default=80, help="Number of latent steps for LatentMAS method")
+    parser.add_argument("--latent_steps", type=int, default=45, help="Number of latent steps for LatentMAS method")
     parser.add_argument(
         "--sequential_info_only",
         action="store_true",
