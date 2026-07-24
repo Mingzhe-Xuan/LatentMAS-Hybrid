@@ -75,8 +75,8 @@ def parse_args() -> argparse.Namespace:
 
 def pair(args: argparse.Namespace) -> tuple[str, str]:
     defaults = {
-        "x1": ("Qwen/Qwen2.5-1.5B", "Qwen/Qwen2.5-1.5B-Instruct"),
-        "x2": ("Qwen/Qwen2.5-1.5B-Instruct", "Qwen/Qwen2.5-7B-Instruct"),
+        "x1": ("Qwen/Qwen3-4B", "Qwen/Qwen3-8B"),
+        "x2": ("Qwen/Qwen3-8B", "Qwen/Qwen3-4B"),
     }
     a, b = defaults[args.model_pair]
     return args.source_model or a, args.target_model or b
@@ -303,13 +303,19 @@ def main() -> None:
         elif study == "s2": rows = rows_s1_s2(states, w_out, w_in, bias, kernel, args, True)
         elif study == "s3": rows = run_s3(states, w_out, w_in, bias, args)
         else:
-            # S4 stores all four mappings for a shared-PCA downstream fit.
+            # S4 uses only mappings whose output lives in B's input space.
             linear = build_linear_state(w_out, w_in, ridge=1e-5)
             rows = []
             for s in states:
                 f, _ = exact(s.vector, w_out, w_in, bias, args.tau); k, _ = mapping(s.vector, kernel)
-                ident = s.vector.to(args.device); ident = ident * (w_in.norm(dim=1).mean()/ident.norm().clamp_min(1e-6)); lin = (s.vector.to(args.device) @ linear.matrix); lin = lin * (linear.target_norm/lin.norm().clamp_min(1e-6))
-                for method, vec in (("exact", f), ("identical", ident), ("linear", lin), ("kernel", k)):
+                lin = s.vector.to(args.device) @ linear.matrix
+                lin = lin * (linear.target_norm / lin.norm().clamp_min(1e-6))
+                mapped = [("exact", f), ("linear", lin), ("kernel", k)]
+                if s.vector.numel() == w_in.shape[1]:
+                    ident = s.vector.to(args.device)
+                    ident = ident * (w_in.norm(dim=1).mean() / ident.norm().clamp_min(1e-6))
+                    mapped.insert(1, ("identical", ident))
+                for method, vec in mapped:
                     rows.append({"item_id": s.item_id, "source": s.source, "position": s.position, "method": method, "embedding": vec.cpu().tolist()})
         write_metrics(rows, f"{study}_{args.model_pair}_{args.dataset}")
         plot(rows, study)

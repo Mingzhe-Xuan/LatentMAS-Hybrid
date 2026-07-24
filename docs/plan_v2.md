@@ -61,8 +61,8 @@ $F$ 是 kernel $\hat F$ 的数值 oracle，不是语义真值。对同模型 CoT
 | --- | --- | --- | --- |
 | C0 | `Qwen/Qwen2.5-1.5B-Instruct` | 同一模型 | Latent CoT 主实验 |
 | C1 | `Qwen/Qwen2.5-7B-Instruct` | 同一模型 | CoT 尺度复现 |
-| X1 | `Qwen/Qwen2.5-1.5B` | `Qwen/Qwen2.5-1.5B-Instruct` | 通信主实验，含 identical/linear/kernel |
-| X2 | `Qwen/Qwen2.5-1.5B-Instruct` | `Qwen/Qwen2.5-7B-Instruct` | 跨尺度通信，含 linear/kernel |
+| X1 | `Qwen/Qwen3-4B` | `Qwen/Qwen3-8B` | 跨尺度通信主实验，含 linear/kernel |
+| X2 | `Qwen/Qwen3-8B` | `Qwen/Qwen3-4B` | 反向跨尺度通信复现，含 linear/kernel |
 
 每个 X 组合必须先逐项检查 tokenizer 的 vocab size、每个 ID 的字符串、special token ID 一致；任何一项不一致即停止该组合。保存模型 revision、hidden dimension、weight tying 信息和运行库版本到 `artifacts/plan_v2/manifests/compatibility.json`。
 
@@ -177,9 +177,9 @@ $$
 
 ### S4. 通信空间 PCA
 
-**运行**：仅 X1；ARC-Easy test 随机 50 题的全部 prompt 与 A-reply states，主设置和 seed 101；GSM8K 图置附录。为避免某一来源主导主成分，对两类状态各分层随机抽取相同数量（最多 2,000）后，将 $Y_F,Y_{\mathrm{identical}},Y_{\mathrm{linear}},Y_{\mathrm{kernel}}$ 拼接并只拟合一次全局中心化 PCA，四面板共享坐标。颜色为 exact entropy 四分位、点形区分 `prompt/reply`；另画灰色 exact 点与三方法叠加图、每种来源各 100 条配对箭头。
+**运行**：仅 X1；ARC-Easy test 随机 50 题的全部 prompt 与 A-reply states，主设置和 seed 101；GSM8K 图置附录。为避免某一来源主导主成分，对两类状态各分层随机抽取相同数量（最多 2,000）后，将 $Y_F,Y_{\mathrm{linear}},Y_{\mathrm{kernel}}$ 拼接并只拟合一次全局中心化 PCA，三面板共享坐标。由于 Qwen3-4B/8B 的 hidden dimension 不同，`identical` 不适用于 X1/X2。颜色为 exact entropy 四分位、点形区分 `prompt/reply`；另画灰色 exact 点与三方法叠加图、每种来源各 100 条配对箭头。
 
-可选 t-SNE 只对四组拼接后的分层 2,000 点拟合一次，参数固定为 `init=pca`、`perplexity=50`、`learning_rate=auto`、`n_iter=1500`、seed 101。
+可选 t-SNE 只对三组拼接后的分层 2,000 点拟合一次，参数固定为 `init=pca`、`perplexity=50`、`learning_rate=auto`、`n_iter=1500`、seed 101。
 
 **意义**：展示映射在 B 输入空间相对 exact 的几何偏移；不得解释为 CoT trajectory。
 
@@ -233,7 +233,7 @@ $$
 
 **运行**：X1 于 ARC-Challenge、GSM8K、MBPP+ 的各 4,096 static states；X2 于 ARC-Challenge、GSM8K 复现。source state 映射成 B input embedding，在相同 B prefix、attention mask、position ID 下插入一次；完成 B 前向后，读取该位置 B 末层的 next-token distribution。
 
-报告 kernel/linear/identical 相对 exact $F$ 的 B-logits KL/JS、top-1/top-10 agreement 和 greedy first-token agreement。
+报告 kernel/linear 相对 exact $F$ 的 B-logits KL/JS、top-1/top-10 agreement 和 greedy first-token agreement。
 
 **意义**：验证 B-space 中的小近似误差是否保留 B 的局部行为；这仍只是接收端数值 fidelity，不等于复杂语义理解。
 
@@ -241,7 +241,7 @@ $$
 
 **运行**：X1 主实验、X2 复现。新增固定 `data/communication_probe.jsonl` 共 1,024 条：每条有 entity、attribute、16 类 value；A 只看完整事实，B 只看 entity/attribute 查询。split 固定 train/calibration/test 为 256/256/512，value/entity/template 分层均衡；仅作评测，禁止训练。A 做 4 个 latent step，最终 state 一次映射给 B。
 
-比较无消息 B、随机匹配消息、错配消息、exact $F$、kernel、linear，以及 X1 的 identical。报告 top-1/top-3 accuracy、NLL、ECE、混淆矩阵和 kernel 相对 exact 的 paired difference。
+比较无消息 B、随机匹配消息、错配消息、exact $F$、kernel、linear。报告 top-1/top-3 accuracy、NLL、ECE、混淆矩阵和 kernel 相对 exact 的 paired difference。
 
 **意义**：B 无法从自身查询猜到 value，因此该实验能直接检验消息是否传递了 A 的私有信息；随机/错配对照排除先验和额外计算效应。
 
@@ -249,13 +249,13 @@ $$
 
 **运行**：X1 于 ARC-Challenge test 512、GSM8K test 512；X2 各 128 题复现。A、B 都看题；A 先做 16 个 latent step，B 接收最终 message 后独立 greedy 作答，最大生成长度分别为 512/1024。
 
-比较 B-alone、A-alone、B+随机消息、B+错配消息、B+exact $F$、B+kernel、B+linear，以及 X1 的 B+identical。报告 task accuracy、B 相对 B-alone 的 paired improvement、kernel 相对 exact 的 paired degradation、总延迟与传递 embedding 数。
+比较 B-alone、A-alone、B+随机消息、B+错配消息、B+exact $F$、B+kernel、B+linear。报告 task accuracy、B 相对 B-alone 的 paired improvement、kernel 相对 exact 的 paired degradation、总延迟与传递 embedding 数。
 
 **意义**：测消息能否改善真实推理，而非把 B 自身能力、额外 prompt 或额外计算误判为通信成功。
 
 ### M3. 多跳通信链
 
-**运行**：X1；私有信息 test 固定 256 条和 GSM8K test 固定 128 条。比较 A$\to$B 一跳与 A$\to$B$\to$A 两跳，每跳采用同一映射并保存 receiver readout。比较 exact $F$、kernel、linear，X1 另加 identical。
+**运行**：X1；私有信息 test 固定 256 条和 GSM8K test 固定 128 条。比较 A$\to$B 一跳与 A$\to$B$\to$A 两跳，每跳采用同一映射并保存 receiver readout。比较 exact $F$、kernel、linear。
 
 报告私有信息 accuracy、相对 exact chain 的 readout KL、top-k overlap、消息范数、异常率和 hop 退化曲线。
 
@@ -263,7 +263,7 @@ $$
 
 ### M4. 通信 language-lens 案例
 
-对 X1 私有信息与共享问题各固定 20 条，保存 A 原生读出和 B+exact/kernel/linear/identical 的 top-5。B 读出只能来自注入 message 后完成 B 前向的末层 state：
+对 X1 私有信息与共享问题各固定 20 条，保存 A 原生读出和 B+exact/kernel/linear 的 top-5。B 读出只能来自注入 message 后完成 B 前向的末层 state：
 
 $$
 p^{B,M}=\operatorname{softmax}\left(
