@@ -291,12 +291,12 @@ $$
 | C0--C4 Latent CoT | `exp\latent_cot` | 同模型 rollout、接口对照、答案评测、language-lens、动态 seed 稳定性 |
 | M0--M4 Latent Communication | `exp\latent_comm` | 跨模型消息注入、接收端保真、私有信息、协作、多跳与通信 readout |
 
-每个目录应有独立的可执行入口、配置文件、README 和 `result/` 子目录；运行产物只写入各自的 `result/`，并在 manifest 中记录对应的实验目录、配置路径和 git commit。 `exp` 中的分析实验可以读取或调用工作目录下的其他文件和模块，但绝对不得修改 `exp` 外的任何内容；所有新建、覆盖或删除操作只能作用于该实验目录自身及其 `result/` 子目录。建议入口分别为 `exp\approximator\run.py`、`exp\latent_cot\run.py`、`exp\latent_comm\run.py`；三者使用一致的 `--model_pair`、`--dataset`、`--method`、`--orf_seed` 参数命名，输出：
+每个目录应有独立的可执行入口、配置文件和 README；运行产物统一写入仓库根目录的 `exp_result/<实验目录>/`，并在 manifest 中记录对应的实验目录、配置路径和 git commit。`exp` 中的分析实验可以读取或调用工作目录下的其他文件和模块，但新建、覆盖或删除的运行产物只能写入 `exp_result/<实验目录>/`。建议入口分别为 `exp\approximator\run.py`、`exp\latent_cot\run.py`、`exp\latent_comm\run.py`；三者使用一致的 `--model_pair`、`--dataset`、`--method`、`--orf_seed` 参数命名，输出：
 
-- `exp/<实验目录>/result/manifests/*.json`：revision、样本、token position、参数、seed；
-- `exp/<实验目录>/result/metrics/*.parquet`：prompt/message/trajectory 原始指标；
-- `exp/<实验目录>/result/readouts/*.jsonl`：top-k 与案例；
-- `exp/<实验目录>/result/figures/*.pdf`：预注册图。
+- `exp_result/<实验目录>/manifests/*.json`：revision、样本、token position、参数、seed；
+- `exp_result/<实验目录>/metrics/*.parquet`：prompt/message/trajectory 原始指标；
+- `exp_result/<实验目录>/readouts/*.jsonl`：top-k 与案例；
+- `exp_result/<实验目录>/figures/*.pdf`：预注册图。
 
 停止规则：
 

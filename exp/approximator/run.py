@@ -33,7 +33,7 @@ from data import (load_arc_challenge, load_arc_easy, load_gsm8k, load_gpqa_diamo
 from prompts import build_agent_message_sequential_latent_mas
 
 HERE = Path(__file__).resolve().parent
-RESULT = HERE / "result"
+RESULT = ROOT / "exp_result" / "approximator"
 
 
 @dataclass

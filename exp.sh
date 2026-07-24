@@ -143,7 +143,9 @@ if [[ ! -f "${ENTRY}" ]]; then
     echo "ERROR: ${ENTRY} does not exist yet; no experiment was launched."
     exit 2
 fi
-LOG="exp_${EXP_TARGET}_${PBS_JOBID:-local}.txt"
+EXP_RESULT_DIR="${EXP_RESULT_DIR:-exp_result/${EXP_TARGET}}"
+mkdir -p "${EXP_RESULT_DIR}"
+LOG="${EXP_RESULT_DIR}/exp_${EXP_TARGET}_${PBS_JOBID:-local}.txt"
 echo "Command: python3 ${ENTRY} ${ARGS[*]} ${EXTRA[*]}"
 python3 "${ENTRY}" "${ARGS[@]}" "${EXTRA[@]}" > "${LOG}" 2>&1
 echo "Completed successfully: ${LOG}"
