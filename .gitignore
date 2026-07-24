@@ -3,3 +3,4 @@ __pycache__/
 logging/
 result/
 smoke_test.sh
+exp_result/
