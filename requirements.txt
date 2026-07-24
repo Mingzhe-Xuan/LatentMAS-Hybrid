@@ -2,7 +2,7 @@
 
 # 基础数学库
 numpy==2.2.6
- 
+
 # ------------------------------------------------------------
 # 推理加速库 vLLM
 # vLLM 官方自 v0.17.0 起对 RTX 5090 (SM120) 提供原生 FP8/GEMM 优化，
@@ -11,7 +11,7 @@ numpy==2.2.6
 # 直接 pip install 即可，若默认源较慢可换成官方 wheel 源：
 #   pip install vllm --extra-index-url https://download.pytorch.org/whl/cu128
 # vllm==0.17.0
- 
+
 # ------------------------------------------------------------
 # HuggingFace 生态库
 # 注：transformers/tokenizers 版本需满足 vllm==0.17.0 的硬性要求，
@@ -20,7 +20,9 @@ transformers==4.56.0
 tokenizers==0.22.0
 accelerate==0.34.0
 datasets==2.20.0
- 
+
 # 实用工具
 tqdm==4.69.0
 matplotlib==3.9.0
+pyarrow==17.0.0
+scikit-learn==1.5.1

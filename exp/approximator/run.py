@@ -1,23 +1,19 @@
 #!/usr/bin/env python
-"""Reproducible implementation of S0--S4 from ``docs/plan_v2.md``.
+"""Operator-layer S0--S4 experiments from ``docs/plan_v2.md``.
 
-The program intentionally keeps exact softmax evaluation separate from the
-deployable ORF approximation.  It never truncates the vocabulary for exact
-metrics.  Results are written only below this experiment directory.
+Exact softmax always scans the complete vocabulary.  See
+``exp/approximator/IMPLEMENTATION_STATUS.md`` for explicit implemented/pending
+stage requirements; this entry point must not be treated as experimental evidence
+until artifacts are produced by an actual HPC run.  Every raw table, summary,
+figure and manifest is written under ``exp_result/approximator``.
 """
+
 from __future__ import annotations
 
-import argparse
-import json
-import math
-import random
-import subprocess
-import sys
-import time
-from dataclasses import asdict, dataclass
+import argparse, json, logging, random, subprocess, sys, time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
-from types import SimpleNamespace
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -25,15 +21,26 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-from alignment import build_kernel_state, build_linear_state, positive_features
-from data import (load_arc_challenge, load_arc_easy, load_gsm8k, load_gpqa_diamond,
-                  load_mbppplus, load_medqa)
-from prompts import build_agent_message_sequential_latent_mas
+sys.path.insert(0, str(ROOT)) if str(ROOT) not in sys.path else None
+from alignment import apply_alignment, build_kernel_state
+from data import (
+    load_arc_challenge,
+    load_arc_easy,
+    load_gsm8k,
+    load_gpqa_diamond,
+    load_mbppplus,
+    load_medqa,
+)
+from methods import default_agents
+from prompts import (
+    build_agent_message_hierarchical_latent_mas,
+    build_agent_message_sequential_latent_mas,
+)
+from stages import common
+from stages import s0, s1, s2, s3, s4
 
-HERE = Path(__file__).resolve().parent
 RESULT = ROOT / "exp_result" / "approximator"
+SOURCES = ("prompt", "reply")
 
 
 @dataclass
@@ -44,24 +51,67 @@ class State:
     position: int
     prompt_length: int
     reply_length: int
+    turn_id: int = 0
+    agent_id: int = 0
+
+
+def configure_logger():
+    RESULT.mkdir(parents=True, exist_ok=True)
+    logger = logging.getLogger("approximator")
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+    logger.propagate = False
+    formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
+    file_handler = logging.FileHandler(
+        RESULT / "exp_state.txt", mode="a", encoding="utf-8"
+    )
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    return logger
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--study", choices=["s0", "s1", "s2", "s3", "s4", "all"], default="s1")
-    p.add_argument("--model_pair", choices=["x1", "x2"], default="x1")
-    p.add_argument("--source_model", default=None)
-    p.add_argument("--target_model", default=None)
-    p.add_argument("--dataset", default="arc_easy", choices=["arc_easy", "arc_challenge", "gsm8k", "medqa", "mbppplus", "gpqa"])
+    p.add_argument(
+        "--study", choices=["s0", "s1", "s2", "s3", "s4", "all"], default="all"
+    )
+    p.add_argument("--model_pair", choices=["x1", "x2"], default="x1", help=argparse.SUPPRESS)
+    p.add_argument("--source_model")
+    p.add_argument("--target_model")
+    p.add_argument(
+        "--dataset",
+        choices=["arc_easy", "arc_challenge", "gsm8k", "medqa", "mbppplus", "gpqa"],
+        default="arc_easy",
+    )
     p.add_argument("--split", default="test")
-    p.add_argument("--max_questions", type=int, default=50)
-    p.add_argument("--max_states_per_question", type=int, default=50)
+    p.add_argument("--max_questions", type=int, default=10)
+    p.add_argument("--max_states_per_question", type=int, default=20)
     p.add_argument("--max_reply_tokens", type=int, default=512)
     p.add_argument("--prompt_limit", type=int, default=512)
-    p.add_argument("--role", default="planner", choices=["planner", "critic", "refiner", "judger"])
-    p.add_argument("--m", type=int, default=2048)
-    p.add_argument("--tau", type=float, default=1.0)
-    p.add_argument("--orf_seed", type=int, default=101)
+    p.add_argument(
+        "--prompt",
+        choices=["sequential"],
+        default="sequential",
+        help="Only sequential latent-MAS is supported by this experiment.",
+    )
+    p.add_argument(
+        "--role", choices=["planner", "critic", "refiner", "judger"], default="planner",
+        help=argparse.SUPPRESS,
+    )
+    p.add_argument(
+        "--agent_models",
+        nargs="+",
+        default=["Qwen/Qwen3-4B"],
+        help="One shared model, or four models in Planner/Critic/Refiner/Judger order.",
+    )
+    p.add_argument("--latent_steps", type=int, default=50)
+    p.add_argument("--temperature", type=float, default=0.6)
+    p.add_argument("--top_p", type=float, default=0.95)
+    p.add_argument("--reuse_trajectory", action="store_true")
+    p.add_argument("--force_recollect", action="store_true")
+    p.add_argument("--kernel_features", type=int, default=2048)
+    p.add_argument("--kernel_temperature", type=float, default=1.0)
+    p.add_argument("--kernel_seed", type=int, default=101)
     p.add_argument("--kernel_chunk_size", type=int, default=4096)
     p.add_argument("--probe_seed", type=int, default=42)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -69,256 +119,430 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--skip_float64_audit", action="store_true")
     p.add_argument("--s3_replicates", type=int, default=32)
     p.add_argument("--s3_max_questions", type=int, default=50)
-    p.add_argument("--run_s2_calibration", action="store_true", help="Run the prescribed ORF/iid m,tau,seed grid (ARC-Easy train only).")
+    p.add_argument("--bootstrap_replicates", type=int, default=1000)
+    p.add_argument("--run_s2_calibration", action="store_true")
+    p.add_argument("--run_s1_performance", action="store_true")
+    p.add_argument(
+        "--s4_tsne",
+        action="store_true",
+        help="Optional shared t-SNE; requires scikit-learn.",
+    )
     return p.parse_args()
 
 
-def pair(args: argparse.Namespace) -> tuple[str, str]:
-    defaults = {
+def resolve_model_names(args):
+    default_model_names = {
         "x1": ("Qwen/Qwen3-4B", "Qwen/Qwen3-8B"),
         "x2": ("Qwen/Qwen3-8B", "Qwen/Qwen3-4B"),
-    }
-    a, b = defaults[args.model_pair]
-    return args.source_model or a, args.target_model or b
+    }[args.model_pair]
+    return (
+        args.source_model or default_model_names[0],
+        args.target_model or default_model_names[1],
+    )
 
 
-def json_default(value: Any) -> Any:
-    if isinstance(value, Path): return str(value)
-    if isinstance(value, np.generic): return value.item()
-    raise TypeError(type(value).__name__)
+def resolve_agent_models(args):
+    if len(args.agent_models) == 1:
+        return tuple(args.agent_models * len(default_agents()))
+    if len(args.agent_models) != len(default_agents()):
+        raise ValueError("--agent_models requires one model or four role-ordered models")
+    return tuple(args.agent_models)
 
 
-def write_json(path: Path, payload: Any) -> None:
+def write_json(path, x):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=json_default) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(
+            x,
+            indent=2,
+            ensure_ascii=False,
+            default=lambda v: v.item() if isinstance(v, np.generic) else str(v),
+        )
+        + "\n",
+        encoding="utf8",
+    )
 
 
-def write_metrics(rows: list[dict[str, Any]], stem: str) -> Path:
-    """Write parquet without making pandas part of the experiment API."""
-    import pyarrow as pa
-    import pyarrow.parquet as pq
+def write_rows(rows, stem):
+    import pyarrow as pa, pyarrow.parquet as pq
+
     path = RESULT / "metrics" / f"{stem}.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(pa.Table.from_pylist(rows), path, compression="zstd")
     return path
 
 
-def git_commit() -> str | None:
+def commit():
     try:
-        return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+        ).strip()
     except Exception:
         return None
 
 
-def compat(a_tok: Any, b_tok: Any, a_model: Any, b_model: Any, args: argparse.Namespace) -> dict[str, Any]:
-    failures: list[str] = []
-    if len(a_tok) != len(b_tok): failures.append("vocab_size")
-    if a_tok.get_vocab() != b_tok.get_vocab(): failures.append("token_to_id")
-    special_a = {k: getattr(a_tok, k, None) for k in ("bos_token_id", "eos_token_id", "pad_token_id", "unk_token_id")}
-    special_b = {k: getattr(b_tok, k, None) for k in special_a}
-    if special_a != special_b: failures.append("special_token_ids")
-    info = {"model_pair": args.model_pair, "source_model": pair(args)[0], "target_model": pair(args)[1],
-            "vocab_size_a": len(a_tok), "vocab_size_b": len(b_tok), "special_a": special_a, "special_b": special_b,
-            "hidden_a": a_model.config.hidden_size, "hidden_b": b_model.config.hidden_size,
-            "tie_a": bool(getattr(a_model.config, "tie_word_embeddings", False)),
-            "tie_b": bool(getattr(b_model.config, "tie_word_embeddings", False)), "failures": failures,
-            "torch": torch.__version__}
-    write_json(RESULT / "manifests" / "compatibility.json", info)
+def check_compatibility(
+    source_tokenizer, target_tokenizer, source_model, target_model, args
+):
+    failures = []
+    if len(source_tokenizer) != len(target_tokenizer):
+        failures.append("vocab_size")
+    if source_tokenizer.get_vocab() != target_tokenizer.get_vocab():
+        failures.append("token_to_id")
+    source_special_token_ids = {
+        key: getattr(source_tokenizer, key, None)
+        for k in ("bos_token_id", "eos_token_id", "pad_token_id", "unk_token_id")
+    }
+    target_special_token_ids = {
+        key: getattr(target_tokenizer, key, None) for key in source_special_token_ids
+    }
+    if source_special_token_ids != target_special_token_ids:
+        failures.append("special_token_ids")
+    payload = {
+        "source_model": resolve_model_names(args)[0],
+        "target_model": resolve_model_names(args)[1],
+        "source_vocab_size": len(source_tokenizer),
+        "target_vocab_size": len(target_tokenizer),
+        "source_special_token_ids": source_special_token_ids,
+        "target_special_token_ids": target_special_token_ids,
+        "source_hidden_size": source_model.config.hidden_size,
+        "target_hidden_size": target_model.config.hidden_size,
+        "source_tied_word_embeddings": bool(
+            getattr(source_model.config, "tie_word_embeddings", False)
+        ),
+        "target_tied_word_embeddings": bool(
+            getattr(target_model.config, "tie_word_embeddings", False)
+        ),
+        "torch": torch.__version__,
+        "transformers": __import__("transformers").__version__,
+        "failures": failures,
+    }
+    write_json(RESULT / "manifests" / "compatibility.json", payload)
     if failures:
         raise RuntimeError("Stopped: incompatible tokenizer(s): " + ", ".join(failures))
-    return info
 
 
-def load_dataset(name: str, split: str) -> Iterable[dict[str, Any]]:
-    loaders = {"arc_easy": load_arc_easy, "arc_challenge": load_arc_challenge, "gsm8k": load_gsm8k,
-               "medqa": load_medqa, "mbppplus": load_mbppplus, "gpqa": load_gpqa_diamond}
-    return loaders[name](split=split)
+def load_data(name, split):
+    return {
+        "arc_easy": load_arc_easy,
+        "arc_challenge": load_arc_challenge,
+        "gsm8k": load_gsm8k,
+        "medqa": load_medqa,
+        "mbppplus": load_mbppplus,
+        "gpqa": load_gpqa_diamond,
+    }[name](split=split)
 
 
-def choose_positions(n: int, limit: int) -> list[int]:
-    if n <= limit: return list(range(n))
-    return sorted(set(np.linspace(0, n - 1, limit, dtype=int).tolist() + [n - 1]))
+def positions(n, limit):
+    return (
+        list(range(n))
+        if n <= limit
+        else sorted(set(np.linspace(0, n - 1, limit, dtype=int).tolist() + [n - 1]))
+    )
 
 
-def trim_prompt(ids: torch.Tensor, limit: int) -> torch.Tensor:
-    if ids.numel() <= limit: return ids
-    return torch.cat((ids[:480], ids[-32:])) if limit == 512 else torch.cat((ids[: limit - 32], ids[-32:]))
+def trim(ids, limit):
+    return ids if len(ids) <= limit else torch.cat((ids[: limit - 32], ids[-32:]))
+
+
+def sample_token(logits, temperature, top_p):
+    """Sample one token using the same temperature/top-p policy as latent-MAS."""
+    if temperature <= 0 or not 0 < top_p <= 1:
+        raise ValueError("generation_temperature must be > 0 and generation_top_p in (0, 1]")
+    sorted_logits, sorted_ids = torch.sort(logits / temperature, descending=True)
+    sorted_probs = torch.softmax(sorted_logits, dim=-1)
+    remove = sorted_probs.cumsum(dim=-1) - sorted_probs > top_p
+    sorted_probs = sorted_probs.masked_fill(remove, 0)
+    probs = torch.zeros_like(sorted_probs).scatter(-1, sorted_ids, sorted_probs)
+    return torch.multinomial(probs, 1).squeeze(-1)
 
 
 @torch.inference_mode()
-def collect_states(model: Any, tokenizer: Any, items: list[dict[str, Any]], args: argparse.Namespace) -> list[State]:
-    states: list[State] = []
-    eos = tokenizer.eos_token_id
+def collect(model, tok, items, args, logger):
+    """First-turn source-model states from the sequential latent-MAS prompt.
+
+    Gold answers are never injected. Text decoding uses the repository's normal
+    temperature/top-p sampling policy rather than greedy decoding.
+    """
+    states = []
+    eos = tok.eos_token_id
     for item_id, item in enumerate(items):
-        shim = argparse.Namespace(model_name=pair(args)[0], task=args.dataset)
-        messages = build_agent_message_sequential_latent_mas(args.role, item["question"], method="latent_mas", args=shim)
-        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True) if tokenizer.chat_template else item["question"]
-        ids = trim_prompt(tokenizer(text, add_special_tokens=False, return_tensors="pt")["input_ids"][0], args.prompt_limit).to(model.device)
-        out = model(input_ids=ids.unsqueeze(0), output_hidden_states=True, use_cache=True, return_dict=True)
-        hidden = out.hidden_states[-1][0].float()
-        for pos in choose_positions(hidden.shape[0], args.max_states_per_question):
-            states.append(State(hidden[pos].cpu(), item_id, "prompt", pos, int(ids.numel()), 0))
-        past, next_logits = out.past_key_values, out.logits[:, -1, :]
-        reply: list[torch.Tensor] = []
+        started = time.time()
+        logger.info(
+            "State collection: question %d/%d started.", item_id + 1, len(items)
+        )
+        shim = argparse.Namespace(
+            model_name=resolve_model_names(args)[0], task=args.dataset
+        )
+        messages = build_agent_message_sequential_latent_mas(
+            args.role, item["question"], method="latent_mas", args=shim
+        )
+        text = (
+            tok.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+            if tok.chat_template
+            else item["question"]
+        )
+        ids = trim(
+            tok(text, add_special_tokens=False, return_tensors="pt")["input_ids"][0],
+            args.prompt_limit,
+        ).to(model.device)
+        out = model(
+            input_ids=ids[None],
+            output_hidden_states=True,
+            use_cache=True,
+            return_dict=True,
+        )
+        for p in positions(
+            out.hidden_states[-1].shape[1], args.max_states_per_question
+        ):
+            states.append(
+                State(
+                    out.hidden_states[-1][0, p].float().cpu(),
+                    item_id,
+                    "prompt",
+                    p,
+                    len(ids),
+                    0,
+                )
+            )
+        past, logits = out.past_key_values, out.logits[:, -1]
+        reply = []
         for _ in range(args.max_reply_tokens):
-            token = next_logits.argmax(dim=-1)
-            if eos is not None and int(token.item()) == eos: break
-            step = model(input_ids=token[:, None], past_key_values=past, use_cache=True, output_hidden_states=True, return_dict=True)
+            token = sample_token(
+                logits, args.temperature, args.top_p
+            )
+            if eos is not None and int(token.item()) == eos:
+                break
+            step = model(
+                input_ids=token[:, None],
+                past_key_values=past,
+                output_hidden_states=True,
+                use_cache=True,
+                return_dict=True,
+            )
             reply.append(step.hidden_states[-1][0, -1].float().cpu())
-            past, next_logits = step.past_key_values, step.logits[:, -1, :]
-        for pos in choose_positions(len(reply), args.max_states_per_question):
-            states.append(State(reply[pos], item_id, "reply", pos, int(ids.numel()), len(reply)))
+            past, logits = step.past_key_values, step.logits[:, -1]
+        for p in positions(len(reply), args.max_states_per_question):
+            states.append(State(reply[p], item_id, "reply", p, len(ids), len(reply)))
+        logger.info(
+            "State collection: question %d/%d completed (prompt=%d, reply=%d, %.1fs).",
+            item_id + 1,
+            len(items),
+            len(ids),
+            len(reply),
+            time.time() - started,
+        )
     return states
 
 
-def weights(source: Any, target: Any) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
-    out = source.get_output_embeddings(); inp = target.get_input_embeddings()
-    return out.weight.detach().float(), inp.weight.detach().float(), getattr(out, "bias", None)
+def get_weights(source_model, target_model):
+    """Return source output weights and target input weights for the operator."""
+    source_output_embeddings = source_model.get_output_embeddings()
+    if source_output_embeddings is None:
+        raise ValueError("Source model does not expose output embeddings.")
+    output_bias = getattr(source_output_embeddings, "bias", None)
+    return (
+        source_output_embeddings.weight.detach().float(),
+        target_model.get_input_embeddings().weight.detach().float(),
+        None if output_bias is None else output_bias.detach().float(),
+    )
 
 
-def exact(q: torch.Tensor, w_out: torch.Tensor, w_in: torch.Tensor, bias: torch.Tensor | None, tau: float) -> tuple[torch.Tensor, torch.Tensor]:
-    q = q.to(device=w_out.device, dtype=w_out.dtype)
-    logits = w_out @ (q / tau)
-    if bias is not None: logits = logits + bias.to(device=w_out.device, dtype=w_out.dtype)
-    p = torch.softmax(logits, dim=0)
-    return p @ w_in, p
+def main():
+    args = parse_args()
+    logger = configure_logger()
+    started = time.time()
+    logger.info("=" * 72)
+    logger.info(
+        "Operator experiment started: study=%s, pair=%s, dataset=%s/%s",
+        args.study,
+        args.model_pair,
+        args.dataset,
+        args.split,
+    )
+    logger.info(
+        "Configuration: %s", json.dumps(vars(args), ensure_ascii=False, sort_keys=True)
+    )
 
+    # Set random seeds
+    random.seed(args.probe_seed)
+    np.random.seed(args.probe_seed)
+    torch.manual_seed(args.probe_seed)
+    source_model_name, target_model_name = resolve_model_names(args)
+    dtype = torch.bfloat16 if str(args.device).startswith("cuda") else torch.float32
+    logger.info(
+        "Loading tokenizers: source=%s; target=%s",
+        source_model_name,
+        target_model_name,
+    )
+    # Load tokenizers with trust_remote_code if specified
+    source_tokenizer = AutoTokenizer.from_pretrained(
+        source_model_name, token=False, trust_remote_code=args.trust_remote_code
+    )
+    target_tokenizer = AutoTokenizer.from_pretrained(
+        target_model_name, token=False, trust_remote_code=args.trust_remote_code
+    )
+    logger.info("Loading source model on %s (%s).", args.device, dtype)
+    source_model = (
+        AutoModelForCausalLM.from_pretrained(
+            source_model_name,
+            dtype=dtype,
+            token=False,
+            trust_remote_code=args.trust_remote_code,
+        )
+        .to(args.device)
+        .eval()
+    )
+    logger.info("Loading target model on %s (%s).", args.device, dtype)
+    target_model = (
+        AutoModelForCausalLM.from_pretrained(
+            target_model_name,
+            dtype=dtype,
+            token=False,
+            trust_remote_code=args.trust_remote_code,
+        )
+        .to(args.device)
+        .eval()
+    )
 
-def mapping(q: torch.Tensor, kernel: Any) -> tuple[torch.Tensor, bool]:
-    u = positive_features(q.to(kernel.omega.device).float()[None] / kernel.temperature, kernel.omega, stabilize=True)[0]
-    denom = u @ kernel.denominator
-    valid = bool(torch.isfinite(denom) and denom > torch.finfo(denom.dtype).eps)
-    return (u @ kernel.numerator.T) / denom if valid else torch.full((kernel.numerator.shape[0],), float("nan"), device=u.device), valid
-
-
-def audit(states: list[State], w_out: torch.Tensor, w_in: torch.Tensor, bias: torch.Tensor | None, args: argparse.Namespace) -> None:
-    if args.skip_float64_audit: return
-    sampled = states[: min(256, len(states))]
-    errors = []
-    for st in sampled:
-        f32, _ = exact(st.vector, w_out, w_in, bias, args.tau)
-        f64, _ = exact(st.vector.double(), w_out.double(), w_in.double(), None if bias is None else bias.double(), args.tau)
-        errors.append(float((f32.double() - f64).norm() / f64.norm().clamp_min(1e-12)))
-    if errors and np.quantile(errors, .99) > 1e-4:
-        raise RuntimeError(f"Stopped: float64 audit p99={np.quantile(errors, .99):.3e} > 1e-4")
-
-
-def rows_s0(states: list[State], w_out: torch.Tensor, w_in: torch.Tensor, args: argparse.Namespace) -> list[dict[str, Any]]:
-    key_norm = w_out.norm(dim=1); value_norm = w_in.norm(dim=1)
-    rows = []
-    for st in states:
-        q = st.vector.float().to(w_out.device) / args.tau
-        # Computing all pair norms is intentionally exact but summary-sized.
-        combined = (w_out + q).norm(dim=1)
-        rows.append({**asdict(st) | {"vector": None}, "hidden_norm": float(st.vector.norm()), "q_norm": float(q.norm()),
-                     "key_norm_p50": float(key_norm.median()), "value_norm_p50": float(value_norm.median()),
-                     "w_plus_q_p50": float(combined.median()), "w_plus_q_p99": float(torch.quantile(combined, .99))})
-    return rows
-
-
-def rank_indices(p: torch.Tensor, item_id: int, seed: int) -> list[tuple[str, int]]:
-    order = torch.argsort(p, descending=True).cpu().tolist(); rng = random.Random(seed + item_id)
-    answer = [("rank_1", order[0])]
-    for name, lo, hi in (("rank_2_10", 1, 10), ("rank_11_100", 10, 100), ("rank_101_1000", 100, 1000), ("rank_gt_1000", 1000, len(order))):
-        pool = order[lo:min(hi, len(order))]; answer += [(name, x) for x in rng.sample(pool, min(3, len(pool)))]
-    return answer
-
-
-def rows_s1_s2(states: list[State], w_out: torch.Tensor, w_in: torch.Tensor, bias: torch.Tensor | None, kernel: Any, args: argparse.Namespace, include_s2: bool) -> list[dict[str, Any]]:
-    rows = []
-    for st in states:
-        f, p = exact(st.vector, w_out, w_in, bias, args.tau); approx, valid = mapping(st.vector, kernel)
-        rel = (approx - f).norm() / f.norm().clamp_min(1e-8)
-        row = {"item_id": st.item_id, "source": st.source, "position": st.position, "prompt_length": st.prompt_length, "reply_length": st.reply_length,
-               "f_rel_l2": float(rel), "f_cosine": float(torch.nn.functional.cosine_similarity(approx[None], f[None])), "denom_valid": valid,
-               "nan_inf": bool(not torch.isfinite(approx).all())}
-        if include_s2:
-            # p_hat is recovered from the same unnormalized RF kernel values.
-            phi_q = positive_features((st.vector.to(w_out.device) / args.tau)[None], kernel.omega, stabilize=False)[0]
-            phi_w = positive_features(w_out, kernel.omega)
-            khat = phi_w @ phi_q
-            alpha = torch.ones_like(khat) if bias is None else torch.exp((bias.float() - bias.float().max()).to(khat.device))
-            phat = (alpha * khat).clamp_min(0); phat = phat / phat.sum().clamp_min(1e-30)
-            tv = .5 * (p - phat).abs().sum(); js = .5 * ((p * (p.clamp_min(1e-30).log() - ((p + phat).mul(.5)).clamp_min(1e-30).log())).sum() + (phat * (phat.clamp_min(1e-30).log() - ((p + phat).mul(.5)).clamp_min(1e-30).log())).sum())
-            row.update({"tv": float(tv), "js": float(js), "kl_p_phat": float((p * (p.clamp_min(1e-30).log() - phat.clamp_min(1e-30).log())).sum()),
-                        "top1_agree": bool(p.argmax() == phat.argmax()), "top10_overlap": len(set(torch.topk(p, 10).indices.tolist()) & set(torch.topk(phat, 10).indices.tolist())) / 10})
-        rows.append(row)
-        for band, idx in rank_indices(p, st.item_id * 1000 + st.position, args.probe_seed):
-            k = torch.exp(torch.dot(w_out[idx], st.vector.to(w_out.device) / args.tau)); khat = torch.dot(positive_features(w_out[idx:idx+1], kernel.omega)[0], positive_features((st.vector.to(w_out.device) / args.tau)[None], kernel.omega)[0])
-            rows.append({"item_id": st.item_id, "source": st.source, "position": st.position, "metric": "single_kernel", "rank_band": band,
-                         "kernel_abs_error": float((khat-k).abs()), "kernel_relative_error": float((khat-k).abs()/(k+1e-8)), "kernel_log_error": float((khat+1e-8).log().sub((k+1e-8).log()).abs())})
-    return rows
-
-
-def run_s3(states: list[State], w_out: torch.Tensor, w_in: torch.Tensor, bias: torch.Tensor | None, args: argparse.Namespace) -> list[dict[str, Any]]:
-    selected = [s for s in states if s.source == "prompt" and s.position >= 0][:args.s3_max_questions]
-    selected += [s for s in states if s.source == "reply"][:args.s3_max_questions * 16]
-    rows = []
-    for m in (512, 1024, 2048):
-        for tau in np.arange(.5, 2.01, .1):
-            vals: dict[int, list[torch.Tensor]] = {i: [] for i in range(len(selected))}
-            for seed in range(1001, 1001 + args.s3_replicates):
-                state = build_kernel_state(w_out, w_in, bias, feature_count=m, temperature=float(tau), seed=seed, chunk_size=args.kernel_chunk_size)
-                for i, s in enumerate(selected): vals[i].append(mapping(s.vector, state)[0].cpu())
-            for i, s in enumerate(selected):
-                stack = torch.stack(vals[i]); f, _ = exact(s.vector, w_out, w_in, bias, float(tau)); mean = stack.mean(0)
-                rows.append({"item_id": s.item_id, "source": s.source, "m": m, "tau": float(tau), "f_variance": float(stack.var(0, unbiased=True).mean()),
-                             "f_std": float(stack.var(0, unbiased=True).mean().sqrt()), "bias2": float((mean-f.cpu()).square().mean()), "mse": float((mean-f.cpu()).square().mean() + stack.var(0, unbiased=True).mean())})
-    return rows
-
-
-def plot(rows: list[dict[str, Any]], study: str) -> None:
-    numeric = [r for r in rows if "f_rel_l2" in r]
-    if study in ("s1", "s2") and numeric:
-        plt.figure(figsize=(6, 4));
-        for source in ("prompt", "reply"):
-            x = sorted(r["f_rel_l2"] for r in numeric if r["source"] == source)
-            if x: plt.plot(x, np.arange(1, len(x)+1)/len(x), label=source)
-        plt.xlabel("relative L2 error"); plt.ylabel("ECDF"); plt.legend(); plt.tight_layout()
-        (RESULT / "figures").mkdir(parents=True, exist_ok=True); plt.savefig(RESULT / "figures" / f"{study}_error_ecdf.pdf"); plt.close()
-
-
-def main() -> None:
-    args = parse_args(); random.seed(args.probe_seed); np.random.seed(args.probe_seed); torch.manual_seed(args.probe_seed)
-    RESULT.mkdir(exist_ok=True); (RESULT / "manifests").mkdir(exist_ok=True)
-    source_name, target_name = pair(args); dtype = torch.bfloat16 if str(args.device).startswith("cuda") else torch.float32
-    a_tok = AutoTokenizer.from_pretrained(source_name, token=False, trust_remote_code=args.trust_remote_code)
-    b_tok = AutoTokenizer.from_pretrained(target_name, token=False, trust_remote_code=args.trust_remote_code)
-    source = AutoModelForCausalLM.from_pretrained(source_name, dtype=dtype, token=False, trust_remote_code=args.trust_remote_code).to(args.device).eval()
-    target = AutoModelForCausalLM.from_pretrained(target_name, dtype=dtype, token=False, trust_remote_code=args.trust_remote_code).to(args.device).eval()
-    compat(a_tok, b_tok, source, target, args)
-    questions = list(load_dataset(args.dataset, "train" if args.dataset == "arc_easy" and args.split == "train" else args.split))
-    random.Random(args.probe_seed).shuffle(questions); questions = questions[:args.max_questions]
-    states = collect_states(source, a_tok, questions, args)
-    w_out, w_in, bias = weights(source, target); w_out, w_in = w_out.to(args.device), w_in.to(args.device)
-    bias = None if bias is None else bias.detach().float().to(args.device)
-    audit(states, w_out, w_in, bias, args)
-    kernel = build_kernel_state(w_out, w_in, bias, feature_count=args.m, temperature=args.tau, seed=args.orf_seed, chunk_size=args.kernel_chunk_size)
-    manifest = {"args": vars(args), "git_commit": git_commit(), "source": source_name, "target": target_name, "states": len(states), "questions": len(questions), "timestamp": time.time()}
-    write_json(RESULT / "manifests" / f"{args.study}_{args.dataset}.json", manifest)
+    # Check tokenizer and model compatibility (the tokenizer vocab and special tokens must match, and the hidden sizes must match)
+    check_compatibility(
+        source_tokenizer, target_tokenizer, source_model, target_model, args
+    )
+    logger.info("Tokenizer compatibility check passed.")
+    split = args.split
+    logger.info(
+        "Loading %s split %s; sampling at most %d questions with seed %d.",
+        args.dataset,
+        split,
+        args.max_questions,
+        args.probe_seed,
+    )
+    items = list(load_data(args.dataset, split))
+    random.Random(args.probe_seed).shuffle(items)
+    items = items[: args.max_questions]
+    states = collect(source_model, source_tokenizer, items, args, logger)
+    logger.info(
+        "State collection complete: %d states from %d questions.",
+        len(states),
+        len(items),
+    )
+    wo, wi, bias = get_weights(source_model, target_model)
+    wo, wi = wo.to(args.device), wi.to(args.device)
+    bias = None if bias is None else bias.float().to(args.device)
+    audit_p99 = common.audit(states, wo, wi, bias, args)
+    logger.info("Float64 exact-F audit passed: relative-L2 p99=%.3e.", audit_p99)
+    logger.info(
+        "Building main ORF kernel (m=%d, tau=%s, seed=%d).",
+        args.kernel_features,
+        args.kernel_temperature,
+        args.kernel_seed,
+    )
+    kernel = build_kernel_state(
+        wo,
+        wi,
+        bias,
+        feature_count=args.kernel_features,
+        temperature=args.kernel_temperature,
+        seed=args.kernel_seed,
+        chunk_size=args.kernel_chunk_size,
+    )
+    write_json(
+        RESULT / "manifests" / f"{args.study}_{args.model_pair}_{args.dataset}.json",
+        {
+            "args": vars(args),
+            "source": source_model_name,
+            "target": target_model_name,
+            "git_commit": commit(),
+            "questions": len(items),
+            "states": len(states),
+            "timestamp": time.time(),
+        },
+    )
     studies = [args.study] if args.study != "all" else ["s0", "s1", "s2", "s3", "s4"]
-    for study in studies:
-        if study == "s0": rows = rows_s0(states, w_out, w_in, args)
-        elif study == "s1": rows = rows_s1_s2(states, w_out, w_in, bias, kernel, args, False)
-        elif study == "s2": rows = rows_s1_s2(states, w_out, w_in, bias, kernel, args, True)
-        elif study == "s3": rows = run_s3(states, w_out, w_in, bias, args)
+    for index, study in enumerate(studies, start=1):
+        logger.info("Stage %d/%d (%s) started.", index, len(studies), study.upper())
+        stage_started = time.time()
+        if study == "s0":
+            rows = s0.run(states, wo, wi, args, logger)
+            common.write_rows(rows, f"s0_states_{args.model_pair}_{args.dataset}")
+            common.write_rows(
+                s0.hidden_norm_summary(rows),
+                f"s0_hidden_norm_summary_{args.model_pair}_{args.dataset}",
+            )
+            common.write_rows(
+                s0.weight_norm_summary(wo, wi),
+                f"s0_embedding_norm_summary_{args.model_pair}_{args.dataset}",
+            )
+        elif study == "s1":
+            rows, single = s1.run(states, wo, wi, bias, kernel, args, logger)
+            common.write_rows(rows, f"s1_mapping_{args.model_pair}_{args.dataset}")
+            common.write_rows(
+                single, f"s1_single_kernel_{args.model_pair}_{args.dataset}"
+            )
+            common.write_rows(
+                common.stat_rows(rows, "f_rel_l2", args),
+                f"s1_summary_{args.model_pair}_{args.dataset}",
+            )
+            common.histogram_ecdf(rows, "f_rel_l2", "s1")
+            s1.plot(rows)
+            if args.run_s1_performance:
+                common.write_rows(
+                    s1.performance(states, wo, wi, bias, kernel, args, logger),
+                    "s1_performance",
+                )
+        elif study == "s2":
+            rows, single = s2.run(states, wo, wi, bias, kernel, args, logger)
+            common.write_rows(rows, f"s2_mapping_{args.model_pair}_{args.dataset}")
+            common.write_rows(
+                single, f"s2_single_kernel_{args.model_pair}_{args.dataset}"
+            )
+            common.write_rows(
+                common.stat_rows(rows, "f_rel_l2", args),
+                f"s2_summary_{args.model_pair}_{args.dataset}",
+            )
+            common.histogram_ecdf(rows, "f_rel_l2", "s2")
+            s2.plot(rows)
+            if args.run_s2_calibration:
+                if not (args.dataset == "arc_easy" and args.split == "train"):
+                    raise ValueError(
+                        "S2 calibration is prescribed only for ARC-Easy train"
+                    )
+                logger.info(
+                    "S2 calibration grid started (ORF/iid, 5 m values, 3 tau values, 5 seeds)."
+                )
+                calibration = s2.calibration(states, wo, wi, bias, args, logger)
+                common.write_rows(calibration, "s2_calibration")
+                logger.info("S2 calibration completed: %d rows.", len(calibration))
+        elif study == "s3":
+            rows = s3.run(states, wo, wi, bias, args, logger)
+            common.write_rows(rows, f"s3_variance_{args.model_pair}_{args.dataset}")
+            common.write_rows(
+                common.stat_rows(
+                    [x for x in rows if x["kind"] == "F"],
+                    "variance",
+                    args,
+                    extra=("m", "tau", "kind"),
+                ),
+                f"s3_summary_{args.model_pair}_{args.dataset}",
+            )
+            s3.plot_s3(rows)
+            s3.plot_forest(rows)
         else:
-            # S4 uses only mappings whose output lives in B's input space.
-            linear = build_linear_state(w_out, w_in, ridge=1e-5)
-            rows = []
-            for s in states:
-                f, _ = exact(s.vector, w_out, w_in, bias, args.tau); k, _ = mapping(s.vector, kernel)
-                lin = s.vector.to(args.device) @ linear.matrix
-                lin = lin * (linear.target_norm / lin.norm().clamp_min(1e-6))
-                mapped = [("exact", f), ("linear", lin), ("kernel", k)]
-                if s.vector.numel() == w_in.shape[1]:
-                    ident = s.vector.to(args.device)
-                    ident = ident * (w_in.norm(dim=1).mean() / ident.norm().clamp_min(1e-6))
-                    mapped.insert(1, ("identical", ident))
-                for method, vec in mapped:
-                    rows.append({"item_id": s.item_id, "source": s.source, "position": s.position, "method": method, "embedding": vec.cpu().tolist()})
-        write_metrics(rows, f"{study}_{args.model_pair}_{args.dataset}")
-        plot(rows, study)
+            rows = s4.run(states, wo, wi, bias, kernel, args, logger)
+            common.write_rows(rows, f"s4_embeddings_{args.model_pair}_{args.dataset}")
+        logger.info(
+            "Stage %s completed in %.1fs.", study.upper(), time.time() - stage_started
+        )
+    logger.info(
+        "Operator experiment completed successfully in %.1fs. State log: %s",
+        time.time() - started,
+        RESULT / "exp_state.txt",
+    )
 
 
-if __name__ == "__main__": main()
+if __name__ == "__main__":
+    main()
+

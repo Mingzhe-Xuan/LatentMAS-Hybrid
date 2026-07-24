@@ -145,7 +145,7 @@ if [[ ! -f "${ENTRY}" ]]; then
 fi
 EXP_RESULT_DIR="${EXP_RESULT_DIR:-exp_result/${EXP_TARGET}}"
 mkdir -p "${EXP_RESULT_DIR}"
-LOG="${EXP_RESULT_DIR}/exp_${EXP_TARGET}_${PBS_JOBID:-local}.txt"
-echo "Command: python3 ${ENTRY} ${ARGS[*]} ${EXTRA[*]}"
-python3 "${ENTRY}" "${ARGS[@]}" "${EXTRA[@]}" > "${LOG}" 2>&1
-echo "Completed successfully: ${LOG}"
+LOG="${EXP_RESULT_DIR}/exp_state.txt"
+echo "[$(date --iso-8601=seconds)] PBS job ${PBS_JOBID:-interactive}: python3 ${ENTRY} ${ARGS[*]} ${EXTRA[*]}" >> "${LOG}"
+python3 "${ENTRY}" "${ARGS[@]}" "${EXTRA[@]}" >> "${LOG}" 2>&1
+echo "Completed successfully; progress and output appended to: ${LOG}"
