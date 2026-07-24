@@ -13,6 +13,9 @@ export HF_DATASETS_CACHE="${HF_HOME}/datasets"
 
 # C0/C1: same-model Latent CoT. X1/X2: operator and communication experiments.
 MODELS=(
+    Qwen/Qwen3-4B
+    Qwen/Qwen3-8B
+    Qwen/Qwen3-14B
     Qwen/Qwen2.5-1.5B
     Qwen/Qwen2.5-1.5B-Instruct
     Qwen/Qwen2.5-7B-Instruct
