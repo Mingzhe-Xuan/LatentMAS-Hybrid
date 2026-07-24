@@ -173,7 +173,8 @@ def main():
     )
     parser.add_argument(
         "--latent_only",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help=(
             "For LatentMAS methods, retain only latent-step KV cache before "
             "passing context to the next agent; implies --sequential_info_only."
@@ -183,7 +184,12 @@ def main():
     parser.add_argument("--top_p", type=float, default=0.95)
     parser.add_argument("--generate_bs", type=int, default=20, help="Batch size for generation")
     parser.add_argument("--text_mas_context_length", type=int, default=-1, help="TextMAS context length limit")
-    parser.add_argument("--think", action="store_true", help="Manually add think token in the prompt for LatentMAS")
+    parser.add_argument(
+        "--think",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Manually add think token in the prompt for LatentMAS",
+    )
     parser.add_argument("--align_method", dest="align_method", choices=["identical", "linear", "kernel"], default="identical",
                         help="Latent-to-input alignment: identity with norm scaling, linear least-squares, or ORF kernel approximation.")
     parser.add_argument("--align_ridge", dest="align_ridge", type=float, default=1e-5,
