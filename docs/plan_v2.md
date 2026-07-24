@@ -1,4 +1,4 @@
-﻿# Latent CoT 与 Latent Communication 的分层分析实验计划
+# Latent CoT 与 Latent Communication 的分层分析实验计划
 
 ## 1. 结论边界
 
@@ -76,19 +76,24 @@ $F$ 是 kernel $\hat F$ 的数值 oracle，不是语义真值。对同模型 CoT
 
 ### 2.3 数据和统计单位
 
-静态算子/通信 probe 只输入 question、query 或代码 prompt，不输入答案或 CoT。prompt 上限 512 token，超长保留前 480 与后 32；每题等距取最多 8 个非-special position，含最后一个位置。`probe_seed=20260723` 确定样本和位置。
+算子分析的状态池分为两类，且所有图表必须分层报告，不能只给混合后的总数：
 
-| 用途 | 数据 | 题目数 | 最大 state 数 |
+1. **问题状态（prompt states）**：只输入 question、query 或代码 prompt，不输入参考答案或人工 CoT。prompt 上限 512 token，超长保留前 480 与后 32；若 non-special token 不超过 50 则全部保留；否则等距抽取 50 个位置，并强制包含末位置。
+2. **回复状态（reply states）**：对同一条输入，以 `latent_mas` 的实际 agent 配置（模型组合、role prompt、`prompt=sequential`、greedy 解码、生成 seed 77）生成回复；从每个 agent 的模型生成 token 对应的末层 pre-unembedding hidden state 中抽取至多 50 个位置（不含 special token）；不足 50 个则全取，超过时等距抽取并强制包含回复末位置。回复最多保留 512 token；若产生 EOS 则在 EOS 前截断。这里的回复是模型在线生成的内容，而非数据集 gold answer 或 teacher-forced CoT，故不向算子注入标注答案。
+
+对单 agent 设置，采样该 agent 的回复；对 X1/X2 通信设置，S0--S3 以发送方 A 的回复 state 为主，并在附录以接收方 B 的原生回复 state 复现。若一次 `latent_mas` 运行有多个 agent turn，则每个 turn 独立标记 `turn_id`、`agent_id`、`prompt/reply`；主分析仅使用第一轮 A 回复，避免同一题后续通信造成的依赖。`probe_seed=42` 确定随机题目和保留的 turn。
+
+| 用途 | 数据 | 随机题目数 | state 采样 |
 | --- | --- | ---: | ---: |
-| 算子 calibration | ARC-Easy train | 512 | 4,096 |
-| 通用 test | ARC-Easy test | 512 | 4,096 |
-| 难度 test | ARC-Challenge test | 512 | 4,096 |
-| 数学 OOD | GSM8K test | 512 | 4,096 |
-| 专业 OOD | MedQA | 512 | 4,096 |
-| 代码 OOD | MBPP+ test | 至多 512 | 4,096 |
-| 小样本 OOD | GPQA Diamond test | 全部 | 至多 1,584 |
+| 算子 calibration | ARC-Easy train | 至多 50 | question/reply 各至多 50 state |
+| 通用 test | ARC-Easy test | 至多 50 | question/reply 各至多 50 state |
+| 难度 test | ARC-Challenge test | 至多 50 | question/reply 各至多 50 state |
+| 数学 OOD | GSM8K test | 至多 50 | question/reply 各至多 50 state |
+| 专业 OOD | MedQA | 至多 50 | question/reply 各至多 50 state |
+| 代码 OOD | MBPP+ test | 至多 50 | question/reply 各至多 50 state |
+| 小样本 OOD | GPQA Diamond test | 至多 50 | question/reply 各至多 50 state |
 
-ARC-Easy train 由分析脚本直接读取，因为当前 loader 固定 test。静态实验以 prompt 为统计单位，先平均其 state 再汇总。所有主指标报告 mean、median、p90/p95/p99 和 cluster bootstrap 1,000 次 95% CI。
+ARC-Easy train 由分析脚本直接读取，因为当前 loader 固定 test。每个算子数据集以 `probe_seed=42` 不放回随机抽取至多 50 题；每题的 prompt 与一条 `latent_mas` 回复各贡献至多 50 个 non-special hidden states。算子实验以题目为 cluster：先在每个题目内分别平均 prompt state 与 reply state，再在同一数据集、同一状态来源内汇总；不得把长回复因 token 多而赋予更高权重。除分层曲线/表外，可给 prompt/reply 等权的汇总值，但必须明确标注。所有主指标报告 mean、median、p90/p95/p99 和按题目 cluster bootstrap 1,000 次 95% CI。
 
 CoT 数据为 GSM8K train 128（calibration）、GSM8K test 512、ARC-Challenge test 512、AIME 2024/2025 全部；预算分别为 1024、1024、512、4096 token。CoT 的统计单位是一条完整题目 rollout。通信的统计单位是一条 message 或协作题目。
 
@@ -96,15 +101,15 @@ CoT 数据为 GSM8K train 128（calibration）、GSM8K test 512、ARC-Challenge 
 
 ### S0. 范数和困难区域
 
-**运行**：X1、X2，所有静态数据。统计 B input embedding 每个 token 的 $\|(W_{\mathrm{in}}^B)_{:,i}\|_2$、A output key 的 $\|(W_{\mathrm{out}}^A)_{i,:}\|_2$，以及状态的 $\|h_L^A\|_2$、$\|q\|_2$、$\|w_i+q/\tau\|_2$。
+**运行**：X1、X2，所有静态数据的 prompt 与 A-reply state；X1 的 B-reply state 置附录。统计 B input embedding 每个 token 的 $\|(W_{\mathrm{in}}^B)_{:,i}\|_2$、A output key 的 $\|(W_{\mathrm{out}}^A)_{i,:}\|_2$，以及每一来源状态的 $\|h_L^A\|_2$、$\|q\|_2$、$\|w_i+q/\tau\|_2$。
 
-输出 histogram、ECDF、p1/p5/p25/p50/p75/p95/p99 和按 entropy、置信度、prompt length 分桶的误差热图。
+输出按 `prompt/reply` 分面的 histogram、ECDF、p1/p5/p25/p50/p75/p95/p99；回复额外按 reply token index 的相对位置四分位分面。误差热图按 entropy、置信度、输入 prompt length、reply length 和状态来源分桶。
 
 **意义**：解释低温、高范数、尖锐分布为何更难近似；不将此图解释为推理质量。
 
 ### S1. exact-$F$ 静态保真和性能
 
-**运行**：X1 在全部 test/OOD；X2 在 ARC-Easy 与 GSM8K。ARC 两集跑 5 个主 ORF seed，其他集跑前 3 个。
+**运行**：X1 在全部 test/OOD；X2 在 ARC-Easy 与 GSM8K。每个数据集均对 prompt 与 A-reply state 运行；X1 的 B-reply state 在 ARC-Easy/GSM8K 附录复现。ARC 两集跑 5 个主 ORF seed，其他集跑前 3 个。
 
 完整 vocab 计算 $F(q)$，报告
 
@@ -113,13 +118,27 @@ $$
 \qquad \cos(\hat F(q),F(q)),
 $$
 
-分母异常率、NaN/Inf 率，以及 batch size 1/32 的 p50/p95 latency、tokens/s、峰值显存。性能仅测在线映射：warm-up 200 次，CUDA 同步后测 1,000 次。
+同时直接评估单核近似。对每个 state 令 $x=q/\tau$，以 exact softmax rank 分层抽取 key：rank 1、rank 2--10 中稳定 hash 选 3 个、rank 11--100/101--1000/大于 1000 中各均匀抽 3 个；固定抽样由 state ID 与 `probe_seed=42` 决定。对每个 $(w_i,x)$ 计算
 
+$$
+k_i(x)=\exp(w_i^\top x),\qquad
+\hat k_i(x)=\phi(w_i)^\top\phi(x),
+$$
+
+并报告
+
+$$
+|\hat k_i-k_i|,\qquad
+\frac{|\hat k_i-k_i|}{k_i+10^{-8}},\qquad
+|\log(\hat k_i+10^{-8})-\log(k_i+10^{-8})|.
+$$
+
+单核的 mean、median、p90/p95、rank 分层误差和 $\hat k_i/k_i$ 校准散点图，与 $\hat F$ 的相对 $L_2$ 误差及 cosine 一起按 `prompt/reply` 分面；另报告每题的 reply--prompt 误差差值及配对题目 bootstrap CI。按状态来源分别报告分母异常率、NaN/Inf 率。性能仅测在线映射：warm-up 200 次，CUDA 同步后测 1,000 次；从两类状态各均匀抽取至多 500 个 state，保证性能分布不被单一来源主导。
 **意义**：证明 kernel 是否以可接受误差替代完整词表扫描；只是方法必要条件。
 
 ### S2. softmax 误差传递与 ORF/iid 消融
 
-**运行**：X1，ARC-Easy/ARC-Challenge/GSM8K。显式计算 $p$ 与 $\hat p$，报告 KL、JS、TV、top-1/top-10/top-100 overlap、exact top-k mass。画单核误差、$\|p-\hat p\|_1$、$\|F-\hat F\|_2$ 的散点图。
+**运行**：X1，ARC-Easy/ARC-Challenge/GSM8K 的 prompt 与 A-reply state。显式计算 $p$ 与 $\hat p$，按来源报告 KL、JS、TV、top-1/top-10/top-100 overlap、exact top-k mass，并报告 `reply - prompt` 的分层效应量。画单核误差、$\|p-\hat p\|_1$、$\|F-\hat F\|_2$ 的散点图，点形区分状态来源。
 
 仅 ARC-Easy train calibration 运行：block ORF、iid Gaussian RF、可选重复方向负对照，
 
@@ -133,7 +152,7 @@ $$
 
 ### S3. 固定文本的 variance--$\tau$ 与 std--$\tau$
 
-**运行**：X1、ARC-Easy train。固定 128 条 prompt 的最后 state；每个 state 固定取 exact rank 1、稳定 hash 选出的 rank 2--10、rank 100--1000 key，共 384 个 $(w_i,q_j)$。GSM8K test 128 条在 $m=2048$ 复现。
+**运行**：X1、ARC-Easy train。固定随机 50 条题目；每题取 prompt 最后 state，以及从同次 `latent_mas` A 回复中等距抽取 16 个 state（回复不足 16 个则全取）。每个 state 固定取 exact rank 1、稳定 hash 选出的 rank 2--10、rank 100--1000 key。prompt/reply 各自汇总，不能将两类 state 混为同一独立样本。GSM8K test 随机 50 条在 $m=2048$ 复现。
 
 对 $m\in\{512,1024,2048\}$、$\tau\in\{0.5,0.6,\ldots,2.0\}$，仅改变 $R=32$ 个 ORF 矩阵。计算
 
@@ -147,7 +166,7 @@ s^2_{k,ij}=\frac{1}{R-1}\sum_r(\hat k_{ij}^{(r)}-\overline k_{ij})^2,
 s^2_{F,j}=\frac{1}{d_B(R-1)}\sum_r\|\hat F_j^{(r)}-\overline F_j\|_2^2.
 $$
 
-画 kernel 与 $\hat F$ 的原始、相对 variance/std--$\tau$ 曲线，原始方差用 log y 轴；按 rank 分面，阴影为 pair/state bootstrap 1,000 次 CI。补充
+画 kernel 与 $\hat F$ 的原始、相对 variance/std--$\tau$ 曲线，原始方差用 log y 轴；按 rank 与 `prompt/reply` 双分面，阴影为题目 cluster bootstrap 1,000 次 CI。另画每题 reply/prompt 方差比的森林图，补充
 
 $$
 \operatorname{MSE}_j=
@@ -158,7 +177,7 @@ $$
 
 ### S4. 通信空间 PCA
 
-**运行**：仅 X1；ARC-Easy test 的 4,096 states，主设置和 seed 101；GSM8K 图置附录。将 $Y_F,Y_{\mathrm{identical}},Y_{\mathrm{linear}},Y_{\mathrm{kernel}}$ 拼接后只拟合一次全局中心化 PCA，四面板共享坐标。颜色为 exact entropy 四分位；另画灰色 exact 点与三方法叠加图、200 条配对箭头。
+**运行**：仅 X1；ARC-Easy test 随机 50 题的全部 prompt 与 A-reply states，主设置和 seed 101；GSM8K 图置附录。为避免某一来源主导主成分，对两类状态各分层随机抽取相同数量（最多 2,000）后，将 $Y_F,Y_{\mathrm{identical}},Y_{\mathrm{linear}},Y_{\mathrm{kernel}}$ 拼接并只拟合一次全局中心化 PCA，四面板共享坐标。颜色为 exact entropy 四分位、点形区分 `prompt/reply`；另画灰色 exact 点与三方法叠加图、每种来源各 100 条配对箭头。
 
 可选 t-SNE 只对四组拼接后的分层 2,000 点拟合一次，参数固定为 `init=pca`、`perplexity=50`、`learning_rate=auto`、`n_iter=1500`、seed 101。
 
@@ -262,12 +281,22 @@ $$
 
 所有方法差异以 prompt/message/rollout 为成对单位做 bootstrap 95% CI；对多个数据集、$m$、$\tau$、方法声明显著性时报告 Benjamini--Hochberg 校正后的 q value，同时报告效应量和失败率。
 
-建议新增只读入口 `analysis/run_plan_v2.py`，参数为 `--layer {operator,cot,communication}`、`--model_pair`、`--dataset`、`--method`、`--orf_seed`，输出：
+### 6.1 实现实验目录
 
-- `artifacts/plan_v2/manifests/*.json`：revision、样本、token position、参数、seed；
-- `artifacts/plan_v2/metrics/*.parquet`：prompt/message/trajectory 原始指标；
-- `artifacts/plan_v2/readouts/*.jsonl`：top-k 与案例；
-- `artifacts/plan_v2/figures/*.pdf`：预注册图。
+所有实验实现必须置于 `exp` 下，并按结论层级分目录；不得把三类实验混在同一入口中。
+
+| 实验范围 | 实现目录 | 覆盖内容 |
+| --- | --- | --- |
+| S0--S4 算子近似 | `exp\approximator` | 状态采样、exact $F$、单核误差、ORF/iid、variance--$\tau$、PCA/t-SNE 与性能测量 |
+| C0--C4 Latent CoT | `exp\latent_cot` | 同模型 rollout、接口对照、答案评测、language-lens、动态 seed 稳定性 |
+| M0--M4 Latent Communication | `exp\latent_comm` | 跨模型消息注入、接收端保真、私有信息、协作、多跳与通信 readout |
+
+每个目录应有独立的可执行入口、配置文件、README 和 `result/` 子目录；运行产物只写入各自的 `result/`，并在 manifest 中记录对应的实验目录、配置路径和 git commit。 `exp` 中的分析实验可以读取或调用工作目录下的其他文件和模块，但绝对不得修改 `exp` 外的任何内容；所有新建、覆盖或删除操作只能作用于该实验目录自身及其 `result/` 子目录。建议入口分别为 `exp\approximator\run.py`、`exp\latent_cot\run.py`、`exp\latent_comm\run.py`；三者使用一致的 `--model_pair`、`--dataset`、`--method`、`--orf_seed` 参数命名，输出：
+
+- `exp/<实验目录>/result/manifests/*.json`：revision、样本、token position、参数、seed；
+- `exp/<实验目录>/result/metrics/*.parquet`：prompt/message/trajectory 原始指标；
+- `exp/<实验目录>/result/readouts/*.jsonl`：top-k 与案例；
+- `exp/<实验目录>/result/figures/*.pdf`：预注册图。
 
 停止规则：
 
@@ -282,3 +311,28 @@ $$
 
 应分别绘制零训练与训练后方法的 Pareto 图，比较训练成本、推理成本、算子保真、信息恢复、CoT 稳定性和最终任务收益。若方法使用额外配对数据、教师输出或标签，必须将其列为额外信息预算，而不能将收益单独归因于对齐算法。
 
+
+## 8. 各实验的意义速览
+
+本节是对前述设计的解释性索引。每个实验只能支持其对应层级的结论；尤其不能将“算子误差小”直接表述为“Latent CoT 有效”或“跨模型通信成功”。
+
+| 实验 | 它检验的假设 | 若结果良好，意味着什么 | 若结果不佳，优先怀疑什么 | 不能单独证明什么 |
+| --- | --- | --- | --- | --- |
+| S0 范数与尺度 | ORF 误差受 $\|w_i\|$、$\|q\|$、$\tau$ 和分布尖锐度影响 | 已定位方法适用的数值区域，可解释误差异质性 | 高范数、低温或数值稳定化不足 | CoT 或通信的语义有效性 |
+| S1 exact-$F$ 保真 | $\hat F$ 能近似完整词表 $F$ 且更快 | kernel 是 exact soft-token 算子的有效压缩 | 特征数不足、温度不合适、ORF 实现/数值错误 | $F$ 本身是好的 CoT 或通信接口 |
+| S2 分布误差链 | kernel 误差会以可解释方式传到 $\hat p$ 和 B-space 输出 | 数值误差来源清晰，不是 embedding 聚合偶然抵消 | 某些 key 或尖锐分布被随机特征系统性扭曲 | B 已理解消息语义 |
+| S2 ORF/iid 消融 | 正交采样比 iid 随机方向更稳定 | ORF 的额外结构确有方差或 seed 稳定性收益 | ORF 不适合当前维度/温度，或收益不足以抵偿复杂度 | 任意输入上 ORF 都严格更优 |
+| S3 variance--$\tau$ | 固定文本时，随机 $\Omega$ 的条件方差随 $\tau,m$ 可控 | 单次离线随机投影的 seed 风险已被量化；可据此选择 $m$ | 固定 seed 误差大，需提高 $m$、改变温度或做 ensemble | 闭环 CoT 一定稳定；动态系统可能放大小方差 |
+| S4 通信 PCA | 各映射在同一 B-space 中的几何偏移可见 | kernel 的整体几何形状接近 exact $F$ | 某方法发生尺度、方向或簇结构偏移 | latent thought 的完整语义或 CoT 轨迹质量 |
+| C0 CoT 接口对照 | 同模型时间接口与跨模型映射是不同设计问题 | 已建立文本 CoT、identical、linear、exact、kernel 的公平比较框架 | 接口或实验管线未对齐 | 任一映射天然优于其他映射 |
+| C1 CoT rollout 与答案 | 状态注入后同一模型能否继续完成推理 | 某接口在动态反馈与最终答案上真正有用 | 反馈累积误差、接口不兼容、任务本身过难 | 跨模型通信也会成功 |
+| C2 文本 CoT 锚点 | latent 状态接口与可读文本推理存在弱对应 | 接口输出在高置信位置与正常 token 轨迹相容 | 映射偏离正常 token 输入尺度/方向 | 每一步 latent thought 有唯一文本翻译 |
+| C3 CoT language-lens | hidden readout 可暴露重复、塌缩和主题漂移 | 可以定位 rollout 在何时、以何种方式退化 | state 动力学异常、special-token 吸引子、过长 rollout | top-1 token 就是完整 thought 含义 |
+| C4 CoT seed 敏感性 | 固定 ORF 随机性不会在反馈中被不可接受地放大 | 静态近似误差在动态 rollout 中仍可控 | 小静态误差被闭环放大，应提高 $m$ 或改接口 | 单一 seed 的好结果可泛化 |
+| M0 单跳 B 行为 | kernel 相对 exact $F$ 保留 B 的局部 logits 行为 | 数值近似进入 B 后未明显改变即时行为 | B-space 小误差被 B 非线性放大 | B 能恢复复杂私有信息或完成协作 |
+| M1 私有信息恢复 | A 的消息向 B 传递了 B 自身不可获得的信息 | 通信具有可量化的语义内容；kernel 损失可相对 exact 测量 | 映射失真、A 未编码事实、B 未能读取消息 | 共享任务上的协作一定提高 |
+| M2 共享问题协作 | A 的消息能给 B 的真实推理带来增量 | 通信在真实任务上有实用价值 | 消息无信息、B 忽略消息，或收益来自额外计算/提示结构 | 任意任务、任意模型组合都会提升 |
+| M3 多跳通信 | 单跳误差经过重复重编码不会迅速失控 | 方法可支持更接近多 agent 的消息链 | hop 间误差累积或接收方重编码损失 | 同模型 Latent CoT 的稳定性 |
+| M4 通信 language-lens | 成功/失败消息可被接收端读出解释 | 可定位错译、special-token 退化或合理重述的机制 | 消息注入位置或 receiver dynamics 有问题 | 定性案例可替代 M1--M3 的统计证据 |
+
+因此，推荐的论证顺序是：先以 S0--S4 证明 kernel 算子可控；再以 C1--C4 单独论证同模型 Latent CoT；最后以 M0--M3 论证跨模型 Latent Communication。三类结论应在论文或报告中分节书写，避免相互替代。

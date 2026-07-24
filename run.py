@@ -61,7 +61,7 @@ def configure_run_files(args: argparse.Namespace) -> Tuple[logging.Logger, Path]
     # ``Qwen/Qwen3-8B``), which cannot be used directly in a filename.
     model_name = re.sub(r"[^A-Za-z0-9._-]+", "_", args.model_name).strip("._-")
     run_name = (
-        f"{args.task}_{args.method}_model_{model_name}_"
+        f"{args.task}_{args.method}_prompt_{args.prompt}_model_{model_name}_"
         f"align_{args.align_method}_{run_id}"
     )
 
@@ -350,6 +350,7 @@ def main():
     summary = {
         "run": {
             "method": args.method,
+            "prompt": args.prompt,
             "align_method": args.align_method,
             "model": args.model_name,
             "task": args.task,

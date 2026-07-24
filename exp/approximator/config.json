@@ -1,0 +1,9 @@
+{
+  "model_pair": "x1",
+  "m": 2048,
+  "tau": 1.0,
+  "kernel_chunk_size": 4096,
+  "orf_seed": 101,
+  "probe_seed": 42,
+  "generation": {"temperature": 0.0, "top_p": 1.0, "seed": 77}
+}
