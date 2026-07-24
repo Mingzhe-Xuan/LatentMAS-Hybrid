@@ -3,6 +3,7 @@
 # exp.sh - PBS submission script for the experiments under exp/
 #
 # Examples:
+#   qsub exp.sh
 #   qsub -v EXP_TARGET=approximator exp.sh
 #   qsub -v EXP_TARGET=approximator,STUDY=s3,DATASET=arc_easy,SPLIT=train exp.sh
 #   qsub -v EXP_TARGET=latent_cot,METHOD=kernel,DATASET=gsm8k exp.sh
@@ -36,9 +37,9 @@ Options override the plan_v2 main-experiment defaults for the selected target:
 EOF
 }
 
-# EXP_TARGET is normally supplied via PBS's -v option. Positional target flags
-# remain useful for local bash exp.sh --approximator testing only.
-EXP_TARGET="${EXP_TARGET:-}"
+# Default to the plan_v2 operator experiment; PBS's -v option overrides it.
+# Positional target flags remain useful for local Bash testing only.
+EXP_TARGET="${EXP_TARGET:-approximator}"
 STUDY="${STUDY:-}"; MODEL_PAIR="${MODEL_PAIR:-}"; DATASET="${DATASET:-}"
 SPLIT="${SPLIT:-}"; METHOD="${METHOD:-}"; ORF_SEED="${ORF_SEED:-}"
 M="${M:-}"; TAU="${TAU:-}"; PROBE_SEED="${PROBE_SEED:-}"
