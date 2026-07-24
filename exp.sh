@@ -3,10 +3,10 @@
 # exp.sh - PBS submission script for the experiments under exp/
 #
 # Examples:
-#   qsub exp.sh --approximator
-#   qsub exp.sh --approximator --study s3 --dataset arc_easy --split train
-#   qsub exp.sh --latent_cot --method kernel --dataset gsm8k
-#   qsub exp.sh --latent_comm --study m2 --dataset arc_challenge
+#   qsub -v EXP_TARGET=approximator exp.sh
+#   qsub -v EXP_TARGET=approximator,STUDY=s3,DATASET=arc_easy,SPLIT=train exp.sh
+#   qsub -v EXP_TARGET=latent_cot,METHOD=kernel,DATASET=gsm8k exp.sh
+#   qsub -v EXP_TARGET=latent_comm,STUDY=m2,DATASET=arc_challenge exp.sh
 ###############################################################################
 
 #PBS -N latent_exp
@@ -21,9 +21,9 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  qsub exp.sh --approximator [options]
-  qsub exp.sh --latent_cot [options]
-  qsub exp.sh --latent_comm [options]
+  qsub -v EXP_TARGET=approximator[,NAME=value...] exp.sh
+  qsub -v EXP_TARGET=latent_cot[,NAME=value...] exp.sh
+  qsub -v EXP_TARGET=latent_comm[,NAME=value...] exp.sh
 
 Options override the plan_v2 main-experiment defaults for the selected target:
   --study NAME              S0--S4, C0--C4, or M0--M4 study name
@@ -36,8 +36,9 @@ Options override the plan_v2 main-experiment defaults for the selected target:
 EOF
 }
 
-# The target is positional by design: qsub exp.sh --approximator.
-EXP_TARGET=""
+# EXP_TARGET is normally supplied via PBS's -v option. Positional target flags
+# remain useful for local bash exp.sh --approximator testing only.
+EXP_TARGET="${EXP_TARGET:-}"
 STUDY="${STUDY:-}"; MODEL_PAIR="${MODEL_PAIR:-}"; DATASET="${DATASET:-}"
 SPLIT="${SPLIT:-}"; METHOD="${METHOD:-}"; ORF_SEED="${ORF_SEED:-}"
 M="${M:-}"; TAU="${TAU:-}"; PROBE_SEED="${PROBE_SEED:-}"
