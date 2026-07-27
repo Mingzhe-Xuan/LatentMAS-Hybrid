@@ -4,3 +4,5 @@ logging/
 result/
 smoke_test.sh
 exp_result/
+exp_state.txt
+exp/cache/

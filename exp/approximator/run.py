@@ -42,9 +42,9 @@ from trajectory import collect, load_hybrid
 from utils import auto_device
 
 OUTPUT_ROOT = ROOT / "exp_result" / "approximator"
-CACHE_ROOT = OUTPUT_ROOT / "cache"
-TRAJECTORY_DIR = CACHE_ROOT / "trajectories"
-MAPPING_CACHE_DIR = CACHE_ROOT / "mappings"
+EXP_CACHE_ROOT = ROOT / "exp" / "cache"
+TRAJECTORY_DIR = EXP_CACHE_ROOT / "trajectories"
+MAPPING_CACHE_DIR = EXP_CACHE_ROOT / "mappings"
 RUNS_DIR = OUTPUT_ROOT / "runs"
 RESULT = OUTPUT_ROOT
 ROLES = ("planner", "critic", "refiner", "judger")
@@ -67,13 +67,14 @@ class State:
         return f"{self.role}_{self.state_kind}"
 
 
-def configure_logger(run_dir):
-    run_dir.mkdir(parents=True, exist_ok=True)
+def configure_logger():
     logger = logging.getLogger("approximator")
     logger.setLevel(logging.INFO)
     logger.handlers.clear()
     logger.propagate = False
-    handler = logging.FileHandler(run_dir / "exp_state.log", mode="a", encoding="utf-8")
+    handler = logging.FileHandler(
+        Path.cwd() / "exp_state.txt", mode="a", encoding="utf-8"
+    )
     handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
     logger.addHandler(handler)
     return logger
@@ -85,6 +86,20 @@ def safe_name(value):
 
 def short_float(value):
     return format(float(value), ".12g").replace("-", "m").replace(".", "p")
+
+
+def cache_component(value):
+    """Encode a value reversibly as a Windows-safe, case-stable path component."""
+    encoded = []
+    for byte in str(value).encode("utf-8"):
+        character = chr(byte)
+        if 48 <= byte <= 57 or 97 <= byte <= 122 or character in "._-":
+            encoded.append(character)
+        elif 65 <= byte <= 90:
+            encoded.append(f"~U{character}")
+        else:
+            encoded.append(f"~{byte:02X}")
+    return "v-" + "".join(encoded)
 
 
 def model_tag(agent_models):
@@ -286,14 +301,54 @@ def files_fingerprint(paths):
     return digest.hexdigest()
 
 
-def trajectory_paths(args, manifest_identity):
-    digest = hashlib.sha256(
-        json.dumps(
-            manifest_identity, sort_keys=True, ensure_ascii=False, default=str
-        ).encode("utf-8")
-    ).hexdigest()[:16]
-    stem = f"{args.dataset}_{args.split}_{digest}"
-    return TRAJECTORY_DIR / f"{stem}.pt", TRAJECTORY_DIR / f"{stem}.manifest.json"
+def trajectory_cache_stem(args):
+    if len(set(args.agent_models)) == 1:
+        model_fields = (f"m={cache_component(args.agent_models[0])}",)
+    else:
+        model_fields = tuple(
+            f"{role[0].upper()}={cache_component(model_name)}"
+            for role, model_name in zip(ROLES, args.agent_models)
+        )
+    return "__".join(
+        (
+            "traj",
+            f"ds={cache_component(args.dataset)}",
+            f"sp={cache_component(args.split)}",
+            *model_fields,
+            f"p={cache_component(args.prompt)}",
+            f"q={args.max_questions}",
+            f"ps={args.probe_seed}",
+            f"cap={args.max_states_per_question}",
+            f"lat={args.latent_steps}",
+            f"t={repr(args.temperature)}",
+            f"tp={repr(args.top_p)}",
+            f"tok={args.max_new_tokens}",
+            "a=kernel",
+            f"km={args.kernel_features}",
+            f"kt={repr(args.kernel_temperature)}",
+            f"ks={args.kernel_seed}",
+            f"c={args.kernel_chunk_size}",
+            f"rc={int(args.trust_remote_code)}",
+        )
+    )
+
+
+def cache_file(directory, stem, suffix):
+    name = f"{stem}{suffix}"
+    if len(name) > 240:
+        raise ValueError(
+            "Cache filename is too long for portable filesystems. "
+            "Use shorter model identifiers."
+        )
+    return directory / name
+
+
+def trajectory_paths(args):
+    stem = trajectory_cache_stem(args)
+    return (
+        cache_file(TRAJECTORY_DIR, stem, ".pt"),
+        cache_file(TRAJECTORY_DIR, stem, ".manifest.json"),
+    )
 
 
 def generation_config(args):
@@ -390,7 +445,7 @@ def manifest_differences(expected, actual, prefix=""):
 
 def load_or_collect_trajectory(args, indexed_items, logger):
     expected = expected_manifest(args, indexed_items)
-    trajectory_path, manifest_path = trajectory_paths(args, expected)
+    trajectory_path, manifest_path = trajectory_paths(args)
     have_trajectory = trajectory_path.exists()
     have_manifest = manifest_path.exists()
     if have_trajectory != have_manifest and not args.force_recollect:
@@ -493,26 +548,61 @@ def mapping_cache_identity(path, args, state_count):
         "kernel_chunk_size": args.kernel_chunk_size,
         "probe_seed": args.probe_seed,
     }
-    digest = hashlib.sha256(
-        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
-    ).hexdigest()[:12]
-    temperature = format(args.kernel_temperature, ".12g").replace("-", "m").replace(
-        ".", "p"
-    )
-    cache_id = (
-        f"m{args.kernel_features}_tau{temperature}_seed{args.kernel_seed}"
-        f"_chunk{args.kernel_chunk_size}_{digest}"
+    cache_id = "__".join(
+        (
+            "mapping",
+            "source=refiner",
+            "target=judger",
+            f"km={args.kernel_features}",
+            f"temperature={repr(args.kernel_temperature)}",
+            f"seed={args.kernel_seed}",
+            f"c={args.kernel_chunk_size}",
+            f"rc={int(args.trust_remote_code)}",
+            f"ps={args.probe_seed}",
+        )
     )
     return cache_id, payload
 
 
+def mapping_cache_paths(trajectory_path, cache_id):
+    del cache_id
+    stem = trajectory_path.stem.replace("traj__", "map__", 1) + "__src=refiner__dst=judger"
+    return (
+        cache_file(MAPPING_CACHE_DIR, stem, ".full.parquet"),
+        cache_file(MAPPING_CACHE_DIR, stem, ".single-kernel.parquet"),
+        cache_file(MAPPING_CACHE_DIR, stem, ".mapping.manifest.json"),
+    )
+
+
 def load_or_compute_mapping_cache(
-    states, wo, wi, bias, kernel, args, logger, cache_id
+    states,
+    wo,
+    wi,
+    bias,
+    kernel,
+    args,
+    logger,
+    cache_id,
+    cache_payload,
+    trajectory_path,
 ):
-    mapping_path = MAPPING_CACHE_DIR / f"{cache_id}.full.parquet"
-    single_path = MAPPING_CACHE_DIR / f"{cache_id}.single_kernel.parquet"
-    if mapping_path.exists() and single_path.exists():
+    mapping_path, single_path, manifest_path = mapping_cache_paths(
+        trajectory_path, cache_id
+    )
+    if mapping_path.exists() and single_path.exists() and manifest_path.exists():
         try:
+            actual_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            actual_identity = {
+                key: actual_manifest.get(key) for key in cache_payload
+            }
+            differences = manifest_differences(cache_payload, actual_identity)
+            if differences:
+                raise ValueError(
+                    "mapping manifest differs:\n"
+                    + json.dumps(
+                        differences, indent=2, ensure_ascii=False, default=str
+                    )
+                )
             rows = common.read_rows(mapping_path)
             single = common.read_rows(single_path)
             if len(rows) != len(states):
@@ -823,6 +913,8 @@ def run_phase_b(path, trajectory, method, args, logger):
             args,
             logger,
             cache_id,
+            cache_payload,
+            path,
         )
         mapping_cache_info = {
             "cache_id": cache_id,
@@ -838,10 +930,8 @@ def run_phase_b(path, trajectory, method, args, logger):
             "mapping_rows": len(cached_rows),
             "single_kernel_rows": len(cached_single),
         }
-        write_json(
-            MAPPING_CACHE_DIR / f"{cache_id}.manifest.json",
-            cache_manifest,
-        )
+        _, _, mapping_manifest_path = mapping_cache_paths(path, cache_id)
+        write_json(mapping_manifest_path, cache_manifest)
         write_json(
             RESULT / "manifests" / "mapping.json",
             {**cache_manifest, "cache_hit": mapping_cache_hit},
@@ -931,7 +1021,7 @@ def main(argv=None):
     run_dir, config_hash, timestamp = create_run_dir(args)
     RESULT = run_dir
     common.set_result_root(run_dir)
-    logger = configure_logger(run_dir)
+    logger = configure_logger()
     started = time.time()
     run_manifest_path = run_dir / "run_manifest.json"
     run_manifest = {

@@ -19,17 +19,19 @@ python exp/approximator/run.py \
   --dataset arc_easy --split test --study all
 ```
 
-Trajectories and their strict configuration manifests are stored under
-`exp_result/approximator/cache/trajectories/`. Full S1/S2 mapping caches live
-under `exp_result/approximator/cache/mappings/`. A matching cache is reused by default.
+Trajectories and their manifests are stored directly under
+`exp/cache/trajectories/`; mapping caches and their manifests are stored
+directly under `exp/cache/mappings/`. Both directories are flat: filenames
+expose stable generation and mapping parameters and contain no timestamps or
+hash-derived names. A matching cache is reused by default.
 Use `--force_recollect` to replace it, or `--reuse_trajectory` to require a
 matching existing cache and prohibit Phase A.
 
-S1 and S2 share one full mapping cache. Its filename records
-the feature count, kernel temperature, seed, chunk size, and a configuration
-digest. The digest also covers the trajectory manifest, source/target models,
-probe seed, and mapping implementation. A valid cache is reused across runs;
-S1 and S2 summaries and figures are both derived from those cached rows.
+S1 and S2 share one full mapping cache. Its flat filename inherits the
+trajectory parameters; the manifest additionally verifies the trajectory
+manifest, source/target models, probe seed, and mapping implementation. A
+valid cache is reused across runs; S1 and S2 summaries and figures are both
+derived from those cached rows.
 
 Every invocation creates an independent directory under
 `exp_result/approximator/runs/`. The directory name contains the dataset,
@@ -38,11 +40,13 @@ limits, a `YYYYMMDD_HHMMSS` timestamp, and a short complete-configuration hash.
 It contains:
 
 - `run_manifest.json`: full arguments, versions, status, timing, and cache hits;
-- `exp_state.log`: progress for this invocation only;
 - `metrics/`: raw Parquet tables;
 - `summaries/`: scalar-only JSON summaries for S0--S4;
 - `figures/`: plots;
 - `manifests/`: trajectory, mapping, and analysis provenance.
+
+Progress from all invocations is appended to `exp_state.txt` in the working
+directory from which `run.py` is launched.
 
 Summary JSON files never contain hidden vectors, embeddings, PCA/t-SNE
 coordinates, per-state rows, or per-seed arrays. Continuous metrics report
