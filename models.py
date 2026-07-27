@@ -19,9 +19,11 @@ def _ensure_pad_token(tokenizer: AutoTokenizer) -> None:
             tokenizer.pad_token = tokenizer.eos_token
         else:
             tokenizer.add_special_tokens({"pad_token": "<pad>"})
-    # Decoder-only batch generation and latent rollout read the final sequence
-    # position, so every row must end at its final non-padding token.
-    tokenizer.padding_side = "left"
+    # ``generate_text_batch`` currently removes each prompt using its unpadded
+    # length.  With left padding that boundary falls inside the padded prompt
+    # width, causing the prompt suffix to be decoded as generated text.  Keep
+    # right padding until that decoder boundary is changed to the batch width.
+    tokenizer.padding_side = "right"
 
 
 def _past_length(past_key_values: Optional[Tuple]) -> int:
