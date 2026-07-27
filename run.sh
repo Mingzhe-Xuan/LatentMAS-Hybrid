@@ -79,7 +79,7 @@ fi
 
 ## --- Core dataset / model settings ---
 MODEL_NAME="Qwen/Qwen3-8B"  # Hugging Face model ID passed to --model_name.
-TASK="aime2025"             # Evaluation dataset/task name.
+TASK="humanevalplus"        # Evaluation dataset/task name.
 PROMPT_SEQUENTIAL="sequential"      # Sequential multi-agent architecture.
 PROMPT_HIERARCHICAL="hierarchical"  # Hierarchical multi-agent architecture.
 MAX_SAMPLES=-1                # Number of examples; -1 evaluates all examples.
@@ -108,7 +108,7 @@ PY
 fi
 TEMPERATURE=0.6       # Sampling temperature.
 TOP_P=0.95            # Nucleus-sampling probability threshold.
-GENERATE_BS=2         # Generation batch size.
+GENERATE_BS=10        # Generation batch size.
 SEED=42               # Random seed for reproducibility.
 
 ## --- TextMAS / LatentMAS settings ---
@@ -136,7 +136,7 @@ GPU_MEMORY_UTILIZATION=0.9  # Fraction of each GPU vLLM may reserve.
 COMMON=(
     # Core dataset / model settings
     --model_name "${MODEL_NAME}"             # Required model ID
-    --task "${TASK}"                         # run.py default: gsm8k
+    --task "${TASK}"                         # run.py default: humanevalplus
     --max_samples "${MAX_SAMPLES}"           # run.py default: -1 (all samples)
     --split "${SPLIT}"                       # run.py default: test; AIME always uses train
     --device "${DEVICE}"                     # run.py default: cuda
@@ -145,7 +145,7 @@ COMMON=(
     --max_new_tokens "${MAX_NEW_TOKENS}"     # Task default from max_token_dict.json; fallback: 20000
     --temperature "${TEMPERATURE}"           # run.py default: 0.6
     --top_p "${TOP_P}"                       # run.py default: 0.95
-    --generate_bs "${GENERATE_BS}"           # run.py default: 20
+    --generate_bs "${GENERATE_BS}"           # run.py default: 10
     --seed "${SEED}"                         # run.py default: 42
 
     # TextMAS / LatentMAS settings
