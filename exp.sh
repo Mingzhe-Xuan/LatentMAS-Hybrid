@@ -104,7 +104,7 @@ GENERATION_SEED="${GENERATION_SEED:-77}"
 # submission per cell; these select its first primary cell for each layer.
 case "${EXP_TARGET}" in
     approximator)
-        STUDY="${STUDY:-s1}"; MODEL_PAIR="${MODEL_PAIR:-x1}"
+        STUDY="${STUDY:-s0}"; MODEL_PAIR="${MODEL_PAIR:-x1}"
         DATASET="${DATASET:-arc_easy}"; SPLIT="${SPLIT:-test}"
         METHOD="${METHOD:-kernel}"; MAX_QUESTIONS="${MAX_QUESTIONS:-50}"
         LATENT_STEPS="${LATENT_STEPS:-50}"
@@ -114,14 +114,14 @@ case "${EXP_TARGET}" in
         ARGS=(--study "${STUDY}" --agent_models "${APPROX_MODELS[@]}" --dataset "${DATASET}" --split "${SPLIT}" --kernel_features "${M}" --kernel_temperature "${TAU}" --kernel_seed "${ORF_SEED}" --probe_seed "${PROBE_SEED}" --max_questions "${MAX_QUESTIONS}" --max_states_per_question "${MAX_STATES_PER_QUESTION}" --max_new_tokens "${MAX_REPLY_TOKENS}" --latent_steps "${LATENT_STEPS}" --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" --device "${DEVICE}")
         ;;
     latent_cot)
-        STUDY="${STUDY:-c1}"; MODEL_PAIR="${MODEL_PAIR:-c0}"
+        STUDY="${STUDY:-c0}"; MODEL_PAIR="${MODEL_PAIR:-c0}"
         DATASET="${DATASET:-gsm8k}"; SPLIT="${SPLIT:-test}"
         METHOD="${METHOD:-all}"; MAX_QUESTIONS="${MAX_QUESTIONS:-512}"
         LATENT_STEPS="${LATENT_STEPS:-16}"; ENTRY="exp/latent_cot/run.py"
         ARGS=(--study "${STUDY}" --model_pair "${MODEL_PAIR}" --dataset "${DATASET}" --split "${SPLIT}" --method "${METHOD}" --orf_seed "${ORF_SEED}" --m "${M}" --tau "${TAU}" --latent_steps "${LATENT_STEPS}" --generation_seed "${GENERATION_SEED}" --device "${DEVICE}")
         ;;
     latent_comm)
-        STUDY="${STUDY:-m1}"; MODEL_PAIR="${MODEL_PAIR:-x1}"
+        STUDY="${STUDY:-m0}"; MODEL_PAIR="${MODEL_PAIR:-x1}"
         DATASET="${DATASET:-communication_probe}"; SPLIT="${SPLIT:-test}"
         METHOD="${METHOD:-all}"; MAX_QUESTIONS="${MAX_QUESTIONS:-512}"
         LATENT_STEPS="${LATENT_STEPS:-4}"; ENTRY="exp/latent_comm/run.py"
