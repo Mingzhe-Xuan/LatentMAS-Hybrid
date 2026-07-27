@@ -187,7 +187,7 @@ def main():
     parser.add_argument(
         "--think",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="Manually add think token in the prompt for LatentMAS",
     )
     parser.add_argument("--align_method", dest="align_method", choices=["identical", "linear", "kernel"], default="identical",

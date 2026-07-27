@@ -117,7 +117,7 @@ LATENT_STEPS=45             # Number of latent reasoning steps.
 TRUST_REMOTE_CODE=true      # Pass --trust_remote_code when the model requires it.
 SEQUENTIAL_INFO_ONLY=false   # Retain only each agent's own prompt + latent KV before the next agent.
 LATENT_ONLY=true             # Retain only latent KV before the next agent (implies SEQUENTIAL_INFO_ONLY).
-THINK=true                   # Insert <think> before latent rollout starts.
+THINK=false                  # Insert <think> before latent rollout starts.
 
 ## --- Alignment settings ---
 ALIGN_RIDGE=1e-5           # Ridge regularization for linear alignment.
