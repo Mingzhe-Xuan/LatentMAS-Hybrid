@@ -1,0 +1,694 @@
+#!/usr/bin/env python
+"""Plan-v3 C0: entropy across a single-model latent recurrence."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import logging
+import random
+import re
+import subprocess
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+import transformers
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from data import load_gsm8k
+from trajectory import (
+    PROMPT_TEMPLATE_VERSION,
+    collect,
+    load_model,
+    prompt_template_sha256,
+)
+from utils import auto_device, set_seed
+
+
+SCHEMA_VERSION = 1
+OUTPUT_ROOT = ROOT / "exp_result" / "latent_cot"
+RUNS_DIR = OUTPUT_ROOT / "runs"
+TRAJECTORY_DIR = ROOT / "exp" / "cache" / "trajectories"
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--study", choices=["c0"], default="c0")
+    parser.add_argument("--model_name", default="Qwen/Qwen3-4B")
+    parser.add_argument("--dataset", choices=["gsm8k"], default="gsm8k")
+    parser.add_argument("--split", default="test")
+    parser.add_argument("--max_questions", type=int, default=512)
+    parser.add_argument("--latent_steps", type=int, default=50)
+    parser.add_argument("--probe_seed", type=int, default=42)
+    parser.add_argument("--bootstrap_replicates", type=int, default=1000)
+    parser.add_argument("--entropy_chunk_size", type=int, default=8)
+    parser.add_argument(
+        "--reuse_trajectory",
+        action="store_true",
+        help="Require an existing compatible C0 trajectory cache.",
+    )
+    parser.add_argument("--force_recollect", action="store_true")
+    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--trust_remote_code", action="store_true")
+    args = parser.parse_args(argv)
+    if args.reuse_trajectory and args.force_recollect:
+        parser.error("--reuse_trajectory and --force_recollect are mutually exclusive")
+    if args.max_questions < 1 or args.latent_steps < 1:
+        parser.error("--max_questions and --latent_steps must be positive")
+    if args.bootstrap_replicates < 1 or args.entropy_chunk_size < 1:
+        parser.error("bootstrap/chunk sizes must be positive")
+    args.device = auto_device(args.device)
+    args.task = args.dataset
+    args.seed = args.probe_seed
+    return args
+
+
+def configure_logger():
+    logger = logging.getLogger("latent_cot.c0")
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+    logger.propagate = False
+    handler = logging.FileHandler(
+        Path.cwd() / "exp_state.txt", mode="a", encoding="utf-8"
+    )
+    handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
+    logger.addHandler(handler)
+    return logger
+
+
+def git_commit():
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+        ).strip()
+    except Exception:
+        return None
+
+
+def files_sha256(paths):
+    digest = hashlib.sha256()
+    for path in paths:
+        digest.update(str(path.relative_to(ROOT)).encode("utf-8"))
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def trajectory_implementation_sha256():
+    return files_sha256(
+        (
+            ROOT / "exp" / "latent_cot" / "trajectory.py",
+        )
+    )
+
+
+def run_implementation_sha256():
+    return files_sha256(
+        (
+            ROOT / "exp" / "latent_cot" / "run.py",
+            ROOT / "exp" / "latent_cot" / "trajectory.py",
+        )
+    )
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_json(path, payload):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False, default=str)
+        + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def write_parquet(path, rows):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    pq.write_table(pa.Table.from_pylist(list(rows)), temporary, compression="zstd")
+    temporary.replace(path)
+
+
+def cache_component(value):
+    encoded = []
+    for byte in str(value).encode("utf-8"):
+        character = chr(byte)
+        if 48 <= byte <= 57 or 97 <= byte <= 122 or character in "._-":
+            encoded.append(character)
+        elif 65 <= byte <= 90:
+            encoded.append(f"~U{character}")
+        else:
+            encoded.append(f"~{byte:02X}")
+    return "v-" + "".join(encoded)
+
+
+def trajectory_paths(args):
+    stem = "__".join(
+        (
+            "c0",
+            f"ds={cache_component(args.dataset)}",
+            f"sp={cache_component(args.split)}",
+            f"m={cache_component(args.model_name)}",
+            f"q={args.max_questions}",
+            f"seed={args.probe_seed}",
+            f"k={args.latent_steps}",
+            f"prompt={cache_component(PROMPT_TEMPLATE_VERSION)}",
+            f"rc={int(args.trust_remote_code)}",
+        )
+    )
+    if len(stem) + len(".manifest.json") > 240:
+        raise ValueError("C0 trajectory cache filename exceeds 240 characters.")
+    return (
+        TRAJECTORY_DIR / f"{stem}.pt",
+        TRAJECTORY_DIR / f"{stem}.manifest.json",
+    )
+
+
+def sampled_items(args):
+    indexed = list(enumerate(load_gsm8k(split=args.split)))
+    random.Random(args.probe_seed).shuffle(indexed)
+    return indexed[: args.max_questions]
+
+
+def tokenizer_fingerprint(tokenizer):
+    payload = {
+        "vocab": sorted(tokenizer.get_vocab().items()),
+        "special_tokens": tokenizer.special_tokens_map,
+        "chat_template": getattr(tokenizer, "chat_template", None),
+        "padding_side": tokenizer.padding_side,
+        "resolved_commit": tokenizer.init_kwargs.get("_commit_hash"),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+
+
+def model_fingerprint(wrapper):
+    config = wrapper.model.config
+    payload = config.to_dict()
+    for field in ("transformers_version", "_commit_hash", "_name_or_path"):
+        payload.pop(field, None)
+    return {
+        "resolved_commit": getattr(config, "_commit_hash", None),
+        "config_sha256": hashlib.sha256(
+            json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode(
+                "utf-8"
+            )
+        ).hexdigest(),
+        "parameter_dtype": str(next(wrapper.model.parameters()).dtype),
+    }
+
+
+def expected_manifest(args, indexed_items, wrapper):
+    prompted_questions = [
+        {"item_id": item_id, "question": item["question"]}
+        for item_id, item in indexed_items
+    ]
+    content_hash = hashlib.sha256(
+        json.dumps(
+            prompted_questions, sort_keys=True, ensure_ascii=False, default=str
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "cache_identity": {
+            "experiment": "c0",
+            "dataset": args.dataset,
+            "split": args.split,
+            "question_ids": [item_id for item_id, _ in indexed_items],
+            "question_content_sha256": content_hash,
+            "model_name": args.model_name,
+            "model_fingerprint": model_fingerprint(wrapper),
+            "tokenizer_fingerprint": tokenizer_fingerprint(wrapper.tokenizer),
+            "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+            "prompt_template_sha256": prompt_template_sha256(),
+            "latent_steps": args.latent_steps,
+            "question_selection_seed": args.probe_seed,
+            "recurrence": "repository_identical_mean_norm_scaled_feedback",
+            "recurrence_target_embedding_mean_norm": float(
+                wrapper.target_embedding_mean_norm.detach().cpu()
+            ),
+            "generation": {
+                "do_sample": False,
+                "decoding": "greedy",
+                "text_generation_performed": False,
+            },
+            "trust_remote_code": bool(args.trust_remote_code),
+            "trajectory_implementation_sha256": trajectory_implementation_sha256(),
+        },
+        "provenance": {
+            "git_commit": git_commit(),
+            "pytorch_version": torch.__version__,
+            "transformers_version": transformers.__version__,
+            "output_embedding_has_bias": bool(
+                wrapper.model.get_output_embeddings() is not None
+                and getattr(wrapper.model.get_output_embeddings(), "bias", None)
+                is not None
+            ),
+        },
+    }
+
+
+def identity_differences(expected, actual, prefix=""):
+    differences = []
+    if isinstance(expected, dict) and isinstance(actual, dict):
+        for key in sorted(set(expected) | set(actual)):
+            field = f"{prefix}.{key}" if prefix else key
+            if key not in expected or key not in actual:
+                differences.append(
+                    {"field": field, "expected": expected.get(key), "actual": actual.get(key)}
+                )
+            else:
+                differences.extend(identity_differences(expected[key], actual[key], field))
+    elif expected != actual:
+        differences.append({"field": prefix, "expected": expected, "actual": actual})
+    return differences
+
+
+def validate_trajectory(trajectory, manifest, args):
+    if trajectory.get("schema_version") != SCHEMA_VERSION:
+        raise RuntimeError("C0 trajectory schema mismatch.")
+    records = trajectory.get("records")
+    if not isinstance(records, list) or len(records) != manifest.get("question_count"):
+        raise RuntimeError("C0 trajectory question count mismatch.")
+    for record in records:
+        hidden = record.get("hidden_states")
+        if (
+            not isinstance(hidden, torch.Tensor)
+            or hidden.device.type != "cpu"
+            or hidden.dtype != torch.float32
+            or hidden.ndim != 2
+            or hidden.shape[0] > args.latent_steps
+            or hidden.shape[0] != record.get("valid_step_count")
+        ):
+            raise RuntimeError(f"Invalid C0 hidden trajectory for item {record.get('item_id')}.")
+        if record.get("requested_step_count") != args.latent_steps:
+            raise RuntimeError("C0 requested step count mismatch.")
+        if record.get("rollout_complete") and hidden.shape[0] != args.latent_steps:
+            raise RuntimeError("Complete C0 rollout lacks required hidden states.")
+
+
+def load_or_collect(args, indexed_items, wrapper, logger):
+    expected = expected_manifest(args, indexed_items, wrapper)
+    trajectory_path, manifest_path = trajectory_paths(args)
+    have_pt, have_manifest = trajectory_path.exists(), manifest_path.exists()
+    if have_pt != have_manifest and not args.force_recollect:
+        raise RuntimeError(
+            f"Incomplete C0 trajectory cache; use --force_recollect: {trajectory_path}"
+        )
+    cache_hit = have_pt and have_manifest and not args.force_recollect
+    if cache_hit:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        differences = identity_differences(
+            {
+                "schema_version": expected["schema_version"],
+                "cache_identity": expected["cache_identity"],
+            },
+            {
+                "schema_version": manifest.get("schema_version"),
+                "cache_identity": manifest.get("cache_identity"),
+            },
+        )
+        if differences:
+            raise RuntimeError(
+                "Refusing incompatible C0 trajectory cache:\n"
+                + json.dumps(differences, indent=2, ensure_ascii=False, default=str)
+            )
+        actual_sha = file_sha256(trajectory_path)
+        if actual_sha != manifest.get("trajectory_sha256"):
+            raise RuntimeError("C0 trajectory SHA256 integrity check failed.")
+        logger.info("C0 Phase A skipped: reusing %s", trajectory_path)
+    else:
+        if args.reuse_trajectory:
+            raise FileNotFoundError(
+                f"--reuse_trajectory requested but cache is absent: {trajectory_path}"
+            )
+        records = collect(wrapper, indexed_items, args, logger)
+        trajectory = {
+            "schema_version": SCHEMA_VERSION,
+            "experiment": "c0",
+            "records": records,
+            "model_name": args.model_name,
+            "dataset": args.dataset,
+            "split": args.split,
+            "latent_steps": args.latent_steps,
+            "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+            "trajectory_is_complete": all(r["rollout_complete"] for r in records),
+        }
+        trajectory_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = trajectory_path.with_name(trajectory_path.name + ".tmp")
+        torch.save(trajectory, temporary)
+        temporary.replace(trajectory_path)
+        failed_questions_by_reason = {}
+        for record in records:
+            if record["failure_reason"]:
+                reason = record["failure_reason"]
+                failed_questions_by_reason[reason] = (
+                    failed_questions_by_reason.get(reason, 0) + 1
+                )
+        manifest = {
+            **expected,
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "trajectory_sha256": file_sha256(trajectory_path),
+            "question_count": len(records),
+            "complete_question_count": sum(r["rollout_complete"] for r in records),
+            "failed_question_count": sum(not r["rollout_complete"] for r in records),
+            "failed_questions_by_reason": failed_questions_by_reason,
+        }
+        write_json(manifest_path, manifest)
+        logger.info("C0 Phase A saved %d questions to %s", len(records), trajectory_path)
+    trajectory = torch.load(trajectory_path, map_location="cpu", weights_only=True)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    validate_trajectory(trajectory, manifest, args)
+    return trajectory_path, manifest_path, trajectory, manifest, cache_hit
+
+
+@torch.inference_mode()
+def entropy_rows(trajectory, wrapper, args, logger):
+    output_head = wrapper.model.get_output_embeddings()
+    if output_head is None or not hasattr(output_head, "weight"):
+        raise RuntimeError("C0 requires an accessible model output embedding.")
+    output_weight = output_head.weight.detach().float()
+    output_bias = getattr(output_head, "bias", None)
+    output_bias = None if output_bias is None else output_bias.detach().float()
+    rows = []
+    for number, record in enumerate(trajectory["records"], start=1):
+        hidden = record["hidden_states"]
+        entropies = []
+        entropy_failure = None
+        for start in range(0, len(hidden), args.entropy_chunk_size):
+            if entropy_failure:
+                break
+            stop = min(start + args.entropy_chunk_size, len(hidden))
+            try:
+                logits = torch.nn.functional.linear(
+                    hidden[start:stop].to(wrapper.device, dtype=torch.float32),
+                    output_weight,
+                    output_bias,
+                )
+                log_probabilities = torch.log_softmax(logits, dim=-1)
+                values = -(log_probabilities.exp() * log_probabilities).sum(dim=-1)
+                entropies.extend(values.detach().cpu().tolist())
+            except Exception as error:
+                entropy_failure = f"{type(error).__name__}: {error}"
+        stopped_reason = None
+        for step in range(args.latent_steps):
+            entropy = None
+            finite = False
+            failure_reason = None
+            if stopped_reason is not None:
+                failure_reason = stopped_reason
+            elif step < len(entropies):
+                value = float(entropies[step])
+                if np.isfinite(value):
+                    entropy = value
+                    finite = True
+                else:
+                    stopped_reason = "non_finite_entropy"
+                    failure_reason = stopped_reason
+            else:
+                failure_reason = (
+                    entropy_failure
+                    or record.get("failure_reason")
+                    or "missing_hidden_state"
+                )
+            rows.append(
+                {
+                    "item_id": int(record["item_id"]),
+                    "step": int(step),
+                    "entropy_nats": entropy,
+                    "finite": finite,
+                    "failure_reason": failure_reason,
+                }
+            )
+        logger.info(
+            "C0 Phase B: question %d/%d (item_id=%d) processed.",
+            number,
+            len(trajectory["records"]),
+            record["item_id"],
+        )
+    return rows
+
+
+def bootstrap_interval(values, replicates, seed):
+    values = np.asarray(values, dtype=np.float64)
+    if not len(values):
+        return None, None
+    rng = np.random.default_rng(seed)
+    indices = rng.integers(0, len(values), size=(replicates, len(values)))
+    means = values[indices].mean(axis=1)
+    return float(np.quantile(means, 0.025)), float(np.quantile(means, 0.975))
+
+
+def summarize(rows, args):
+    steps = []
+    for step in range(args.latent_steps):
+        step_rows = [row for row in rows if row["step"] == step]
+        values = [row["entropy_nats"] for row in step_rows if row["finite"]]
+        low, high = bootstrap_interval(
+            values, args.bootstrap_replicates, args.probe_seed + step
+        )
+        steps.append(
+            {
+                "step": step,
+                "n_questions": len(step_rows),
+                "n_valid_questions": len(values),
+                "n_failed_questions": len(step_rows) - len(values),
+                "mean": float(np.mean(values)) if values else None,
+                "median": float(np.median(values)) if values else None,
+                "ci95_low": low,
+                "ci95_high": high,
+            }
+        )
+    reasons = {}
+    for row in rows:
+        reason = row.get("failure_reason")
+        if reason:
+            reasons[reason] = reasons.get(reason, 0) + 1
+    return {
+        "study": "c0",
+        "metric": "pre_unembedding_output_entropy_nats",
+        "entropy_compute_dtype": "float32",
+        "interpretation_boundary": (
+            "Entropy only measures token-distribution sharpness; it does not "
+            "establish reasoning correctness, information content, or a unique thought."
+        ),
+        "total_questions": len({row["item_id"] for row in rows}),
+        "latent_steps": args.latent_steps,
+        "steps": steps,
+        "failure_rows_by_reason": reasons,
+    }
+
+
+def plot_summary(summary, path, context):
+    steps = summary["steps"]
+    x = np.array([row["step"] for row in steps])
+    mean = np.array([np.nan if row["mean"] is None else row["mean"] for row in steps])
+    median = np.array(
+        [np.nan if row["median"] is None else row["median"] for row in steps]
+    )
+    low = np.array(
+        [np.nan if row["ci95_low"] is None else row["ci95_low"] for row in steps]
+    )
+    high = np.array(
+        [np.nan if row["ci95_high"] is None else row["ci95_high"] for row in steps]
+    )
+    figure, axis = plt.subplots(figsize=(8, 5))
+    axis.plot(x, mean, label="Mean entropy", color="#1f77b4", linewidth=2)
+    axis.fill_between(x, low, high, color="#1f77b4", alpha=0.2, label="95% CI")
+    axis.plot(x, median, label="Median entropy", color="#ff7f0e", linestyle="--")
+    axis.set_xlabel("Latent step")
+    axis.set_ylabel("Output entropy (nats)")
+    axis.set_title("C0: output entropy across latent recurrence")
+    axis.grid(alpha=0.25)
+    axis.legend()
+    figure.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(path)
+    plt.close(figure)
+    write_json(path.with_suffix(".json"), context)
+
+
+def safe_name(value):
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", str(value)).strip("._-") or "unknown"
+
+
+def create_run_dir(args):
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    config = {**vars(args), "implementation_sha256": run_implementation_sha256()}
+    digest = hashlib.sha256(
+        json.dumps(config, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()[:8]
+    model_leaf = args.model_name.rsplit("/", 1)[-1].rsplit(chr(92), 1)[-1]
+    model = safe_name(model_leaf)
+    name = (
+        f"gsm8k_{safe_name(args.split)}_c0_{model}_k{args.latent_steps}_"
+        f"q{args.max_questions}_seed{args.probe_seed}_{timestamp}_{digest}"
+    )
+    path = RUNS_DIR / name
+    suffix = 1
+    while path.exists():
+        path = RUNS_DIR / f"{name}_{suffix:02d}"
+        suffix += 1
+    path.mkdir(parents=True)
+    return path
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    logger = configure_logger()
+    set_seed(args.probe_seed)
+    run_dir = create_run_dir(args)
+    run_manifest_path = run_dir / "run_manifest.json"
+    started = time.time()
+    run_manifest = {
+        "status": "running",
+        "study": "c0",
+        "run_directory": str(run_dir),
+        "started_at": datetime.now().isoformat(timespec="seconds"),
+        "args": vars(args),
+        "git_commit": git_commit(),
+        "implementation_sha256": run_implementation_sha256(),
+        "pytorch_version": torch.__version__,
+        "transformers_version": transformers.__version__,
+    }
+    write_json(run_manifest_path, run_manifest)
+    logger.info("C0 run directory: %s", run_dir)
+    try:
+        indexed_items = sampled_items(args)
+        wrapper = load_model(args)
+        trajectory_path, manifest_path, trajectory, cache_manifest, cache_hit = (
+            load_or_collect(args, indexed_items, wrapper, logger)
+        )
+        rows = entropy_rows(trajectory, wrapper, args, logger)
+        expected_row_count = len(trajectory["records"]) * args.latent_steps
+        if len(rows) != expected_row_count:
+            raise RuntimeError(
+                f"C0 row-count invariant failed: {len(rows)} != {expected_row_count}."
+            )
+        summary = summarize(rows, args)
+        metrics_path = run_dir / "metrics" / "c0_entropy_by_step.parquet"
+        summary_path = run_dir / "summaries" / "c0_summary.json"
+        figure_path = run_dir / "figures" / "c0_entropy_vs_step.pdf"
+        write_parquet(metrics_path, rows)
+        summary.update(
+            {
+                "trajectory": str(trajectory_path),
+                "trajectory_cache_hit": cache_hit,
+                "complete_rollout_question_count": cache_manifest[
+                    "complete_question_count"
+                ],
+                "failed_rollout_question_count": cache_manifest[
+                    "failed_question_count"
+                ],
+                "failed_rollout_questions_by_reason": cache_manifest[
+                    "failed_questions_by_reason"
+                ],
+                "model_name": args.model_name,
+                "model_revision": cache_manifest["cache_identity"]["model_fingerprint"][
+                    "resolved_commit"
+                ],
+                "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+                "tokenizer_fingerprint": cache_manifest["cache_identity"][
+                    "tokenizer_fingerprint"
+                ],
+                "output_embedding_has_bias": cache_manifest["provenance"][
+                    "output_embedding_has_bias"
+                ],
+            }
+        )
+        write_json(summary_path, summary)
+        context = {
+            "study": "c0",
+            "model_name": args.model_name,
+            "model_revision": summary["model_revision"],
+            "dataset": args.dataset,
+            "split": args.split,
+            "question_selection_seed": args.probe_seed,
+            "latent_steps": args.latent_steps,
+            "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+            "trajectory": str(trajectory_path),
+            "trajectory_manifest": str(manifest_path),
+            "trajectory_manifest_sha256": file_sha256(manifest_path),
+            "trajectory_cache_hit": cache_hit,
+            "metrics": str(metrics_path),
+            "summary": str(summary_path),
+        }
+        plot_summary(summary, figure_path, context)
+        valid_rows = sum(row["finite"] for row in rows)
+        run_manifest.update(
+            {
+                "status": "completed" if valid_rows else "failed",
+                "completed_at": datetime.now().isoformat(timespec="seconds"),
+                "elapsed_seconds": time.time() - started,
+                "trajectory_cache": {
+                    "cache_hit": cache_hit,
+                    "trajectory_file": str(trajectory_path),
+                    "manifest_file": str(manifest_path),
+                },
+                "model_revision": summary["model_revision"],
+                "tokenizer_fingerprint": summary["tokenizer_fingerprint"],
+                "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+                "prompt_template_sha256": prompt_template_sha256(),
+                "generation": {
+                    "do_sample": False,
+                    "decoding": "greedy",
+                    "text_generation_performed": False,
+                },
+                "output_embedding_has_bias": summary["output_embedding_has_bias"],
+                "row_count": len(rows),
+                "finite_row_count": valid_rows,
+                "artifacts": {
+                    "metrics": str(metrics_path),
+                    "summary": str(summary_path),
+                    "figure": str(figure_path),
+                },
+            }
+        )
+        write_json(run_manifest_path, run_manifest)
+        if not valid_rows:
+            raise RuntimeError("C0 produced no finite entropy observations.")
+        logger.info("C0 completed in %.1fs.", time.time() - started)
+    except Exception as error:
+        run_manifest.update(
+            {
+                "status": "failed",
+                "failed_at": datetime.now().isoformat(timespec="seconds"),
+                "elapsed_seconds": time.time() - started,
+                "error_type": type(error).__name__,
+                "error": str(error),
+            }
+        )
+        write_json(run_manifest_path, run_manifest)
+        logger.exception("C0 failed.")
+        raise
+
+
+if __name__ == "__main__":
+    main()

@@ -29,6 +29,7 @@ Usage:
 Options override the plan_v2 main-experiment defaults for the selected target:
   --study NAME              S0--S4, C0--C4, or M0--M4 study name
   --model-pair NAME         x1/x2 for operator/communication; c0/c1 for CoT
+  --model-name NAME         Single model used by latent_cot C0
   --agent-models "NAMES"    One or four space-separated models for approximator
   --dataset NAME --split NAME
   --method NAME             e.g. identical, linear, kernel, exact, all
@@ -47,6 +48,7 @@ M="${M:-}"; TAU="${TAU:-}"; PROBE_SEED="${PROBE_SEED:-}"
 MAX_QUESTIONS="${MAX_QUESTIONS:-}"; LATENT_STEPS="${LATENT_STEPS:-}"
 DEVICE="${DEVICE:-}"; EXP_EXTRA_ARGS="${EXP_EXTRA_ARGS:-}"
 AGENT_MODELS="${AGENT_MODELS:-}"
+MODEL_NAME="${MODEL_NAME:-}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -56,6 +58,7 @@ while [[ $# -gt 0 ]]; do
         --study) STUDY="$2"; shift 2 ;;
         --model-pair) MODEL_PAIR="$2"; shift 2 ;;
         --agent-models) AGENT_MODELS="$2"; shift 2 ;;
+        --model-name) MODEL_NAME="$2"; shift 2 ;;
         --dataset) DATASET="$2"; shift 2 ;;
         --split) SPLIT="$2"; shift 2 ;;
         --method) METHOD="$2"; shift 2 ;;
@@ -116,9 +119,9 @@ case "${EXP_TARGET}" in
     latent_cot)
         STUDY="${STUDY:-c0}"; MODEL_PAIR="${MODEL_PAIR:-c0}"
         DATASET="${DATASET:-gsm8k}"; SPLIT="${SPLIT:-test}"
-        METHOD="${METHOD:-all}"; MAX_QUESTIONS="${MAX_QUESTIONS:-512}"
-        LATENT_STEPS="${LATENT_STEPS:-16}"; ENTRY="exp/latent_cot/run.py"
-        ARGS=(--study "${STUDY}" --model_pair "${MODEL_PAIR}" --dataset "${DATASET}" --split "${SPLIT}" --method "${METHOD}" --orf_seed "${ORF_SEED}" --m "${M}" --tau "${TAU}" --latent_steps "${LATENT_STEPS}" --generation_seed "${GENERATION_SEED}" --device "${DEVICE}")
+        MAX_QUESTIONS="${MAX_QUESTIONS:-512}"; MODEL_NAME="${MODEL_NAME:-Qwen/Qwen3-4B}"
+        LATENT_STEPS="${LATENT_STEPS:-50}"; ENTRY="exp/latent_cot/run.py"
+        ARGS=(--study "${STUDY}" --model_name "${MODEL_NAME}" --dataset "${DATASET}" --split "${SPLIT}" --probe_seed "${PROBE_SEED}" --max_questions "${MAX_QUESTIONS}" --latent_steps "${LATENT_STEPS}" --device "${DEVICE}")
         ;;
     latent_comm)
         STUDY="${STUDY:-m0}"; MODEL_PAIR="${MODEL_PAIR:-x1}"

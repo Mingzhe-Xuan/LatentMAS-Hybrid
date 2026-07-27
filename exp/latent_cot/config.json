@@ -1,0 +1,11 @@
+{
+  "study": "c0",
+  "model_name": "Qwen/Qwen3-4B",
+  "dataset": "gsm8k",
+  "split": "test",
+  "max_questions": 512,
+  "latent_steps": 50,
+  "probe_seed": 42,
+  "bootstrap_replicates": 1000,
+  "entropy_chunk_size": 8
+}
