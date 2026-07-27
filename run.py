@@ -9,7 +9,7 @@ os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 from tqdm import tqdm
 
@@ -53,6 +53,22 @@ def evaluate(preds: List[Dict]) -> Tuple[float, int]:
     correct = sum(1 for p in preds if p.get("correct", False))
     acc = correct / total if total > 0 else 0.0
     return acc, correct
+
+
+def count_output_tokens(preds: List[Dict], tokenizer: Any) -> int:
+    """Count visible agent-output tokens, excluding prompts and latent states."""
+    outputs = [
+        output
+        for pred in preds
+        for agent in pred.get("agents", [])
+        if isinstance((output := agent.get("output")), str) and output
+    ]
+    if not outputs:
+        return 0
+
+    encoded = tokenizer(outputs, add_special_tokens=False)
+    return sum(len(token_ids) for token_ids in encoded["input_ids"])
+
 
 def configure_run_files(args: argparse.Namespace) -> Tuple[logging.Logger, Path]:
     """Create per-run detail and summary output files."""
@@ -352,6 +368,7 @@ def main():
     total_time = time.time() - start_time
 
     acc, correct = evaluate(preds)
+    output_tokens = count_output_tokens(preds, model.tokenizer)
     
     summary = {
         "run": {
@@ -367,6 +384,7 @@ def main():
             "processed": processed,
             "correct": correct,
             "accuracy": round(acc, 6),
+            "output_tokens": output_tokens,
         },
         "timing": {
             "total_seconds": round(total_time, 4),

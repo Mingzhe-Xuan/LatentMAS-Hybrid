@@ -104,7 +104,7 @@ GENERATION_SEED="${GENERATION_SEED:-77}"
 # submission per cell; these select its first primary cell for each layer.
 case "${EXP_TARGET}" in
     approximator)
-        STUDY="${STUDY:-s0}"; MODEL_PAIR="${MODEL_PAIR:-x1}"
+        STUDY="${STUDY:-all}"; MODEL_PAIR="${MODEL_PAIR:-x1}"
         DATASET="${DATASET:-arc_easy}"; SPLIT="${SPLIT:-test}"
         METHOD="${METHOD:-kernel}"; MAX_QUESTIONS="${MAX_QUESTIONS:-50}"
         LATENT_STEPS="${LATENT_STEPS:-50}"
@@ -152,9 +152,7 @@ if [[ ! -f "${ENTRY}" ]]; then
     echo "ERROR: ${ENTRY} does not exist yet; no experiment was launched."
     exit 2
 fi
-EXP_RESULT_DIR="${EXP_RESULT_DIR:-exp_result/${EXP_TARGET}}"
-mkdir -p "${EXP_RESULT_DIR}"
-LOG="${EXP_RESULT_DIR}/exp_state.txt"
+LOG="${EXP_STATE_LOG:-${PBS_O_WORKDIR:-$(pwd)}/exp_state.txt}"
 echo "[$(date --iso-8601=seconds)] PBS job ${PBS_JOBID:-interactive}: python3 ${ENTRY} ${ARGS[*]} ${EXTRA[*]}" >> "${LOG}"
 python3 "${ENTRY}" "${ARGS[@]}" "${EXTRA[@]}" >> "${LOG}" 2>&1
 echo "Completed successfully; progress and output appended to: ${LOG}"

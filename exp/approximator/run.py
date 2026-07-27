@@ -20,7 +20,7 @@ from typing import Any, Dict, Iterable, List, Tuple
 import numpy as np
 import torch
 import transformers
-from transformers import AutoTokenizer
+from transformers import AutoConfig, AutoTokenizer
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -49,6 +49,19 @@ RUNS_DIR = OUTPUT_ROOT / "runs"
 RESULT = OUTPUT_ROOT
 ROLES = ("planner", "critic", "refiner", "judger")
 MAPPING_CACHE_SCHEMA = 1
+TRAJECTORY_CACHE_SCHEMA = 2
+ANALYSIS_STATE_LIMITS = {
+    "previous_kv_prompt_hidden": 10,
+    "new_prompt_hidden": 10,
+    "latent_reply_hidden": 20,
+    "text_reply_hidden": 20,
+}
+STATE_KIND_OFFSETS = {
+    "previous_kv_prompt_hidden": 10_000,
+    "new_prompt_hidden": 20_000,
+    "latent_reply_hidden": 30_000,
+    "text_reply_hidden": 40_000,
+}
 
 
 @dataclass
@@ -65,6 +78,34 @@ class State:
     @property
     def source(self):
         return f"{self.role}_{self.state_kind}"
+
+
+def sample_analysis_states(states, args):
+    """Sample probes from a complete trajectory without mutating its cache."""
+    grouped = {}
+    for state in states:
+        key = (state.item_id, state.agent_id, state.state_kind)
+        grouped.setdefault(key, []).append(state)
+    sampled = []
+    for (item_id, agent_id, state_kind), candidates in grouped.items():
+        limit = min(
+            ANALYSIS_STATE_LIMITS.get(
+                state_kind, args.max_states_per_question
+            ),
+            args.max_states_per_question,
+        )
+        if len(candidates) <= limit:
+            sampled.extend(candidates)
+            continue
+        seed = (
+            args.probe_seed
+            + item_id
+            + agent_id
+            + STATE_KIND_OFFSETS.get(state_kind, 50_000)
+        )
+        chosen = random.Random(seed).sample(range(len(candidates)), limit)
+        sampled.extend(candidates[index] for index in sorted(chosen))
+    return sampled
 
 
 def configure_logger():
@@ -196,7 +237,12 @@ def parse_args(argv=None):
     )
     parser.add_argument("--split", default="test")
     parser.add_argument("--max_questions", type=int, default=10)
-    parser.add_argument("--max_states_per_question", type=int, default=20)
+    parser.add_argument(
+        "--max_states_per_question",
+        type=int,
+        default=20,
+        help="Phase-B probe cap per question/role/state kind; cache stays complete.",
+    )
     parser.add_argument("--probe_seed", type=int, default=42)
     parser.add_argument(
         "--study", choices=["s0", "s1", "s2", "s3", "s4", "all"], default="all"
@@ -293,6 +339,25 @@ def tokenizer_fingerprint(model_name, trust_remote_code):
     ).hexdigest()
 
 
+def model_source_fingerprint(model_name, trust_remote_code):
+    config = AutoConfig.from_pretrained(
+        model_name,
+        token=False,
+        trust_remote_code=trust_remote_code,
+    )
+    payload = config.to_dict()
+    for runtime_field in ("transformers_version", "_commit_hash", "_name_or_path"):
+        payload.pop(runtime_field, None)
+    return {
+        "resolved_commit": getattr(config, "_commit_hash", None),
+        "config_sha256": hashlib.sha256(
+            json.dumps(
+                payload, sort_keys=True, ensure_ascii=False, default=str
+            ).encode("utf-8")
+        ).hexdigest(),
+    }
+
+
 def files_fingerprint(paths):
     digest = hashlib.sha256()
     for path in paths:
@@ -318,7 +383,6 @@ def trajectory_cache_stem(args):
             f"p={cache_component(args.prompt)}",
             f"q={args.max_questions}",
             f"ps={args.probe_seed}",
-            f"cap={args.max_states_per_question}",
             f"lat={args.latent_steps}",
             f"t={repr(args.temperature)}",
             f"tp={repr(args.top_p)}",
@@ -380,8 +444,11 @@ def expected_manifest(args, indexed_items):
         name: tokenizer_fingerprint(name, args.trust_remote_code)
         for name in dict.fromkeys(args.agent_models)
     }
-    return {
-        "schema_version": 1,
+    model_sources = {
+        name: model_source_fingerprint(name, args.trust_remote_code)
+        for name in dict.fromkeys(args.agent_models)
+    }
+    cache_identity = {
         "dataset": args.dataset,
         "split": args.split,
         "question_ids": [item_id for item_id, _ in indexed_items],
@@ -390,17 +457,14 @@ def expected_manifest(args, indexed_items):
                 indexed_items, sort_keys=True, ensure_ascii=False, default=str
             ).encode("utf-8")
         ).hexdigest(),
-        "max_questions": args.max_questions,
-        "max_states_per_question": args.max_states_per_question,
         "agent_models": list(args.agent_models),
         "role_mapping": dict(zip(ROLES, args.agent_models)),
         "tokenizer_fingerprint": fingerprints,
+        "model_source_fingerprint": model_sources,
         "generation_config": generation_config(args),
         "alignment_config": alignment_config(args),
-        "probe_seed": args.probe_seed,
-        "pytorch_version": torch.__version__,
-        "transformers_version": transformers.__version__,
-        "git_commit": git_commit(),
+        "generation_and_question_seed": args.probe_seed,
+        "trust_remote_code": bool(args.trust_remote_code),
         "trajectory_implementation_sha256": files_fingerprint(
             (
                 ROOT / "alignment.py",
@@ -411,14 +475,33 @@ def expected_manifest(args, indexed_items):
             )
         ),
     }
+    return {
+        "schema_version": TRAJECTORY_CACHE_SCHEMA,
+        "cache_identity": cache_identity,
+        "provenance": {
+            "git_commit": git_commit(),
+            "pytorch_version": torch.__version__,
+            "transformers_version": transformers.__version__,
+        },
+    }
 
 
 def write_json(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(
         json.dumps(payload, indent=2, ensure_ascii=False, default=str) + "\n",
         encoding="utf-8",
     )
+    temporary.replace(path)
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def manifest_differences(expected, actual, prefix=""):
@@ -443,6 +526,58 @@ def manifest_differences(expected, actual, prefix=""):
     return output
 
 
+def validate_trajectory(trajectory, manifest):
+    required = {
+        "states",
+        "questions",
+        "agent_models",
+        "generation_config",
+        "alignment_config",
+    }
+    missing = sorted(required - set(trajectory))
+    if missing:
+        raise RuntimeError(f"Trajectory is missing required fields: {missing}")
+    if trajectory.get("schema_version") != TRAJECTORY_CACHE_SCHEMA:
+        raise RuntimeError("Trajectory schema does not match its cache reader.")
+    if trajectory.get("trajectory_is_complete") is not True:
+        raise RuntimeError("Trajectory is not marked as a complete trajectory.")
+    if len(trajectory["states"]) != manifest.get("state_count"):
+        raise RuntimeError("Trajectory state count does not match its manifest.")
+    if len(trajectory["questions"]) != manifest.get("question_count"):
+        raise RuntimeError("Trajectory question count does not match its manifest.")
+    state_fields = {
+        "item_id",
+        "role",
+        "agent_id",
+        "turn_id",
+        "state_kind",
+        "position",
+        "vector",
+        "model_name",
+    }
+    state_counts = {}
+    for index, state in enumerate(trajectory["states"]):
+        if not state_fields.issubset(state):
+            raise RuntimeError(f"Trajectory state {index} has an incomplete schema.")
+        vector = state["vector"]
+        if (
+            not isinstance(vector, torch.Tensor)
+            or vector.device.type != "cpu"
+            or vector.dtype != torch.float32
+            or vector.ndim != 1
+        ):
+            raise RuntimeError(f"Trajectory state {index} has an invalid vector.")
+        key = f"{state['role']}.{state['state_kind']}"
+        state_counts[key] = state_counts.get(key, 0) + 1
+    if state_counts != manifest.get("state_counts_by_role_and_kind"):
+        raise RuntimeError("Trajectory state categories do not match its manifest.")
+    for question in trajectory["questions"]:
+        if len(question.get("roles", [])) != len(ROLES):
+            raise RuntimeError(
+                f"Question {question.get('item_id')} lacks four-role audit records."
+            )
+
+
 def load_or_collect_trajectory(args, indexed_items, logger):
     expected = expected_manifest(args, indexed_items)
     trajectory_path, manifest_path = trajectory_paths(args)
@@ -458,11 +593,27 @@ def load_or_collect_trajectory(args, indexed_items, logger):
     cache_hit = False
     if have_cache and not args.force_recollect:
         actual = json.loads(manifest_path.read_text(encoding="utf-8"))
-        differences = manifest_differences(expected, actual)
+        differences = manifest_differences(
+            {
+                "schema_version": expected["schema_version"],
+                "cache_identity": expected["cache_identity"],
+            },
+            {
+                "schema_version": actual.get("schema_version"),
+                "cache_identity": actual.get("cache_identity"),
+            },
+        )
         if differences:
             raise RuntimeError(
                 "Refusing to reuse incompatible trajectory manifest. Differences:\n"
                 + json.dumps(differences, indent=2, ensure_ascii=False, default=str)
+            )
+        expected_sha256 = actual.get("trajectory_sha256")
+        actual_sha256 = file_sha256(trajectory_path)
+        if not expected_sha256 or expected_sha256 != actual_sha256:
+            raise RuntimeError(
+                "Trajectory file integrity check failed: "
+                f"expected={expected_sha256!r}, actual={actual_sha256!r}"
             )
         logger.info("Phase A skipped: reusing %s", trajectory_path)
         cache_hit = True
@@ -475,22 +626,42 @@ def load_or_collect_trajectory(args, indexed_items, logger):
         method = load_hybrid(args)
         states, questions = collect(method, indexed_items, args, logger)
         trajectory_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = trajectory_path.with_name(trajectory_path.name + ".tmp")
         torch.save(
             {
+                "schema_version": TRAJECTORY_CACHE_SCHEMA,
                 "states": states,
                 "questions": questions,
                 "agent_models": list(args.agent_models),
                 "generation_config": generation_config(args),
                 "alignment_config": alignment_config(args),
+                "trajectory_is_complete": True,
+                "audit_schema_version": 1,
             },
-            trajectory_path,
+            temporary_path,
         )
+        temporary_path.replace(trajectory_path)
+        trajectory_sha256 = file_sha256(trajectory_path)
+        state_counts = {}
+        for state in states:
+            key = f"{state['role']}.{state['state_kind']}"
+            state_counts[key] = state_counts.get(key, 0) + 1
         write_json(
             manifest_path,
-            {**expected, "generated_at": datetime.now().isoformat(timespec="seconds")},
+            {
+                **expected,
+                "generated_at": datetime.now().isoformat(timespec="seconds"),
+                "trajectory_sha256": trajectory_sha256,
+                "state_count": len(states),
+                "state_counts_by_role_and_kind": state_counts,
+                "question_count": len(questions),
+                "trajectory_is_complete": True,
+            },
         )
         logger.info("Phase A: saved %d states to %s", len(states), trajectory_path)
     trajectory = torch.load(trajectory_path, map_location="cpu", weights_only=True)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    validate_trajectory(trajectory, manifest)
     return trajectory_path, trajectory, method, cache_hit
 
 
@@ -838,7 +1009,8 @@ def s3_summaries(rows, args, metadata):
 
 
 def run_phase_b(path, trajectory, method, args, logger):
-    all_states = [State(**record) for record in trajectory["states"]]
+    complete_states = [State(**record) for record in trajectory["states"]]
+    all_states = sample_analysis_states(complete_states, args)
     analysis_states = [
         state
         for state in all_states
@@ -846,7 +1018,12 @@ def run_phase_b(path, trajectory, method, args, logger):
     ]
     if not analysis_states:
         raise RuntimeError("No Refiner latent_reply_hidden states in trajectory.")
-    logger.info("Phase B: %d saved Refiner latent reply states.", len(analysis_states))
+    logger.info(
+        "Phase B: sampled %d/%d complete states; %d Refiner latent reply states.",
+        len(all_states),
+        len(complete_states),
+        len(analysis_states),
+    )
     if method is None:
         method = load_hybrid(args)
     refiner = method.models[args.agent_models[2]]
@@ -878,7 +1055,8 @@ def run_phase_b(path, trajectory, method, args, logger):
             **metadata,
             "study": args.study,
             "analysis_state_count": len(analysis_states),
-            "complete_trajectory_state_count": len(all_states),
+            "sampled_trajectory_state_count": len(all_states),
+            "complete_trajectory_state_count": len(complete_states),
         },
     )
     logger.info(
@@ -1011,7 +1189,8 @@ def run_phase_b(path, trajectory, method, args, logger):
     return {
         "mapping_cache": mapping_cache_info,
         "analysis_state_count": len(analysis_states),
-        "complete_trajectory_state_count": len(all_states),
+        "sampled_trajectory_state_count": len(all_states),
+        "complete_trajectory_state_count": len(complete_states),
     }
 
 

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import argparse
-import random
 from collections import defaultdict
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+import hashlib
+import json
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 
@@ -14,19 +15,6 @@ from methods.latent_mas_hybrid import LatentMASMethod, transfer_via_realignment
 from models import ModelWrapper, _past_length
 from prompts import build_agent_message_sequential_latent_mas
 
-
-STATE_LIMITS = {
-    "previous_kv_prompt_hidden": 10,
-    "new_prompt_hidden": 10,
-    "latent_reply_hidden": 20,
-    "text_reply_hidden": 20,
-}
-STATE_KIND_OFFSETS = {
-    "previous_kv_prompt_hidden": 10_000,
-    "new_prompt_hidden": 20_000,
-    "latent_reply_hidden": 30_000,
-    "text_reply_hidden": 40_000,
-}
 
 
 def _cpu_vector(vector: torch.Tensor) -> torch.Tensor:
@@ -55,22 +43,9 @@ def _state(
     }
 
 
-def _sample_candidates(
-    candidates: Iterable[Dict[str, Any]],
-    *,
-    item_id: int,
-    agent_id: int,
-    state_kind: str,
-    probe_seed: int,
-    max_states_per_question: int,
-) -> List[Dict[str, Any]]:
-    candidates = list(candidates)
-    limit = min(STATE_LIMITS[state_kind], max_states_per_question)
-    if len(candidates) <= limit:
-        return candidates
-    seed = probe_seed + item_id + agent_id + STATE_KIND_OFFSETS[state_kind]
-    chosen = random.Random(seed).sample(range(len(candidates)), limit)
-    return [candidates[index] for index in sorted(chosen)]
+def _json_safe(value: Any) -> Any:
+    """Make dataset/prompt provenance safe for torch weights-only loading."""
+    return json.loads(json.dumps(value, ensure_ascii=False, default=str))
 
 
 def _attention_with_past(mask: torch.Tensor, past: Optional[Tuple]) -> torch.Tensor:
@@ -207,7 +182,12 @@ def _sample_judger(
             return_dict=True,
         )
         reply_hidden.append(final.hidden_states[-1][0, -1, :])
-    return prompt_hidden, reply_hidden[: len(generated_ids)], generated_ids
+    if len(reply_hidden) != len(generated_ids):
+        raise RuntimeError(
+            "Judger audit mismatch: "
+            f"{len(generated_ids)} sampled tokens but {len(reply_hidden)} hidden states."
+        )
+    return prompt_hidden, reply_hidden, generated_ids
 
 
 @torch.inference_mode()
@@ -288,7 +268,19 @@ def collect(
             item_id,
         )
         question = item["question"]
-        question_records.append({"item_id": item_id, "question": question})
+        source_record = _json_safe(item)
+        question_record = {
+            "item_id": int(item_id),
+            "question": question,
+            "source_record": source_record,
+            "source_record_sha256": hashlib.sha256(
+                json.dumps(
+                    source_record, sort_keys=True, ensure_ascii=False
+                ).encode("utf-8")
+            ).hexdigest(),
+            "roles": [],
+        }
+        question_records.append(question_record)
         past = None
         current_model_name: Optional[str] = None
         cumulative_prompts = ""
@@ -310,6 +302,7 @@ def collect(
                     cumulative_prompts=cumulative_prompts,
                     cumulative_latent_hiddens=cumulative_latent_hiddens,
                 )
+            cache_length_before_prompt = _past_length(past)
 
             candidates: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
             if current_model_name is not None:
@@ -347,6 +340,19 @@ def collect(
             )
             input_ids = encoded["input_ids"].to(wrapper.device)
             attention_mask = encoded["attention_mask"].to(wrapper.device)
+            role_record = {
+                "agent_id": int(agent_id),
+                "role": agent.role,
+                "model_name": model_name,
+                "model_switched": bool(switched),
+                "previous_model_name": current_model_name,
+                "kv_length_before_prompt": int(cache_length_before_prompt),
+                "messages": _json_safe(messages),
+                "rendered_prompt": prompt,
+                "prompt_token_ids": input_ids[0].detach().cpu().tolist(),
+                "prompt_attention_mask": attention_mask[0].detach().cpu().tolist(),
+                "prompt_token_count": int(attention_mask.sum().item()),
+            }
 
             if agent.role != "judger":
                 past, new_prompt_hidden, latent_hidden = _latent_rollout(
@@ -374,6 +380,13 @@ def collect(
                     cumulative_latent_hiddens = torch.cat(
                         [cumulative_latent_hiddens, latent_hidden], dim=0
                     )
+                role_record.update(
+                    {
+                        "reply_kind": "latent",
+                        "latent_step_count": int(latent_hidden.shape[0]),
+                        "kv_length_after_reply": int(_past_length(past)),
+                    }
+                )
             else:
                 new_prompt_hidden, text_hidden, generated_ids = _sample_judger(
                     wrapper, input_ids, attention_mask, past, args
@@ -395,6 +408,22 @@ def collect(
                     item_id,
                     len(generated_ids),
                 )
+                role_record.update(
+                    {
+                        "reply_kind": "text",
+                        "generated_token_ids": [int(token) for token in generated_ids],
+                        "generated_tokens": wrapper.tokenizer.convert_ids_to_tokens(
+                            generated_ids
+                        ),
+                        "generated_text": wrapper.tokenizer.decode(
+                            generated_ids, skip_special_tokens=False
+                        ),
+                        "generated_text_skip_special_tokens": wrapper.tokenizer.decode(
+                            generated_ids, skip_special_tokens=True
+                        ),
+                        "generated_token_count": len(generated_ids),
+                    }
+                )
 
             for position, vector in enumerate(new_prompt_hidden):
                 candidates["new_prompt_hidden"].append(
@@ -409,17 +438,13 @@ def collect(
                     )
                 )
 
-            for state_kind, state_candidates in candidates.items():
-                saved_states.extend(
-                    _sample_candidates(
-                        state_candidates,
-                        item_id=item_id,
-                        agent_id=agent_id,
-                        state_kind=state_kind,
-                        probe_seed=args.probe_seed,
-                        max_states_per_question=args.max_states_per_question,
-                    )
-                )
+            for state_candidates in candidates.values():
+                saved_states.extend(state_candidates)
+            role_record["saved_state_counts"] = {
+                state_kind: len(state_candidates)
+                for state_kind, state_candidates in candidates.items()
+            }
+            question_record["roles"].append(role_record)
 
             # These are the real prompt hiddens represented by the current cache.
             previous_prompt_hidden = (
@@ -434,7 +459,7 @@ def collect(
             current_model_name = model_name
 
         logger.info(
-            "Phase A: question %d/%d completed; %d sampled states total.",
+            "Phase A: question %d/%d completed; %d complete states total.",
             question_number,
             len(indexed_items),
             len(saved_states),
