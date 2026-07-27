@@ -1,9 +1,10 @@
 import os
 import csv
+import time
 import torch
 import matplotlib.pyplot as plt
 from typing import Dict, List, Optional, Tuple
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, LogitsProcessorList
 from alignment import AlignmentState, apply_alignment, build_kernel_state, build_linear_state
 
 try:
@@ -19,11 +20,9 @@ def _ensure_pad_token(tokenizer: AutoTokenizer) -> None:
             tokenizer.pad_token = tokenizer.eos_token
         else:
             tokenizer.add_special_tokens({"pad_token": "<pad>"})
-    # ``generate_text_batch`` currently removes each prompt using its unpadded
-    # length.  With left padding that boundary falls inside the padded prompt
-    # width, causing the prompt suffix to be decoded as generated text.  Keep
-    # right padding until that decoder boundary is changed to the batch width.
-    tokenizer.padding_side = "right"
+    # Decoder-only batch generation and latent rollout read the final sequence
+    # position, so every row must end at its final non-padding token.
+    tokenizer.padding_side = "left"
 
 
 def _past_length(past_key_values: Optional[Tuple]) -> int:
@@ -31,6 +30,96 @@ def _past_length(past_key_values: Optional[Tuple]) -> int:
         return 0
     k = past_key_values[0][0]
     return k.shape[-2]
+
+
+def _sync_cuda(device) -> None:
+    """Synchronize only the CUDA device used by the measured model stage."""
+    resolved = torch.device(device)
+    if resolved.type == "cuda" and torch.cuda.is_available():
+        torch.cuda.synchronize(resolved)
+
+
+class _FirstTokenTimer:
+    """Transformers logits processor used to mark the end of prefill."""
+
+    def __init__(self, device, started_at: float) -> None:
+        self.device = device
+        self.started_at = started_at
+        self.first_token_at: Optional[float] = None
+
+    def __call__(self, input_ids: torch.Tensor, scores: torch.Tensor) -> torch.Tensor:
+        if self.first_token_at is None:
+            _sync_cuda(self.device)
+            self.first_token_at = time.perf_counter()
+        return scores
+
+
+def _completion_token_ids(
+    sequences: torch.Tensor,
+    prompt_width: int,
+    eos_token_id,
+) -> List[List[int]]:
+    """Return generated IDs, including the first EOS and excluding later padding."""
+    eos_ids = (
+        {int(eos_token_id)}
+        if isinstance(eos_token_id, int)
+        else {int(value) for value in (eos_token_id or [])}
+    )
+    completions: List[List[int]] = []
+    for row in sequences[:, prompt_width:].tolist():
+        trimmed: List[int] = []
+        for token_id in row:
+            trimmed.append(int(token_id))
+            if int(token_id) in eos_ids:
+                break
+        completions.append(trimmed)
+    return completions
+
+
+def _vllm_phase_split(outputs, wall_seconds: float) -> Tuple[float, float]:
+    """Split vLLM wall time using request TTFT/decode ratios when available."""
+    prefill = 0.0
+    decode = 0.0
+    for output in outputs:
+        metrics = getattr(output, "metrics", None)
+        arrival = getattr(metrics, "arrival_time", None)
+        first = getattr(metrics, "first_token_time", None)
+        finished = getattr(metrics, "finished_time", None)
+        if arrival is not None and first is not None and finished is not None:
+            prefill += max(0.0, float(first) - float(arrival))
+            decode += max(0.0, float(finished) - float(first))
+    measured = prefill + decode
+    if measured <= 0:
+        return wall_seconds, 0.0
+    prefill_seconds = wall_seconds * prefill / measured
+    return prefill_seconds, max(0.0, wall_seconds - prefill_seconds)
+
+
+class _AlignmentTimer:
+    """Accumulate alignment time without synchronizing after every latent step."""
+
+    def __init__(self, device) -> None:
+        self.device = torch.device(device)
+        self.cpu_seconds = 0.0
+        self.events = []
+
+    def measure(self, callback):
+        if self.device.type == "cuda" and torch.cuda.is_available():
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
+            value = callback()
+            end.record()
+            self.events.append((start, end))
+            return value
+        started_at = time.perf_counter()
+        value = callback()
+        self.cpu_seconds += time.perf_counter() - started_at
+        return value
+
+    def seconds(self) -> float:
+        gpu_seconds = sum(start.elapsed_time(end) for start, end in self.events) / 1000.0
+        return self.cpu_seconds + gpu_seconds
 
 
 class ModelWrapper:
@@ -44,22 +133,24 @@ class ModelWrapper:
         self.align_method = getattr(args, "align_method", None) or ("linear" if legacy_realign else "identical")
         self._alignment_states: Dict[Tuple[int, int, str], AlignmentState] = {}
         self.args = args
+        self.last_generation_metrics = {}
+        self.last_latent_metrics = {}
 
         # for ablation
         self.pre_aligned = None
 
         if self.use_vllm:
-            
+
             tp_size = max(1, int(getattr(args, "tensor_parallel_size", 1)))
             gpu_util = float(getattr(args, "gpu_memory_utilization", 0.9))
-            
+
             print(f"[vLLM] Using vLLM backend for model {model_name}")
-            if args.enable_prefix_caching and args.method == "latent_mas": 
+            if args.enable_prefix_caching and args.method == "latent_mas":
                 self.vllm_engine = LLM(model=model_name, tensor_parallel_size=tp_size, gpu_memory_utilization=gpu_util, enable_prefix_caching=True, enable_prompt_embeds=True, trust_remote_code=self.trust_remote_code)
             else:
                 self.vllm_engine = LLM(model=model_name, tensor_parallel_size=tp_size, gpu_memory_utilization=gpu_util, trust_remote_code=self.trust_remote_code)
             self.tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True, token=False, trust_remote_code=self.trust_remote_code)
-            
+
             use_second_hf = bool(getattr(args, "use_second_HF_model", False)) if args else False
             if use_second_hf:
                 self.HF_model = AutoModelForCausalLM.from_pretrained(
@@ -67,7 +158,7 @@ class ModelWrapper:
                     dtype=(torch.bfloat16 if torch.cuda.is_available() else torch.float32),
                     token=False,
                     trust_remote_code=self.trust_remote_code,
-                ).to(args.device2).eval() 
+                ).to(args.device2).eval()
                 self.embedding_layer = self.HF_model.get_input_embeddings()
                 self.HF_device = args.device2
                 self._ensure_alignment_state(self.HF_model, self.HF_model)
@@ -161,10 +252,21 @@ class ModelWrapper:
             top_p=top_p,
             max_tokens=max_new_tokens,
         )
+        _sync_cuda(self.device)
+        started_at = time.perf_counter()
         outputs = self.vllm_engine.generate(prompts, sampling_params)
+        _sync_cuda(self.device)
+        wall_seconds = time.perf_counter() - started_at
         generations = [out.outputs[0].text.strip() for out in outputs]
+        prefill_seconds, decode_seconds = _vllm_phase_split(outputs, wall_seconds)
+        self.last_generation_metrics = {
+            "prefill_seconds": prefill_seconds,
+            "text_decode_seconds": decode_seconds,
+            "output_token_counts": [len(out.outputs[0].token_ids) for out in outputs],
+            "timing_source": "vllm_request_metrics",
+        }
         return generations
-    
+
     @staticmethod
     def _embedding_weights(source_model, target_model) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         input_embeds = target_model.get_input_embeddings() if hasattr(target_model, "get_input_embeddings") else None
@@ -231,7 +333,6 @@ class ModelWrapper:
             raise ValueError("input_ids must be 2D with shape [batch, seq_len]")
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids, device=self.device)
-        prompt_lengths = attention_mask.sum(dim=1).tolist()
         cache_position = None
         if past_key_values is not None:
             past_len = _past_length(past_key_values)
@@ -248,6 +349,10 @@ class ModelWrapper:
                     device=attention_mask.device,
                 )
                 attention_mask = torch.cat([past_mask, attention_mask], dim=-1)
+
+        _sync_cuda(self.device)
+        started_at = time.perf_counter()
+        phase_timer = _FirstTokenTimer(self.device, started_at)
         outputs = self.model.generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -258,16 +363,28 @@ class ModelWrapper:
             pad_token_id=self.tokenizer.pad_token_id,
             return_dict_in_generate=True,
             output_scores=False,
+            logits_processor=LogitsProcessorList([phase_timer]),
             past_key_values=past_key_values,
             cache_position=cache_position,
         )
-        sequences = outputs.sequences
-        generations: List[str] = []
-        for idx, length in enumerate(prompt_lengths):
-            length = int(length)
-            generated_ids = sequences[idx, length:]
-            text = self.tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
-            generations.append(text)
+        _sync_cuda(self.device)
+        finished_at = time.perf_counter()
+        completion_ids = _completion_token_ids(
+            outputs.sequences,
+            input_ids.shape[-1],
+            self.model.generation_config.eos_token_id,
+        )
+        generations = [
+            self.tokenizer.decode(ids, skip_special_tokens=True).strip()
+            for ids in completion_ids
+        ]
+        first_token_at = phase_timer.first_token_at or finished_at
+        self.last_generation_metrics = {
+            "prefill_seconds": max(0.0, first_token_at - started_at),
+            "text_decode_seconds": max(0.0, finished_at - first_token_at),
+            "output_token_counts": [len(ids) for ids in completion_ids],
+            "timing_source": "transformers_first_token_boundary",
+        }
         return generations, outputs.past_key_values
 
     def tokenize_text(self, text: str) -> torch.Tensor:
@@ -304,6 +421,8 @@ class ModelWrapper:
                 )
                 attention_mask = torch.cat([past_mask, attention_mask], dim=-1)
 
+        _sync_cuda(self.device)
+        prefill_started_at = time.perf_counter()
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -312,28 +431,19 @@ class ModelWrapper:
             output_hidden_states=True,
             return_dict=True,
         )
+        _sync_cuda(self.device)
+        prefill_seconds = time.perf_counter() - prefill_started_at
         past = outputs.past_key_values
+        last_hidden = outputs.hidden_states[-1][:, -1, :]
 
-        e_t = outputs.hidden_states[0][:, -1, :]          # [B, D]
-        last_hidden = outputs.hidden_states[-1][:, -1, :] # [B, D]
-        h_t = last_hidden.detach().clone()
-
-        e_t_plus_1 = None
-        latent_vecs_all: List[torch.Tensor] = []
-        latent_vecs_all.append(e_t.detach().clone())
-
-        for step in range(latent_steps):
-
+        alignment_timer = _AlignmentTimer(self.device)
+        latent_started_at = time.perf_counter()
+        for _ in range(latent_steps):
             source_model = self.HF_model if hasattr(self, "HF_model") else self.model
-            latent_vec = self._apply_latent_realignment(last_hidden, source_model)
-
-            latent_vecs_all.append(latent_vec.detach().clone())
-
-            if step == 0:
-                e_t_plus_1 = latent_vec.detach().clone()
-            
+            latent_vec = alignment_timer.measure(
+                lambda: self._apply_latent_realignment(last_hidden, source_model)
+            )
             latent_embed = latent_vec.unsqueeze(1)
-
             past_len = _past_length(past)
             latent_mask = torch.ones(
                 (latent_embed.shape[0], past_len + 1),
@@ -350,9 +460,17 @@ class ModelWrapper:
             )
             past = outputs.past_key_values
             last_hidden = outputs.hidden_states[-1][:, -1, :]
-
+        _sync_cuda(self.device)
+        latent_decode_seconds = time.perf_counter() - latent_started_at
+        self.last_latent_metrics = {
+            "prefill_seconds": prefill_seconds,
+            "latent_decode_seconds": latent_decode_seconds,
+            "alignment_seconds": alignment_timer.seconds(),
+            "latent_output_counts": [latent_steps] * input_ids.shape[0],
+            "timing_source": "model_stage_boundaries",
+        }
         return past
-    
+
     @torch.no_grad()
     def generate_latent_batch_hidden_state(
         self,
@@ -377,6 +495,9 @@ class ModelWrapper:
                     device=attention_mask.device,
                 )
                 attention_mask = torch.cat([past_mask, attention_mask], dim=-1)
+
+        _sync_cuda(self.HF_device)
+        prefill_started_at = time.perf_counter()
         outputs = self.HF_model(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -385,17 +506,19 @@ class ModelWrapper:
             output_hidden_states=True,
             return_dict=True,
         )
+        _sync_cuda(self.HF_device)
+        prefill_seconds = time.perf_counter() - prefill_started_at
         past = outputs.past_key_values
         last_hidden = outputs.hidden_states[-1][:, -1, :]
-        
-        curr_output_embedding = [] 
-        curr_output_embedding.append(outputs.hidden_states[0])  # input embedding
-        
-        
-        for _ in range(latent_steps):
+        curr_output_embedding = [outputs.hidden_states[0]]
 
+        alignment_timer = _AlignmentTimer(self.HF_device)
+        latent_started_at = time.perf_counter()
+        for _ in range(latent_steps):
             source_model = self.HF_model if hasattr(self, "HF_model") else self.model
-            latent_vec = self._apply_latent_realignment(last_hidden, source_model)
+            latent_vec = alignment_timer.measure(
+                lambda: self._apply_latent_realignment(last_hidden, source_model)
+            )
             latent_embed = latent_vec.unsqueeze(1)
             past_len = _past_length(past)
             latent_mask = torch.ones(
@@ -413,8 +536,15 @@ class ModelWrapper:
             )
             past = outputs.past_key_values
             last_hidden = outputs.hidden_states[-1][:, -1, :]
-
             curr_output_embedding.append(latent_embed.detach())
-
-        return past, torch.cat(curr_output_embedding, dim=1) # Output input embeddings
+        _sync_cuda(self.HF_device)
+        latent_decode_seconds = time.perf_counter() - latent_started_at
+        self.last_latent_metrics = {
+            "prefill_seconds": prefill_seconds,
+            "latent_decode_seconds": latent_decode_seconds,
+            "alignment_seconds": alignment_timer.seconds(),
+            "latent_output_counts": [latent_steps] * input_ids.shape[0],
+            "timing_source": "model_stage_boundaries",
+        }
+        return past, torch.cat(curr_output_embedding, dim=1)
 

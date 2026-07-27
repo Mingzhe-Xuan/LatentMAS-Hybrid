@@ -79,3 +79,37 @@ def run_with_timeout(code, timeout):
             ns['error'] = f"TimeoutError: Execution exceeded {timeout} seconds"
         return ns.get('ok', False), ns.get('error', None)
 
+def build_agent_metrics(
+    *,
+    text_input_tokens: int,
+    latent_input_tokens: int = 0,
+    text_output_tokens: int = 0,
+    latent_output_tokens: int = 0,
+    phase_metrics=None,
+    batch_size: int = 1,
+):
+    """Build per-problem role metrics from counts and batch-level timings."""
+    phase_metrics = phase_metrics or {}
+    divisor = max(1, int(batch_size))
+    timing = {
+        key: float(phase_metrics[key]) / divisor
+        for key in (
+            "prefill_seconds",
+            "latent_decode_seconds",
+            "alignment_seconds",
+            "text_decode_seconds",
+        )
+        if key in phase_metrics
+    }
+    source = phase_metrics.get("timing_source")
+    if source:
+        timing["source"] = source
+    return {
+        "tokens": {
+            "text_input": int(text_input_tokens),
+            "latent_input": int(latent_input_tokens),
+            "text_output": int(text_output_tokens),
+            "latent_output": int(latent_output_tokens),
+        },
+        "timing": timing,
+    }

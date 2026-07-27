@@ -4,7 +4,7 @@ from . import default_agents
 from models import ModelWrapper
 # from prompts import build_agent_messages, build_agent_messages_v6, build_agent_messages_v6_text_mas
 from prompts import build_agent_messages_hierarchical_text_mas, build_agent_messages_sequential_text_mas
-from utils import extract_gsm8k_answer, normalize_answer, extract_markdown_python_block, run_with_timeout
+from utils import build_agent_metrics, extract_gsm8k_answer, normalize_answer, extract_markdown_python_block, run_with_timeout
 import argparse
 import pdb
 
@@ -29,7 +29,7 @@ class TextMASMethod:
         self.args = args
         self.method_name = "text_mas"
         self.task = args.task
-        
+
     def run_batch(self, items: List[Dict]) -> List[Dict]:
         if len(items) > self.generate_bs:
             raise ValueError("Batch size exceeds configured generate_bs")
@@ -85,6 +85,7 @@ class TextMASMethod:
                     top_p=self.top_p,
                 )
 
+            generation_metrics = self.model.last_generation_metrics
             agent_name_map_for_prompt_hierarchical = {
                 "Planner": "Math Agent",
                 "Critic": "Science Agent",
@@ -121,6 +122,12 @@ class TextMASMethod:
                         "input_ids": trimmed_ids,
                         "input_tokens": tokens_batch[idx],
                         "output": text_out,
+                        "metrics": build_agent_metrics(
+                            text_input_tokens=len(trimmed_ids),
+                            text_output_tokens=generation_metrics["output_token_counts"][idx],
+                            phase_metrics=generation_metrics,
+                            batch_size=batch_size,
+                        ),
                     }
                 )
             # import pdb; pdb.set_trace()
@@ -128,7 +135,7 @@ class TextMASMethod:
         results: List[Dict] = []
         for idx, item in enumerate(items):
             final_text = final_texts[idx]
-            
+
             if self.task in ['mbppplus', 'humanevalplus']:
                 pred = extract_markdown_python_block(final_text)
                 gold = item.get("gold", "")
@@ -139,7 +146,7 @@ class TextMASMethod:
                 else:
                     python_code_to_exe = pred + "\n" + gold
                     ok, error_msg = run_with_timeout(python_code_to_exe, timeout=10)
-    
+
                 print(f'=========================================')
                 print(f'Question {idx}')
                 print(f'error_msg: {error_msg}')

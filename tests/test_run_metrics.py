@@ -1,23 +1,39 @@
 import ast
 import unittest
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 
-def load_count_output_tokens():
+def load_run_function(name):
     source = Path(__file__).parents[1].joinpath("run.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
     function = next(
         node
         for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "count_output_tokens"
+        if isinstance(node, ast.FunctionDef) and node.name == name
     )
-    namespace = {"Any": Any, "Dict": Dict, "List": List}
+    namespace = {"Any": Any, "Dict": Dict, "List": List, "Tuple": Tuple}
     exec(compile(ast.Module(body=[function], type_ignores=[]), "run.py", "exec"), namespace)
-    return namespace["count_output_tokens"]
+    return namespace[name]
 
 
-count_output_tokens = load_count_output_tokens()
+count_output_tokens = load_run_function("count_output_tokens")
+summarize_role_metrics = load_run_function("summarize_role_metrics")
+
+def load_utils_function(name):
+    source = Path(__file__).parents[1].joinpath("utils.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == name
+    )
+    namespace = {}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), "utils.py", "exec"), namespace)
+    return namespace[name]
+
+
+build_agent_metrics = load_utils_function("build_agent_metrics")
 
 
 class FakeTokenizer:
@@ -61,5 +77,111 @@ class OutputTokenCountTests(unittest.TestCase):
         self.assertEqual(tokenizer.calls, [])
 
 
+class AgentMetricBuilderTests(unittest.TestCase):
+    def test_amortizes_batch_timings_and_preserves_token_types(self):
+        metrics = build_agent_metrics(
+            text_input_tokens=12,
+            latent_input_tokens=45,
+            latent_output_tokens=45,
+            phase_metrics={
+                "prefill_seconds": 2.0,
+                "latent_decode_seconds": 4.0,
+                "alignment_seconds": 1.0,
+                "timing_source": "test",
+            },
+            batch_size=2,
+        )
+        self.assertEqual(
+            metrics["tokens"],
+            {"text_input": 12, "latent_input": 45, "text_output": 0, "latent_output": 45},
+        )
+        self.assertEqual(metrics["timing"]["prefill_seconds"], 1.0)
+        self.assertEqual(metrics["timing"]["latent_decode_seconds"], 2.0)
+        self.assertEqual(metrics["timing"]["alignment_seconds"], 0.5)
+        self.assertEqual(metrics["timing"]["source"], "test")
+
+class RoleMetricTests(unittest.TestCase):
+    def test_aggregates_tokens_and_timings_by_role(self):
+        preds = [
+            {
+                "agents": [
+                    {
+                        "role": "planner",
+                        "metrics": {
+                            "tokens": {"text_input": 10, "latent_output": 45},
+                            "timing": {
+                                "prefill_seconds": 0.2,
+                                "latent_decode_seconds": 1.0,
+                                "alignment_seconds": 0.1,
+                                "source": "test",
+                            },
+                        },
+                    },
+                    {
+                        "role": "judger",
+                        "metrics": {
+                            "tokens": {
+                                "text_input": 20,
+                                "latent_input": 45,
+                                "text_output": 3,
+                            },
+                            "timing": {
+                                "prefill_seconds": 0.4,
+                                "text_decode_seconds": 2.0,
+                                "source": "test",
+                            },
+                        },
+                    },
+                ]
+            },
+            {
+                "agents": [
+                    {
+                        "role": "planner",
+                        "metrics": {
+                            "tokens": {"text_input": 14, "latent_output": 45},
+                            "timing": {
+                                "prefill_seconds": 0.4,
+                                "latent_decode_seconds": 1.2,
+                                "alignment_seconds": 0.2,
+                                "source": "test",
+                            },
+                        },
+                    },
+                    {
+                        "role": "judger",
+                        "metrics": {
+                            "tokens": {
+                                "text_input": 24,
+                                "latent_input": 45,
+                                "text_output": 5,
+                            },
+                            "timing": {
+                                "prefill_seconds": 0.6,
+                                "text_decode_seconds": 3.0,
+                                "source": "test",
+                            },
+                        },
+                    },
+                ]
+            },
+        ]
+
+        roles, tokens, timing = summarize_role_metrics(preds)
+
+        self.assertEqual(roles["planner"]["output_type"], "latent")
+        self.assertEqual(roles["planner"]["tokens"]["text_input"]["average_per_problem"], 12.0)
+        self.assertEqual(roles["planner"]["tokens"]["latent_output"]["average_per_problem"], 45.0)
+        self.assertEqual(roles["planner"]["timing"]["alignment_seconds"]["average_per_problem"], 0.15)
+        self.assertEqual(roles["judger"]["output_type"], "text")
+        self.assertEqual(roles["judger"]["tokens"]["text_output"]["average_per_problem"], 4.0)
+        self.assertEqual(tokens["latent_input"]["average_per_problem"], 45.0)
+        self.assertEqual(timing["text_decode_seconds"]["average_per_problem"], 2.5)
+
+    def test_empty_metrics_are_well_formed(self):
+        roles, tokens, timing = summarize_role_metrics([])
+        self.assertEqual(roles, {})
+        self.assertEqual(tokens["text_input"], {"total": 0, "average_per_problem": 0.0})
+        self.assertEqual(timing["prefill_seconds"], {"total": 0.0, "average_per_problem": 0.0})
 if __name__ == "__main__":
     unittest.main()

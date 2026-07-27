@@ -2,7 +2,7 @@ from typing import Dict, List
 
 from models import ModelWrapper
 from prompts import build_agent_messages_single_agent
-from utils import extract_gsm8k_answer, normalize_answer, extract_markdown_python_block, run_with_timeout
+from utils import build_agent_metrics, extract_gsm8k_answer, normalize_answer, extract_markdown_python_block, run_with_timeout
 
 
 class BaselineMethod:
@@ -37,7 +37,7 @@ class BaselineMethod:
         prompts, input_ids, attention_mask, tokens_batch = self.model.prepare_chat_batch(
             batch_messages, add_generation_prompt=True
         )
-        
+
         if self.use_vllm:
             generated_batch = self.model.vllm_generate_text_batch(
                 prompts,
@@ -54,11 +54,12 @@ class BaselineMethod:
                 top_p=self.top_p,
             )
 
+        generation_metrics = self.model.last_generation_metrics
         results: List[Dict] = []
-        
+
         for idx, item in enumerate(items):
             generated_text = generated_batch[idx]
-            
+
             if self.task in ['mbppplus', 'humanevalplus']:
                 pred = extract_markdown_python_block(generated_text)
                 gold = item.get("gold", "")
@@ -69,7 +70,7 @@ class BaselineMethod:
                 else:
                     python_code_to_exe = pred + "\n" + gold
                     ok, error_msg = run_with_timeout(python_code_to_exe, timeout=10)
-                
+
                 print(f'=========================================')
                 print(f'Question {idx}')
                 print(f'error_msg: {error_msg}')
@@ -93,7 +94,7 @@ class BaselineMethod:
                 gold = item.get("gold", "")
                 ok = (pred == gold) if (pred and gold) else False
                 error_msg = None
-            
+
             mask = attention_mask[idx].bool()
             trimmed_ids = input_ids[idx][mask].to("cpu").tolist()
             agent_trace = {
@@ -103,6 +104,12 @@ class BaselineMethod:
                 "input_ids": trimmed_ids,
                 "input_tokens": tokens_batch[idx],
                 "output": generated_text,
+                "metrics": build_agent_metrics(
+                    text_input_tokens=len(trimmed_ids),
+                    text_output_tokens=generation_metrics["output_token_counts"][idx],
+                    phase_metrics=generation_metrics,
+                    batch_size=len(items),
+                ),
             }
             results.append(
                 {

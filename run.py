@@ -70,6 +70,93 @@ def count_output_tokens(preds: List[Dict], tokenizer: Any) -> int:
     return sum(len(token_ids) for token_ids in encoded["input_ids"])
 
 
+def summarize_role_metrics(preds: List[Dict]) -> Tuple[Dict, Dict, Dict]:
+    """Aggregate token and model-stage timing metrics independently by role."""
+    token_fields = ("text_input", "latent_input", "text_output", "latent_output")
+    timing_fields = (
+        "prefill_seconds",
+        "latent_decode_seconds",
+        "alignment_seconds",
+        "text_decode_seconds",
+    )
+    buckets: Dict[str, Dict] = {}
+    for pred in preds:
+        for agent in pred.get("agents", []):
+            metrics = agent.get("metrics")
+            if not isinstance(metrics, dict):
+                continue
+            role = str(agent.get("role") or agent.get("name") or "unknown").lower()
+            bucket = buckets.setdefault(
+                role,
+                {
+                    "samples": 0,
+                    "tokens": {field: 0 for field in token_fields},
+                    "timing": {field: 0.0 for field in timing_fields},
+                    "timing_sources": set(),
+                },
+            )
+            bucket["samples"] += 1
+            token_values = metrics.get("tokens", {})
+            timing_values = metrics.get("timing", {})
+            for field in token_fields:
+                bucket["tokens"][field] += int(token_values.get(field, 0))
+            for field in timing_fields:
+                bucket["timing"][field] += float(timing_values.get(field, 0.0))
+            if timing_values.get("source"):
+                bucket["timing_sources"].add(str(timing_values["source"]))
+
+    roles: Dict[str, Dict] = {}
+    overall_tokens = {field: 0 for field in token_fields}
+    overall_timing = {field: 0.0 for field in timing_fields}
+    for role, bucket in buckets.items():
+        samples = bucket["samples"]
+        text_out = bucket["tokens"]["text_output"]
+        latent_out = bucket["tokens"]["latent_output"]
+        output_type = (
+            "mixed" if text_out and latent_out else "text" if text_out else "latent" if latent_out else "none"
+        )
+        role_tokens = {}
+        for field in token_fields:
+            total = bucket["tokens"][field]
+            overall_tokens[field] += total
+            role_tokens[field] = {
+                "total": total,
+                "average_per_problem": round(total / samples, 4) if samples else 0.0,
+            }
+        role_timing = {}
+        for field in timing_fields:
+            total = bucket["timing"][field]
+            overall_timing[field] += total
+            if total or field == "prefill_seconds":
+                role_timing[field] = {
+                    "total": round(total, 6),
+                    "average_per_problem": round(total / samples, 6) if samples else 0.0,
+                }
+        roles[role] = {
+            "samples": samples,
+            "output_type": output_type,
+            "tokens": role_tokens,
+            "timing": role_timing,
+            "timing_sources": sorted(bucket["timing_sources"]),
+        }
+
+    problem_count = len(preds)
+    token_summary = {
+        field: {
+            "total": total,
+            "average_per_problem": round(total / problem_count, 4) if problem_count else 0.0,
+        }
+        for field, total in overall_tokens.items()
+    }
+    timing_summary = {
+        field: {
+            "total": round(total, 6),
+            "average_per_problem": round(total / problem_count, 6) if problem_count else 0.0,
+        }
+        for field, total in overall_timing.items()
+    }
+    return roles, token_summary, timing_summary
+
 def configure_run_files(args: argparse.Namespace) -> Tuple[logging.Logger, Path]:
     """Create per-run detail and summary output files."""
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -117,6 +204,9 @@ def log_problem_detail(logger: logging.Logger, problem_idx: int, result: Dict) -
         latent_steps = agent.get("latent_steps")
         if latent_steps is not None:
             lines.extend(["[Latent Steps]", str(latent_steps)])
+        metrics = agent.get("metrics")
+        if metrics:
+            lines.extend(["[Metrics]", json.dumps(metrics, ensure_ascii=False)])
         lines.extend([
             "[Output]",
             agent.get("output", "").rstrip(),
@@ -190,7 +280,7 @@ def main():
     parser.add_argument(
         "--latent_only",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help=(
             "For LatentMAS methods, retain only latent-step KV cache before "
             "passing context to the next agent; implies --sequential_info_only."
@@ -203,7 +293,7 @@ def main():
     parser.add_argument(
         "--think",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=True,
         help="Manually add think token in the prompt for LatentMAS",
     )
     parser.add_argument("--align_method", dest="align_method", choices=["identical", "linear", "kernel"], default="identical",
@@ -368,7 +458,10 @@ def main():
     total_time = time.time() - start_time
 
     acc, correct = evaluate(preds)
-    output_tokens = count_output_tokens(preds, model.tokenizer)
+    role_metrics, token_metrics, phase_timing = summarize_role_metrics(preds)
+    output_tokens = token_metrics["text_output"]["total"]
+    if not role_metrics:
+        output_tokens = count_output_tokens(preds, model.tokenizer)
     
     summary = {
         "run": {
@@ -385,10 +478,13 @@ def main():
             "correct": correct,
             "accuracy": round(acc, 6),
             "output_tokens": output_tokens,
+            "tokens": token_metrics,
+            "role_metrics": role_metrics,
         },
         "timing": {
             "total_seconds": round(total_time, 4),
             "seconds_per_sample": round(total_time / processed, 4) if processed else 0.0,
+            "model_phases": phase_timing,
         },
     }
     result_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

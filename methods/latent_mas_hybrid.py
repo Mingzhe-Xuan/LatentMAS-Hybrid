@@ -1,11 +1,12 @@
 from typing import Dict, List, Optional, Tuple
 
 from . import default_agents
-from models import ModelWrapper, _past_length
+from models import ModelWrapper, _AlignmentTimer, _past_length, _sync_cuda
 from prompts import build_agent_message_sequential_latent_mas, build_agent_message_hierarchical_latent_mas
-from utils import extract_gsm8k_answer, normalize_answer, extract_markdown_python_block, run_with_timeout
+from utils import build_agent_metrics, extract_gsm8k_answer, normalize_answer, extract_markdown_python_block, run_with_timeout
 import torch
 import argparse
+import time
 try:
     from vllm import SamplingParams
 except ImportError:
@@ -50,7 +51,7 @@ class LatentMASMethod:
         self.generate_bs = max(1, generate_bs)
         self.agents = default_agents()
         self.method_name = 'latent_mas_hybrid'
-        self.vllm_device = args.device 
+        self.vllm_device = args.device
         self.HF_device = args.device2
         self.latent_only = bool(getattr(args, "latent_only", False)) if args else False
         self.sequential_info_only = bool(getattr(args, "sequential_info_only", False)) if args else False
@@ -65,7 +66,7 @@ class LatentMASMethod:
                 max_tokens=args.max_new_tokens,
             )
         self.task = args.task
-        
+
         # NEW: Agent-to-model mapping
         if agent_models is None:
             # Default: all agents use same model
@@ -73,11 +74,11 @@ class LatentMASMethod:
         else:
             assert len(agent_models) == len(self.agents), "Must specify model for each agent"
             self.agent_models = agent_models
-        
+
         # Load all unique models
         self.models: Dict[str, ModelWrapper] = {model.model_name: model}
         self._load_additional_models()
-        
+
         # For compatibility: self.model points to initial model
         # (used in vLLM path which we haven't updated yet)
         self.model = model
@@ -109,7 +110,7 @@ class LatentMASMethod:
     ) -> Tuple[Tuple, torch.Tensor]:
         """
         Run generate_latent_batch and capture ONLY the RAW latent hidden states.
-        
+
         Returns:
             past_kv: Updated KV cache
             raw_latent_hidden_states: [batch, latent_steps, hidden_dim] - RAW hidden states (NOT aligned embeddings)
@@ -117,7 +118,7 @@ class LatentMASMethod:
         # Encode the input_ids
         input_ids = wrapped_ids.to(agent_model.device)
         attention_mask = wrapped_mask.to(agent_model.device)
-        
+
         if past_kv is not None:
             past_len = _past_length(past_kv)
             if past_len > 0:
@@ -127,8 +128,10 @@ class LatentMASMethod:
                     device=attention_mask.device,
                 )
                 attention_mask = torch.cat([past_mask, attention_mask], dim=-1)
-        
+
         # Initial forward pass
+        _sync_cuda(agent_model.device)
+        prefill_started_at = time.perf_counter()
         outputs = agent_model.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -137,26 +140,32 @@ class LatentMASMethod:
             output_hidden_states=True,
             return_dict=True,
         )
+        _sync_cuda(agent_model.device)
+        prefill_seconds = time.perf_counter() - prefill_started_at
         past = outputs.past_key_values
         last_hidden = outputs.hidden_states[-1][:, -1, :]  # [batch, hidden_dim]
-        
+
         # Generate latent steps and store RAW hidden states (before alignment)
         raw_latent_hidden_list = []
+        alignment_timer = _AlignmentTimer(agent_model.device)
+        latent_started_at = time.perf_counter()
         for _ in range(latent_steps):
             # Store RAW hidden state BEFORE alignment
             raw_latent_hidden_list.append(last_hidden.unsqueeze(1))  # [batch, 1, hidden_dim]
-            
+
             # Apply realignment to create embedding for next forward pass
-            latent_vec = agent_model._apply_latent_realignment(last_hidden, agent_model.model)
+            latent_vec = alignment_timer.measure(
+                lambda: agent_model._apply_latent_realignment(last_hidden, agent_model.model)
+            )
             latent_embed = latent_vec.unsqueeze(1)  # [batch, 1, hidden_dim]
-            
+
             past_len = _past_length(past)
             latent_mask = torch.ones(
                 (latent_embed.shape[0], past_len + 1),
                 dtype=torch.long,
                 device=latent_embed.device,
             )
-            
+
             # Feed aligned embedding to model
             outputs = agent_model.model(
                 inputs_embeds=latent_embed,
@@ -168,7 +177,7 @@ class LatentMASMethod:
             )
             past = outputs.past_key_values
             last_hidden = outputs.hidden_states[-1][:, -1, :]  # [batch, hidden_dim]
-        
+
         # Concatenate ONLY RAW hidden states: [batch, latent_steps, hidden_dim]
         if latent_steps > 0:
             raw_latent_hidden_states = torch.cat(raw_latent_hidden_list, dim=1)
@@ -177,7 +186,16 @@ class LatentMASMethod:
             batch_size = wrapped_ids.shape[0]
             hidden_dim = last_hidden.shape[-1]
             raw_latent_hidden_states = torch.zeros((batch_size, 0, hidden_dim), device=last_hidden.device, dtype=last_hidden.dtype)
-        
+
+        _sync_cuda(agent_model.device)
+        latent_decode_seconds = time.perf_counter() - latent_started_at
+        agent_model.last_latent_metrics = {
+            "prefill_seconds": prefill_seconds,
+            "latent_decode_seconds": latent_decode_seconds,
+            "alignment_seconds": alignment_timer.seconds(),
+            "latent_output_counts": [latent_steps] * wrapped_ids.shape[0],
+            "timing_source": "model_stage_boundaries",
+        }
         return past, raw_latent_hidden_states
 
     @staticmethod
@@ -216,23 +234,25 @@ class LatentMASMethod:
         batch_size = len(items)
         past_kv: Optional[Tuple] = None
         current_model_name: Optional[str] = None  # Track which model owns current KV cache
-        
+
         # NEW approach: Track prompts as TEXT and latent hidden states separately
         cumulative_prompts: List[str] = ["" for _ in range(batch_size)]  # Accumulate all agent prompts as text
         cumulative_latent_hiddens: Optional[torch.Tensor] = None  # Only RAW latent hidden states (not embeddings)
-        
+
         agent_traces: List[List[Dict]] = [[] for _ in range(batch_size)]
         final_texts = ["" for _ in range(batch_size)]
+        latent_context_tokens = 0
 
         for agent_idx, agent in enumerate(self.agents):
+            role_latent_input_tokens = latent_context_tokens
             # NEW: Get model for this agent
             agent_model_name = self.agent_models[agent_idx]
             agent_model = self.models[agent_model_name]
-            
+
             # NEW: Detect model switch
-            model_switched = (current_model_name is not None and 
+            model_switched = (current_model_name is not None and
                             agent_model_name != current_model_name)
-            
+
             if model_switched:
                 print(f"\n[HYBRID] Model switch detected: {current_model_name} -> {agent_model_name}")
                 print(f"[HYBRID] Transferring context via cross-model realignment...")
@@ -259,7 +279,7 @@ class LatentMASMethod:
 
                 if self.args.think:
                         wrapped_prompts = [f"{prompt}<think>" for prompt in prompts]
-                else: 
+                else:
                     wrapped_prompts = prompts
 
                 wrapped_encoded = agent_model.tokenizer(
@@ -280,7 +300,7 @@ class LatentMASMethod:
                     # Step 1: Re-encode all previous prompts with NEW model (no alignment needed!)
                     prev_model = self.models[current_model_name]
                     prompt_texts_batch = cumulative_prompts  # List of accumulated prompt text per item
-                    
+
                     prompt_encoded = agent_model.tokenizer(
                         prompt_texts_batch,
                         return_tensors="pt",
@@ -289,24 +309,24 @@ class LatentMASMethod:
                     )
                     prompt_ids = prompt_encoded["input_ids"].to(agent_model.device)
                     prompt_mask = prompt_encoded["attention_mask"].to(agent_model.device)
-                    
+
                     # Get native Model B embeddings for prompts
                     with torch.no_grad():
                         prompt_embeds = agent_model.model.get_input_embeddings()(prompt_ids)
-                    
+
                     # Step 2: Transfer ONLY latent HIDDEN STATES via cross-model alignment
                     # This converts: hidden_A -> embedding_B (correct!)
                     transferred_latent_embeds = transfer_via_realignment(
                         cumulative_latent_hiddens, prev_model, agent_model
                     )
-                    
+
                     # Step 3: Concatenate [prompt_embeds, transferred_latent_embeds]
                     combined_embeds = torch.cat([prompt_embeds, transferred_latent_embeds], dim=1)
                     combined_mask = torch.cat([
                         prompt_mask,
                         torch.ones((batch_size, transferred_latent_embeds.shape[1]), dtype=prompt_mask.dtype, device=prompt_mask.device)
                     ], dim=1)
-                    
+
                     # Step 4: Feed combined embeddings through Model B to create KV cache
                     with torch.no_grad():
                         transfer_outputs = agent_model.model(
@@ -317,7 +337,7 @@ class LatentMASMethod:
                             return_dict=True
                         )
                         transfer_past_kv = transfer_outputs.past_key_values
-                    
+
                     # Step 5: Now generate NEW latent thoughts with Model B
                     past_kv, new_latent_hiddens = self._capture_hidden_states_from_model(
                         agent_model,
@@ -326,12 +346,12 @@ class LatentMASMethod:
                         transfer_past_kv,
                         self.latent_steps
                     )
-                    
+
                     # IMPORTANT: After model switch, RESET to new model's hidden states only
                     # The old context is already in the KV cache via transferred_latent_embeds
                     cumulative_latent_hiddens = new_latent_hiddens
                     current_model_name = agent_model_name
-                    
+
                 else:
                     # Same model or first agent: use KV cache directly
                     past_kv, new_latent_hiddens = self._capture_hidden_states_from_model(
@@ -341,7 +361,7 @@ class LatentMASMethod:
                         past_kv,
                         self.latent_steps
                     )
-                    
+
                     if cumulative_latent_hiddens is None:
                         cumulative_latent_hiddens = new_latent_hiddens
                     else:
@@ -349,16 +369,22 @@ class LatentMASMethod:
 
                     if current_model_name is None:
                         current_model_name = agent_model_name
-                
+
+                latent_metrics = agent_model.last_latent_metrics
+                actual_latent_tokens = latent_metrics["latent_output_counts"][0]
+
                 # Update cumulative prompts (append current agent's prompt)
                 for idx in range(batch_size):
                     cumulative_prompts[idx] += wrapped_prompts[idx]
-                
+
                 if self.sequential_info_only or self.latent_only:
                     new_past_len = _past_length(past_kv)
                     tokens_added = new_past_len - prev_past_len
                     tokens_to_keep = self.latent_steps if self.latent_only else tokens_added
                     past_kv = self._truncate_past(past_kv, tokens_to_keep)
+                    latent_context_tokens = actual_latent_tokens
+                else:
+                    latent_context_tokens += actual_latent_tokens
 
                 for idx in range(batch_size):
                     mask = wrapped_mask[idx].bool()
@@ -372,6 +398,13 @@ class LatentMASMethod:
                             "input_tokens": wrapped_tokens_batch[idx],
                             "latent_steps": self.latent_steps,
                             "output": "",
+                            "metrics": build_agent_metrics(
+                                text_input_tokens=len(trimmed_ids),
+                                latent_input_tokens=role_latent_input_tokens,
+                                latent_output_tokens=latent_metrics["latent_output_counts"][idx],
+                                phase_metrics=latent_metrics,
+                                batch_size=batch_size,
+                            ),
                         }
                     )
             else:
@@ -379,7 +412,7 @@ class LatentMASMethod:
                 if model_switched and cumulative_latent_hiddens is not None:
                     # Same clean approach: re-encode prompts + transfer latents
                     prev_model = self.models[current_model_name]
-                    
+
                     prompt_encoded = agent_model.tokenizer(
                         cumulative_prompts,
                         return_tensors="pt",
@@ -388,21 +421,21 @@ class LatentMASMethod:
                     )
                     prompt_ids = prompt_encoded["input_ids"].to(agent_model.device)
                     prompt_mask = prompt_encoded["attention_mask"].to(agent_model.device)
-                    
+
                     with torch.no_grad():
                         prompt_embeds = agent_model.model.get_input_embeddings()(prompt_ids)
-                    
+
                     # Transfer hidden states -> embeddings (correct!)
                     transferred_latent_embeds = transfer_via_realignment(
                         cumulative_latent_hiddens, prev_model, agent_model
                     )
-                    
+
                     combined_embeds = torch.cat([prompt_embeds, transferred_latent_embeds], dim=1)
                     combined_mask = torch.cat([
                         prompt_mask,
                         torch.ones((batch_size, transferred_latent_embeds.shape[1]), dtype=prompt_mask.dtype, device=prompt_mask.device)
                     ], dim=1)
-                    
+
                     with torch.no_grad():
                         transfer_outputs = agent_model.model(
                             inputs_embeds=combined_embeds,
@@ -417,9 +450,9 @@ class LatentMASMethod:
 
                 if self.args.think:
                         judger_prompts = [f"{prompt}<think>" for prompt in prompts]
-                else: 
+                else:
                     judger_prompts = prompts
-                
+
                 judger_encoded = agent_model.tokenizer(
                     judger_prompts,
                     return_tensors="pt",
@@ -440,6 +473,7 @@ class LatentMASMethod:
                     top_p=self.top_p,
                     past_key_values=past_for_decoding,
                 )
+                generation_metrics = agent_model.last_generation_metrics
                 for idx in range(batch_size):
                     final_text = generated_batch[idx].strip()
                     final_texts[idx] = final_text
@@ -453,6 +487,13 @@ class LatentMASMethod:
                             "input_ids": trimmed_ids,
                             "input_tokens": judger_tokens_batch[idx],
                             "output": final_text,
+                            "metrics": build_agent_metrics(
+                                text_input_tokens=len(trimmed_ids),
+                                latent_input_tokens=role_latent_input_tokens,
+                                text_output_tokens=generation_metrics["output_token_counts"][idx],
+                                phase_metrics=generation_metrics,
+                                batch_size=batch_size,
+                            ),
                         }
                     )
 
@@ -469,7 +510,7 @@ class LatentMASMethod:
                 else:
                     python_code_to_exe = pred + "\n" + gold
                     ok, error_msg = run_with_timeout(python_code_to_exe, timeout=10)
-                
+
                 print(f'=========================================')
                 print(f'Question {idx}')
                 print(f'error_msg: {error_msg}')
@@ -496,7 +537,7 @@ class LatentMASMethod:
                 gold = item.get("gold", "")
                 ok = (pred == gold) if (pred and gold) else False
                 error_msg = None
-            
+
             results.append(
                 {
                     "question": item["question"],
@@ -509,7 +550,7 @@ class LatentMASMethod:
                 }
             )
         return results
-    
+
     def run_batch_vllm(self, items: List[Dict]) -> List[Dict]:
         if len(items) > self.generate_bs:
             raise ValueError("Batch size exceeds configured generate_bs")
@@ -521,7 +562,7 @@ class LatentMASMethod:
 
         embedding_record = []
         for agent in self.agents:
-            
+
             if self.args.prompt == "sequential":
                 batch_messages = [
                     build_agent_message_sequential_latent_mas(role=agent.role, question=item["question"], context="", method=self.method_name, args=self.args)
@@ -532,7 +573,7 @@ class LatentMASMethod:
                     build_agent_message_hierarchical_latent_mas(role=agent.role, question=item["question"], context="", method=self.method_name, args=self.args)
                     for item in items
                 ]
-                
+
             prompts, input_ids, attention_mask, tokens_batch = self.model.prepare_chat_batch(
                 batch_messages, add_generation_prompt=True
             )
@@ -543,7 +584,7 @@ class LatentMASMethod:
                 # to wrap all latent thoughts from previous agents
                 if self.args.think:
                         wrapped_prompts = [f"{prompt}<think>" for prompt in prompts]
-                else: 
+                else:
                     wrapped_prompts = prompts
 
                 wrapped_encoded = self.model.tokenizer(
@@ -581,7 +622,7 @@ class LatentMASMethod:
 
                 if self.sequential_info_only or self.latent_only:
                     embedding_record = embedding_record[-1:]
-                
+
                 for idx in range(batch_size):
                     mask = wrapped_mask[idx].bool()
                     trimmed_ids = wrapped_ids[idx][mask].to("cpu").tolist()
@@ -597,39 +638,39 @@ class LatentMASMethod:
                         }
                     )
             else:
-                
+
                 # A stack of [B, L_i, H]
                 past_embedding = torch.cat(embedding_record, dim=1).to(self.vllm_device)
-                
+
                 if self.args.think:
                     judger_prompts = [f"{prompt}<think>" for prompt in prompts]
-                else: 
+                else:
                     judger_prompts = prompts
-                
+
                 judger_encoded = self.model.tokenizer(
                     judger_prompts,
                     return_tensors="pt",
                     padding=True,
                     add_special_tokens=False,
-                ) 
+                )
                 judger_encoded = judger_encoded["input_ids"].to(self.model.HF_device)
                 # Get current prompt embedding
                 curr_prompt_emb = self.model.embedding_layer(judger_encoded).squeeze(0).to(self.vllm_device)
-                
+
                 # assert Qwen model
                 assert "Qwen" in self.args.model_name or "qwen" in self.args.model_name, "latent_embedding_position is only supported for Qwen models currently."
 
-                # handle latent embedding insertion position    
+                # handle latent embedding insertion position
                 len_of_left = []
                 for p in judger_prompts:
                     idx = p.find("<|im_start|>user\n")
                     # Get the text up to and including "<|im_start|>user\n"
                     left = p[: idx + len("<|im_start|>user\n")]
                     len_of_left.append(len(self.model.tokenizer(left)['input_ids']))
-                    
+
                 B, L, H = curr_prompt_emb.shape
                 _, Lp, H = past_embedding.shape  # assume shape consistency
-                    
+
                 whole_prompt_emb_list = []
                 for i in range(B):
                     insert_idx = len_of_left[i]
@@ -646,27 +687,27 @@ class LatentMASMethod:
                 ])
 
                 # else:
-                    # Get full prompt embedding from cat with previous ones 
+                    # Get full prompt embedding from cat with previous ones
                     # B L H B L H
                     # whole_prompt_emb = torch.cat([past_embedding, curr_prompt_emb], dim=1)
-                
-                # pdb.set_trace()              
-                
-                # Use vLLM 
+
+                # pdb.set_trace()
+
+                # Use vLLM
                 prompt_embeds_list = [
                     {
                         "prompt_embeds": embeds
-                    } for embeds in whole_prompt_emb 
+                    } for embeds in whole_prompt_emb
                 ]
-                
-                
+
+
                 outputs = self.model.vllm_engine.generate(
                     prompt_embeds_list,
                     self.sampling_params,
                 )
 
                 generated_texts = [out.outputs[0].text.strip() for out in outputs]
-                    
+
                 for idx in range(batch_size):
                     text_out = generated_texts[idx].strip()
                     final_texts[idx] = text_out
