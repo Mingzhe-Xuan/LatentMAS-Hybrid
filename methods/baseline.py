@@ -83,7 +83,8 @@ class BaselineMethod:
                     gold_int = int(gold)
                     ok = (pred_int == gold_int)
                     error_msg = None
-                except ValueError:
+                # `pred` can be None when no numeric answer is generated.
+                except (TypeError, ValueError):
                     ok = False
                     error_msg = f'Value error in parsing answer. Pred: {pred}, Gold: {gold}'
 

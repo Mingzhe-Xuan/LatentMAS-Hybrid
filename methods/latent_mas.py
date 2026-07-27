@@ -229,7 +229,11 @@ class LatentMASMethod:
                     gold_int = int(gold)
                     ok = (pred_int == gold_int)
                     error_msg = None
-                except ValueError:
+                # A degenerate generation (for example, repeated text without
+                # a final numeric answer) yields ``pred is None``. ``int``
+                # raises TypeError for that case, so treat it as an incorrect
+                # prediction rather than aborting the entire evaluation run.
+                except (TypeError, ValueError):
                     ok = False
                     error_msg = f'Value error in parsing answer. Pred: {pred}, Gold: {gold}'
 
