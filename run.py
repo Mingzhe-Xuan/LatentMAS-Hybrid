@@ -33,17 +33,18 @@ from utils import auto_device, set_seed
 import time
 
 DEFAULT_MAX_NEW_TOKENS = 20000
-MAX_TOKEN_CONFIG_PATH = Path(__file__).with_name("max_token_dict.json")
+PARAMS_CONFIG_PATH = Path(__file__).with_name("params_dict.json")
 
 
 def default_max_new_tokens(task: str) -> int:
     """Return the task-specific generation limit, or the safe fallback."""
     try:
-        token_limits = json.loads(MAX_TOKEN_CONFIG_PATH.read_text(encoding="utf-8"))
+        task_params = json.loads(PARAMS_CONFIG_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return DEFAULT_MAX_NEW_TOKENS
 
-    value = token_limits.get(task, DEFAULT_MAX_NEW_TOKENS)
+    params = task_params.get(task, {})
+    value = params.get("max_token", DEFAULT_MAX_NEW_TOKENS) if isinstance(params, dict) else DEFAULT_MAX_NEW_TOKENS
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         return DEFAULT_MAX_NEW_TOKENS
     return value
@@ -267,7 +268,7 @@ def main():
     # other args
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--split", type=str, default="test")
-    parser.add_argument("--max_new_tokens", type=int, default=None, help="Maximum new tokens per agent; defaults to max_token_dict.json for the selected task, otherwise 20000.")
+    parser.add_argument("--max_new_tokens", type=int, default=None, help="Maximum new tokens per agent; defaults to params_dict.json[task].max_token, otherwise 20000.")
     parser.add_argument("--latent_steps", type=int, default=45, help="Number of latent steps for LatentMAS method")
     parser.add_argument(
         "--sequential_info_only",

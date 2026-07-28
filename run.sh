@@ -2,9 +2,11 @@
 ###############################################################################
 # run.sh - PBS job script for the AIME 2025 experiment suite
 #
-# Submit:  qsub run.sh
+# Submit current config:  qsub run.sh
+# Submit full matrix:     qsub -v FULL_EXP=true run.sh
+# Local full matrix:      bash run.sh --full_exp
 # Monitor: qstat -u $USER
-# Runtime log: state.txt (in the directory where the job is submitted)
+# Runtime log: state.txt by default (overridable with STATE_FILE)
 ###############################################################################
 
 ## Job name
@@ -48,6 +50,20 @@ if [ ! -f run.py ]; then
 fi
 export PYTHONUNBUFFERED=1
 
+FULL_EXP="${FULL_EXP:-false}"
+TASK_ONLY="${TASK_ONLY:-false}"
+STATE_FILE="${STATE_FILE:-state.txt}"
+for ARG in "$@"; do
+    case "${ARG}" in
+        --full_exp) FULL_EXP=true ;;
+        *)
+            echo "ERROR: Unknown argument: ${ARG}"
+            echo "Usage: bash run.sh [--full_exp]"
+            exit 2
+            ;;
+    esac
+done
+
 ## Optional Hugging Face cache location. Uncomment and edit if your cluster
 ## recommends a project scratch/cache directory.
 export HF_HOME=/home/n2501945g/.cache/huggingface
@@ -78,8 +94,8 @@ fi
 ## Keep named values here so the launch command and job summary stay in sync.
 
 ## --- Core dataset / model settings ---
-MODEL_NAME="Qwen/Qwen3-8B"  # Hugging Face model ID passed to --model_name.
-TASK="humanevalplus"        # Evaluation dataset/task name.
+MODEL_NAME="${MODEL_NAME:-Qwen/Qwen3-8B}" # Hugging Face model ID passed to --model_name.
+TASK="${TASK:-humanevalplus}"              # Evaluation dataset/task name.
 PROMPT_SEQUENTIAL="sequential"      # Sequential multi-agent architecture.
 PROMPT_HIERARCHICAL="hierarchical"  # Hierarchical multi-agent architecture.
 MAX_SAMPLES=30                # Number of examples; -1 evaluates all examples.
@@ -87,33 +103,38 @@ SPLIT="test"                 # Dataset split requested from the task loader.
 DEVICE="cuda"                # PyTorch device used by the HF backend.
 
 ## --- Generation settings ---
-# Empty means use max_token_dict.json[TASK]; an absent/unknown task falls back
-# to 20000. Set a number here to explicitly override the task default.
+# Empty means use params_dict.json[TASK].max_token; an absent/unknown task
+# falls back to 20000. Set a number here to explicitly override every task.
 MAX_NEW_TOKENS=""
-if [ -z "${MAX_NEW_TOKENS}" ]; then
-    MAX_NEW_TOKENS="$(python3 - "${TASK}" <<'PY'
+resolve_max_new_tokens() {
+    if [ -n "${MAX_NEW_TOKENS}" ]; then
+        printf '%s\n' "${MAX_NEW_TOKENS}"
+        return
+    fi
+
+    python3 - "$1" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 fallback = 20000
 try:
-    limits = json.loads(Path("max_token_dict.json").read_text(encoding="utf-8"))
-    value = limits.get(sys.argv[1], fallback)
+    params = json.loads(Path("params_dict.json").read_text(encoding="utf-8"))
+    task_params = params.get(sys.argv[1], {})
+    value = task_params.get("max_token", fallback) if isinstance(task_params, dict) else fallback
     print(value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else fallback)
 except (OSError, json.JSONDecodeError):
     print(fallback)
 PY
-)"
-fi
+}
 TEMPERATURE=0.6       # Sampling temperature.
 TOP_P=0.95            # Nucleus-sampling probability threshold.
-GENERATE_BS=15        # Generation batch size.
+GENERATE_BS=10        # Generation batch size.
 SEED=42               # Random seed for reproducibility.
 
 ## --- TextMAS / LatentMAS settings ---
 TEXT_MAS_CONTEXT_LENGTH=-1  # TextMAS context limit; -1 means unlimited.
-LATENT_STEPS=10             # Number of latent reasoning steps.
+LATENT_STEPS=20             # Number of latent reasoning steps.
 TRUST_REMOTE_CODE=true      # Pass --trust_remote_code when the model requires it.
 SEQUENTIAL_INFO_ONLY=false   # Retain only each agent's own prompt + latent KV before the next agent.
 LATENT_ONLY=false            # Retain only latent KV before the next agent (implies SEQUENTIAL_INFO_ONLY).
@@ -130,9 +151,7 @@ USE_VLLM=false              # Whether to enable the optional vLLM backend.
 TENSOR_PARALLEL_SIZE=1      # Number of GPUs used for vLLM tensor parallelism.
 GPU_MEMORY_UTILIZATION=0.9  # Fraction of each GPU vLLM may reserve.
 
-## All run.py parameters are listed here. Edit the values above as needed.
-## --method is required and is set individually in the five commands below.
-## --model_name is required; run.py has no default.
+build_common_args() {
 COMMON=(
     # Core dataset / model settings
     --model_name "${MODEL_NAME}"             # Required model ID
@@ -142,7 +161,7 @@ COMMON=(
     --device "${DEVICE}"                     # run.py default: cuda
 
     # Generation settings
-    --max_new_tokens "${MAX_NEW_TOKENS}"     # Task default from max_token_dict.json; fallback: 20000
+    --max_new_tokens "${RESOLVED_MAX_NEW_TOKENS}" # Task default from params_dict.json; fallback: 20000
     --temperature "${TEMPERATURE}"           # run.py default: 0.6
     --top_p "${TOP_P}"                       # run.py default: 0.95
     --generate_bs "${GENERATE_BS}"           # run.py default: 10
@@ -167,6 +186,7 @@ COMMON=(
 if [ "${TRUST_REMOTE_CODE}" = true ]; then
     COMMON+=(--trust_remote_code)
 fi
+}
 
 ## Boolean / optional arguments for LatentMAS methods.
 # LATENT_ONLY implies
@@ -195,40 +215,82 @@ fi
 ## --align_method choices/default: identical (default), linear, kernel.
 ## The current suite runs all three methods explicitly below.
 
-echo "========================================================================"
-echo "  Job ID       : ${PBS_JOBID}"
-echo "  Model        : ${MODEL_NAME}"
-echo "  Task         : ${TASK}"
-echo "  Latent prompts: ${PROMPT_SEQUENTIAL}, ${PROMPT_HIERARCHICAL}"
-echo "  Generate BS  : ${GENERATE_BS}"
-echo "  Max samples  : ${MAX_SAMPLES} (all)"
-echo "  Max tokens   : ${MAX_NEW_TOKENS}"
-echo "  Latent steps : ${LATENT_STEPS}"
-echo "  vLLM         : ${USE_VLLM}"
-echo "  CUDA devices : ${CUDA_VISIBLE_DEVICES:-unset}"
-echo "  Sequential info only: ${SEQUENTIAL_INFO_ONLY}"
-echo "  Latent only  : ${LATENT_ONLY}"
-echo "  Think token  : ${THINK}"
-echo "========================================================================"
-echo ""
 ## ========================== Run Experiment Suite =============================
 ## All experiment output is recorded in state.txt. The commands are chained so
 ## a failed run stops the suite and causes the PBS job to fail.
-{
+run_suite() {
+    local suite_model="$1"
+    local suite_task="$2"
+    MODEL_NAME="${suite_model}"
+    TASK="${suite_task}"
+    RESOLVED_MAX_NEW_TOKENS="$(resolve_max_new_tokens "${TASK}")"
+    build_common_args
+
+    echo "========================================================================"
+    echo "  Job ID       : ${PBS_JOBID:-local}"
+    echo "  Full exp     : ${FULL_EXP}"
+    echo "  Model        : ${MODEL_NAME}"
+    echo "  Task         : ${TASK}"
+    echo "  Latent prompts: ${PROMPT_SEQUENTIAL}, ${PROMPT_HIERARCHICAL}"
+    echo "  Generate BS  : ${GENERATE_BS}"
+    echo "  Max samples  : ${MAX_SAMPLES}"
+    echo "  Max tokens   : ${RESOLVED_MAX_NEW_TOKENS}"
+    echo "  Latent steps : ${LATENT_STEPS}"
+    echo "  vLLM         : ${USE_VLLM}"
+    echo "  CUDA devices : ${CUDA_VISIBLE_DEVICES:-unset}"
+    echo "  Sequential info only: ${SEQUENTIAL_INFO_ONLY}"
+    echo "  Latent only  : ${LATENT_ONLY}"
+    echo "  Think token  : ${THINK}"
+    echo "========================================================================"
+
     # Baseline and TextMAS use the sequential architecture.
-    python3 run.py --method baseline --prompt "${PROMPT_SEQUENTIAL}" "${COMMON[@]}" &&  # around 0.6
-    # python3 run.py --method text_mas --prompt "${PROMPT_SEQUENTIAL}" "${COMMON[@]}" &&  # around 0.577
+    python3 run.py --method baseline --prompt "${PROMPT_SEQUENTIAL}" "${COMMON[@]}" &&
+    python3 run.py --method baseline --prompt "${PROMPT_HIERARCHICAL}" "${COMMON[@]}" &&
+    python3 run.py --method text_mas --prompt "${PROMPT_SEQUENTIAL}" "${COMMON[@]}" &&
+    python3 run.py --method text_mas --prompt "${PROMPT_HIERARCHICAL}" "${COMMON[@]}" &&
     # Run all LatentMAS alignment methods sequentially before hierarchical.
-    # python3 run.py --method latent_mas --prompt "${PROMPT_SEQUENTIAL}" --align_method identical "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" && # very weak
+    python3 run.py --method latent_mas --prompt "${PROMPT_SEQUENTIAL}" --align_method identical "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" && # very weak
     python3 run.py --method latent_mas --prompt "${PROMPT_SEQUENTIAL}" --align_method linear "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" && # Easy to explode
     python3 run.py --method latent_mas --prompt "${PROMPT_SEQUENTIAL}" --align_method kernel "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" &&
-    # python3 run.py --method latent_mas --prompt "${PROMPT_HIERARCHICAL}" --align_method identical "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" &&
-    # python3 run.py --method latent_mas --prompt "${PROMPT_HIERARCHICAL}" --align_method linear "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" &&
-    # python3 run.py --method latent_mas --prompt "${PROMPT_HIERARCHICAL}" --align_method kernel "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}"
-    STATUS=$?
+    python3 run.py --method latent_mas --prompt "${PROMPT_HIERARCHICAL}" --align_method identical "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" &&
+    python3 run.py --method latent_mas --prompt "${PROMPT_HIERARCHICAL}" --align_method linear "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" &&
+    python3 run.py --method latent_mas --prompt "${PROMPT_HIERARCHICAL}" --align_method kernel "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}"
+}
+
+if [ "${FULL_EXP}" = true ]; then
+    MODELS=("Qwen/Qwen3-4B" "Qwen/Qwen3-8B" "Qwen/Qwen3-14B")
+    if [ "${TASK_ONLY}" = true ]; then
+        TASKS=("${TASK}")
+    else
+        mapfile -t TASKS < <(python3 - <<'PY'
+import json
+from pathlib import Path
+
+params = json.loads(Path("params_dict.json").read_text(encoding="utf-8"))
+for task in params:
+    print(task)
+PY
+)
+    fi
+else
+    MODELS=("${MODEL_NAME}")
+    TASKS=("${TASK}")
+fi
+
+{
+    STATUS=0
+    for CURRENT_MODEL in "${MODELS[@]}"; do
+        for CURRENT_TASK in "${TASKS[@]}"; do
+            run_suite "${CURRENT_MODEL}" "${CURRENT_TASK}" || {
+                STATUS=$?
+                echo "ERROR: Suite failed for model=${CURRENT_MODEL}, task=${CURRENT_TASK}"
+                break 2
+            }
+        done
+    done
 
     echo ""
     echo "Finished at: $(date)"
     echo "Exit status: ${STATUS}"
     exit "${STATUS}"
-} > state.txt 2>&1
+} > "${STATE_FILE}" 2>&1
