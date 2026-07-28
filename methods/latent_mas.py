@@ -92,10 +92,13 @@ class LatentMASMethod:
         past_kv: Optional[Tuple] = None
         agent_traces: List[List[Dict]] = [[] for _ in range(batch_size)]
         final_texts = ["" for _ in range(batch_size)]
-        latent_context_tokens = 0
+        # Per-role input metrics use the complete input visible to that role:
+        # text_input is all retained textual prompt tokens, while latent_input
+        # is the full past_key_values length supplied before the current prompt.
+        cached_text_tokens = [0] * batch_size
 
         for agent in self.agents:
-            role_latent_input_tokens = latent_context_tokens
+            role_kv_input_tokens = _past_length(past_kv)
 
             if self.args.prompt == "sequential":
                 batch_messages = [
@@ -141,19 +144,17 @@ class LatentMASMethod:
                     past_key_values=past_kv,
                 )
                 latent_metrics = self.model.last_latent_metrics
-                actual_latent_tokens = latent_metrics["latent_output_counts"][0]
                 if self.sequential_info_only or self.latent_only:
                     new_past_len = _past_length(past_kv)
                     tokens_added = new_past_len - prev_past_len
                     tokens_to_keep = self.latent_steps if self.latent_only else tokens_added
                     past_kv = self._truncate_past(past_kv, tokens_to_keep)
-                    latent_context_tokens = actual_latent_tokens
-                else:
-                    latent_context_tokens += actual_latent_tokens
 
                 for idx in range(batch_size):
                     mask = wrapped_mask[idx].bool()
                     trimmed_ids = wrapped_ids[idx][mask].to("cpu").tolist()
+                    current_text_tokens = len(trimmed_ids)
+                    total_text_tokens = cached_text_tokens[idx] + current_text_tokens
                     agent_traces[idx].append(
                         {
                             "name": agent.name,
@@ -164,17 +165,24 @@ class LatentMASMethod:
                             "latent_steps": self.latent_steps,
                             "output": "",
                             "metrics": build_agent_metrics(
-                                text_input_tokens=len(trimmed_ids),
-                                latent_input_tokens=role_latent_input_tokens,
+                                text_input_tokens=total_text_tokens,
+                                latent_input_tokens=role_kv_input_tokens,
                                 latent_output_tokens=latent_metrics["latent_output_counts"][idx],
                                 phase_metrics=latent_metrics,
                                 batch_size=batch_size,
                             ),
                         }
                     )
+                    if self.latent_only:
+                        cached_text_tokens[idx] = 0
+                    elif self.sequential_info_only:
+                        cached_text_tokens[idx] = current_text_tokens
+                    else:
+                        cached_text_tokens[idx] = total_text_tokens
             else:
 
                 past_for_decoding = past_kv if self.latent_steps > 0 else None
+                role_kv_input_tokens = _past_length(past_for_decoding)
 
                 if self.args.think:
                         judger_prompts = [f"{prompt}<think>" for prompt in prompts]
@@ -207,6 +215,7 @@ class LatentMASMethod:
                     final_texts[idx] = final_text
                     mask = judger_mask[idx].bool()
                     trimmed_ids = judger_ids[idx][mask].to("cpu").tolist()
+                    total_text_tokens = cached_text_tokens[idx] + len(trimmed_ids)
                     agent_traces[idx].append(
                         {
                             "name": agent.name,
@@ -216,8 +225,8 @@ class LatentMASMethod:
                             "input_tokens": judger_tokens_batch[idx],
                             "output": final_text,
                             "metrics": build_agent_metrics(
-                                text_input_tokens=len(trimmed_ids),
-                                latent_input_tokens=role_latent_input_tokens,
+                                text_input_tokens=total_text_tokens,
+                                latent_input_tokens=role_kv_input_tokens,
                                 text_output_tokens=generation_metrics["output_token_counts"][idx],
                                 phase_metrics=generation_metrics,
                                 batch_size=batch_size,
@@ -289,9 +298,9 @@ class LatentMASMethod:
         final_texts = ["" for _ in range(batch_size)]
 
         embedding_record = []
-        latent_context_tokens = 0
+        cached_text_tokens = [0] * batch_size
         for agent in self.agents:
-            role_latent_input_tokens = latent_context_tokens
+            role_kv_input_tokens = _past_length(past_kv)
 
             if self.args.prompt == "sequential":
                 batch_messages = [
@@ -337,15 +346,11 @@ class LatentMASMethod:
                     past_key_values=past_kv,
                 )
                 latent_metrics = self.model.last_latent_metrics
-                actual_latent_tokens = latent_metrics["latent_output_counts"][0]
                 if self.sequential_info_only or self.latent_only:
                     new_past_len = _past_length(past_kv)
                     tokens_added = new_past_len - prev_past_len
                     tokens_to_keep = self.latent_steps if self.latent_only else tokens_added
                     past_kv = self._truncate_past(past_kv, tokens_to_keep)
-                    latent_context_tokens = actual_latent_tokens
-                else:
-                    latent_context_tokens += actual_latent_tokens
 
                 if self.latent_only:
                     if self.latent_steps > 0:
@@ -361,6 +366,8 @@ class LatentMASMethod:
                 for idx in range(batch_size):
                     mask = wrapped_mask[idx].bool()
                     trimmed_ids = wrapped_ids[idx][mask].to("cpu").tolist()
+                    current_text_tokens = len(trimmed_ids)
+                    total_text_tokens = cached_text_tokens[idx] + current_text_tokens
                     agent_traces[idx].append(
                         {
                             "name": agent.name,
@@ -371,18 +378,28 @@ class LatentMASMethod:
                             "latent_steps": self.latent_steps,
                             "output": "",
                             "metrics": build_agent_metrics(
-                                text_input_tokens=len(trimmed_ids),
-                                latent_input_tokens=role_latent_input_tokens,
+                                text_input_tokens=total_text_tokens,
+                                latent_input_tokens=role_kv_input_tokens,
                                 latent_output_tokens=latent_metrics["latent_output_counts"][idx],
                                 phase_metrics=latent_metrics,
                                 batch_size=batch_size,
                             ),
                         }
                     )
+                    if self.latent_only:
+                        cached_text_tokens[idx] = 0
+                    elif self.sequential_info_only:
+                        cached_text_tokens[idx] = current_text_tokens
+                    else:
+                        cached_text_tokens[idx] = total_text_tokens
             else:
 
                 # A stack of [B, L_i, H]
                 past_embedding = torch.cat(embedding_record, dim=1).to(self.vllm_device)
+                # vLLM receives retained history as prompt embeddings rather
+                # than an external HF cache. This is the equivalent KV history
+                # prefetched before Judger decoding.
+                role_kv_input_tokens = past_embedding.shape[1]
 
                 if self.args.think:
                     judger_prompts = [f"{prompt}<think>" for prompt in prompts]
@@ -470,8 +487,11 @@ class LatentMASMethod:
                             "input": judger_prompts[idx],
                             "output": text_out,
                             "metrics": build_agent_metrics(
-                                text_input_tokens=len(self.model.tokenizer(judger_prompts[idx], add_special_tokens=False)["input_ids"]),
-                                latent_input_tokens=role_latent_input_tokens,
+                                text_input_tokens=(
+                                    cached_text_tokens[idx]
+                                    + len(self.model.tokenizer(judger_prompts[idx], add_special_tokens=False)["input_ids"])
+                                ),
+                                latent_input_tokens=role_kv_input_tokens,
                                 text_output_tokens=generation_metrics["output_token_counts"][idx],
                                 phase_metrics=generation_metrics,
                                 batch_size=batch_size,

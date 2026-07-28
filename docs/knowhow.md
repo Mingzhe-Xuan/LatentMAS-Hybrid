@@ -487,8 +487,8 @@ GPU 1: HF 辅助模型（latent 推理）
 
 | 字段 | 当前含义 |
 | --- | --- |
-| `text_input` | 该 Agent 显式传入的非 padding prompt token 数；不一定包含 KV cache 中的历史上下文。 |
-| `latent_input` | 进入该 Agent 前逻辑上累计的 latent token/step 数；是通信量记账，并非离散 token ID。 |
+| `text_input` | 该角色可见的全部文字 prompt token 数：保留在历史上下文中的历轮文字 prompt，加上本轮当前 prompt。按每个样本的非 padding token 计数。Baseline/TextMAS 没有外部 KV 历史，因此就是本轮完整文字 prompt。 |
+| `latent_input` | 本轮当前 prompt 送入前的全部 KV cache 长度，即 `_past_length(past_key_values)`；其中既可能有历史文字 prompt，也可能有 latent positions，并包含 batch cache 的物理 padding 位置。vLLM latent 路径没有外部 HF cache，使用即将 prefill 的历史 prompt embeddings 长度作为等价值。 |
 | `text_output` | 文本生成产生的 token ID 数，包含首个 EOS、排除后续 padding。 |
 | `latent_output` | latent rollout 步数，通常就是 `--latent_steps`；每步产生一个连续 embedding。 |
 
@@ -526,7 +526,7 @@ GPU 1: HF 辅助模型（latent 推理）
 
 3. **`text_output` 与 `text_decode_seconds` 边界不一致。** `text_output` 包括首 token 和 EOS，HF 的 decode 计时却从首 token logits 已算出后才开始；首 token 主要落入 prefill。decode 还含采样、停止检查和 `generate()` bookkeeping，短输出时直接计算 tokens/s 尤其失真。
 
-4. **token 少不代表计算量小。** Judger 每个 token 都要关注已有 KV cache。LatentMAS 默认保留前三个 Agent 的 prompt 和 latent steps，少量输出也可能因长 `past_key_values` 而慢。summary 未记录生成开始时的实际 `past_len`、padding 后 batch 宽度、逐题完成时刻或 tokens/s。在模型、prompt 和 latent steps 相同时，三种 alignment 产生的 cache 长度应相同；kernel 改变的是 latent 值及 alignment 开销。若 kernel 的文本 decode 显著更慢，应先核对实际生成长度、batch 组成、上下文长度和采样轨迹，不能只凭现有汇总归因。
+4. **token 少不代表计算量小。** Judger 每个 token 都要关注已有 KV cache。LatentMAS 默认保留前三个 Agent 的 prompt 和 latent steps，少量输出也可能因长 `past_key_values` 而慢。现在 Judger 的 `latent_input` 会记录生成开始前的实际物理 `past_len`，但仍没有逐题完成时刻或可靠的逐题 tokens/s。在模型、prompt 和 latent steps 相同时，三种 alignment 产生的 cache 长度应相同；kernel 改变的是 latent 值及 alignment 开销。若 kernel 的文本 decode 显著更慢，应同时核对 `latent_input`、实际生成长度、batch 组成和采样轨迹。
 
 5. **kernel 构建时间被排除在 `total_seconds` 外。** `ModelWrapper` 初始化时已调用 `_ensure_alignment_state()`；ORF、词表分块特征和 `S/z` 预聚合都发生在 `start_time` 之前。当前 total/alignment 只反映在线部分，端到端比较会低估 kernel/linear 的首次启动成本。
 
@@ -536,4 +536,6 @@ GPU 1: HF 辅助模型（latent 推理）
 
 8. **总时间与 phase 覆盖范围不同。** total 还包含数据迭代、tokenization、prompt 构造、答案解析、代码题执行、进度条和日志 I/O；phase 只覆盖部分模型调用。total 使用 `time.time()`，phase 使用单调的 `perf_counter()`/CUDA event，也不宜严格加减。
 
-综上，当前没有发现“kernel alignment 被直接算进 HF `text_decode_seconds`”这一明确边界错误：latent loop 结束前会同步 CUDA，文本计时又在 `generate()` 内重新起表。更可能的问题是统计口径不足，尤其是 batch makespan 均摊、首 token 边界不一致及未记录实际 cache 长度，使“少量输出 token 对应很长 text decoding”看起来像单题异常。现有数据适合粗略比较整批吞吐，不足以支持逐题 latency 或严格的 kernel/identical 阶段归因。
+综上，当前没有发现“kernel alignment 被直接算进 HF `text_decode_seconds`”这一明确边界错误：latent loop 结束前会同步 CUDA，文本计时又在 `generate()` 内重新起表。现在可用 Judger 的 `latent_input` 核对实际 cache 长度；剩余的主要限制是 batch makespan 均摊和首 token 边界不一致。现有数据适合粗略比较整批吞吐，仍不足以支持逐题 latency 或严格的 kernel/identical 阶段归因。
+
+`text_input` 和 `latent_input` 的顶层 `total` 都是“各角色输入消费量之和”，同一段历史会在多个下游角色处重复计数；它们不是一次运行中唯一 token 或唯一 KV position 的数量。以未截断的三轮 latent rollout 为例，Judger 的 `latent_input` 是前三轮所有 prompt 宽度与三组 latent steps 形成的实际 cache 长度，不再只是 `3 * latent_steps`。

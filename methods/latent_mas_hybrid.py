@@ -241,10 +241,10 @@ class LatentMASMethod:
 
         agent_traces: List[List[Dict]] = [[] for _ in range(batch_size)]
         final_texts = ["" for _ in range(batch_size)]
-        latent_context_tokens = 0
+        cached_text_tokens = [0] * batch_size
 
         for agent_idx, agent in enumerate(self.agents):
-            role_latent_input_tokens = latent_context_tokens
+            role_kv_input_tokens = _past_length(past_kv)
             # NEW: Get model for this agent
             agent_model_name = self.agent_models[agent_idx]
             agent_model = self.models[agent_model_name]
@@ -309,6 +309,7 @@ class LatentMASMethod:
                     )
                     prompt_ids = prompt_encoded["input_ids"].to(agent_model.device)
                     prompt_mask = prompt_encoded["attention_mask"].to(agent_model.device)
+                    cached_text_tokens = [int(row.sum().item()) for row in prompt_mask]
 
                     # Get native Model B embeddings for prompts
                     with torch.no_grad():
@@ -337,6 +338,7 @@ class LatentMASMethod:
                             return_dict=True
                         )
                         transfer_past_kv = transfer_outputs.past_key_values
+                    role_kv_input_tokens = _past_length(transfer_past_kv)
 
                     # Step 5: Now generate NEW latent thoughts with Model B
                     past_kv, new_latent_hiddens = self._capture_hidden_states_from_model(
@@ -371,8 +373,6 @@ class LatentMASMethod:
                         current_model_name = agent_model_name
 
                 latent_metrics = agent_model.last_latent_metrics
-                actual_latent_tokens = latent_metrics["latent_output_counts"][0]
-
                 # Update cumulative prompts (append current agent's prompt)
                 for idx in range(batch_size):
                     cumulative_prompts[idx] += wrapped_prompts[idx]
@@ -382,13 +382,12 @@ class LatentMASMethod:
                     tokens_added = new_past_len - prev_past_len
                     tokens_to_keep = self.latent_steps if self.latent_only else tokens_added
                     past_kv = self._truncate_past(past_kv, tokens_to_keep)
-                    latent_context_tokens = actual_latent_tokens
-                else:
-                    latent_context_tokens += actual_latent_tokens
 
                 for idx in range(batch_size):
                     mask = wrapped_mask[idx].bool()
                     trimmed_ids = wrapped_ids[idx][mask].to("cpu").tolist()
+                    current_text_tokens = len(trimmed_ids)
+                    total_text_tokens = cached_text_tokens[idx] + current_text_tokens
                     agent_traces[idx].append(
                         {
                             "name": agent.name,
@@ -399,14 +398,20 @@ class LatentMASMethod:
                             "latent_steps": self.latent_steps,
                             "output": "",
                             "metrics": build_agent_metrics(
-                                text_input_tokens=len(trimmed_ids),
-                                latent_input_tokens=role_latent_input_tokens,
+                                text_input_tokens=total_text_tokens,
+                                latent_input_tokens=role_kv_input_tokens,
                                 latent_output_tokens=latent_metrics["latent_output_counts"][idx],
                                 phase_metrics=latent_metrics,
                                 batch_size=batch_size,
                             ),
                         }
                     )
+                    if self.latent_only:
+                        cached_text_tokens[idx] = 0
+                    elif self.sequential_info_only:
+                        cached_text_tokens[idx] = current_text_tokens
+                    else:
+                        cached_text_tokens[idx] = total_text_tokens
             else:
                 # Judger agent - need to handle model switching here too
                 if model_switched and cumulative_latent_hiddens is not None:
@@ -421,6 +426,7 @@ class LatentMASMethod:
                     )
                     prompt_ids = prompt_encoded["input_ids"].to(agent_model.device)
                     prompt_mask = prompt_encoded["attention_mask"].to(agent_model.device)
+                    cached_text_tokens = [int(row.sum().item()) for row in prompt_mask]
 
                     with torch.no_grad():
                         prompt_embeds = agent_model.model.get_input_embeddings()(prompt_ids)
@@ -447,6 +453,7 @@ class LatentMASMethod:
                         past_for_decoding = transfer_outputs.past_key_values
                 else:
                     past_for_decoding = past_kv if self.latent_steps > 0 else None
+                role_kv_input_tokens = _past_length(past_for_decoding)
 
                 if self.args.think:
                         judger_prompts = [f"{prompt}<think>" for prompt in prompts]
@@ -479,6 +486,7 @@ class LatentMASMethod:
                     final_texts[idx] = final_text
                     mask = judger_mask[idx].bool()
                     trimmed_ids = judger_ids[idx][mask].to("cpu").tolist()
+                    total_text_tokens = cached_text_tokens[idx] + len(trimmed_ids)
                     agent_traces[idx].append(
                         {
                             "name": agent.name,
@@ -488,8 +496,8 @@ class LatentMASMethod:
                             "input_tokens": judger_tokens_batch[idx],
                             "output": final_text,
                             "metrics": build_agent_metrics(
-                                text_input_tokens=len(trimmed_ids),
-                                latent_input_tokens=role_latent_input_tokens,
+                                text_input_tokens=total_text_tokens,
+                                latent_input_tokens=role_kv_input_tokens,
                                 text_output_tokens=generation_metrics["output_token_counts"][idx],
                                 phase_metrics=generation_metrics,
                                 batch_size=batch_size,

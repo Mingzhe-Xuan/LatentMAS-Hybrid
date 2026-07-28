@@ -88,7 +88,12 @@ def build_agent_metrics(
     phase_metrics=None,
     batch_size: int = 1,
 ):
-    """Build per-problem role metrics from counts and batch-level timings."""
+    """Build per-problem role metrics from counts and batch-level timings.
+
+    LatentMAS callers define ``text_input_tokens`` as all retained textual
+    prompt tokens visible to the role and ``latent_input_tokens`` as the full
+    KV-cache history supplied before the role's current prompt.
+    """
     phase_metrics = phase_metrics or {}
     divisor = max(1, int(batch_size))
     timing = {
