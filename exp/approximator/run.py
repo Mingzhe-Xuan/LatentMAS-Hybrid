@@ -969,6 +969,7 @@ def s3_metric_block(rows, args):
             kernel_rows,
             {
                 "variance": "variance",
+                "log10_variance": "log10_variance",
                 "std": "std",
                 "relative_std": "relative_std",
                 "bias_squared": "bias2",

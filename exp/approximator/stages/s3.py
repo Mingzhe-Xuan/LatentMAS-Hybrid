@@ -1,4 +1,27 @@
+import math
+
 from .common import *
+
+
+def _single_kernel_log_estimate(key, query, omega):
+    """Evaluate log(phi(key)^T phi(query)) without feature underflow."""
+    key = key.float()
+    query = query.float()
+    log_terms = (
+        omega @ (key + query)
+        - 0.5 * (key.square().sum() + query.square().sum())
+    )
+    return torch.logsumexp(log_terms.double(), dim=0) - math.log(omega.shape[0])
+
+
+def _log_sample_variance(log_values):
+    """Return log sample variance for positive values supplied in log space."""
+    log_values = torch.stack(log_values).double()
+    anchor = log_values.max()
+    scaled_variance = (log_values - anchor).exp().var(unbiased=True)
+    if not torch.isfinite(scaled_variance) or scaled_variance <= 0:
+        return torch.tensor(float("-inf"), dtype=torch.float64)
+    return 2 * anchor + scaled_variance.log()
 
 
 def select_s3(states, max_questions, probe_seed):
@@ -38,7 +61,11 @@ def run(states, wo, wi, bias, args, logger):
                         (
                             rank_band,
                             token_id,
-                            float(torch.exp(wo[token_id] @ query)),
+                            float(
+                                torch.exp(
+                                    (wo[token_id] @ query).double()
+                                )
+                            ),
                         )
                         for rank_band, token_id in rank_ids(probabilities, state, args)
                     ]
@@ -61,14 +88,14 @@ def run(states, wo, wi, bias, args, logger):
                 for index, state in enumerate(selected):
                     approximate, _ = kernel_map(state.vector, kernel)
                     f_accumulators[index].append(approximate.cpu())
-                    query_features = positive_features(
-                        (state.vector.to(wo.device) / temperature)[None], kernel.omega
-                    )[0]
+                    query = state.vector.to(wo.device) / temperature
                     for probe_index, (_, token_id, _) in enumerate(probes[index]):
-                        estimate = positive_features(
-                            wo[token_id : token_id + 1], kernel.omega
-                        )[0] @ query_features
-                        kernel_accumulators[index][probe_index].append(estimate.cpu())
+                        log_estimate = _single_kernel_log_estimate(
+                            wo[token_id], query, kernel.omega
+                        )
+                        kernel_accumulators[index][probe_index].append(
+                            log_estimate.cpu()
+                        )
 
             for state_index, state in enumerate(selected):
                 exact_value = exact_values[state_index]
@@ -97,9 +124,14 @@ def run(states, wo, wi, bias, args, logger):
                     probes[state_index], kernel_accumulators[state_index]
                 ):
                     rank_band, token_id, truth = probe
-                    estimates = torch.stack(values)
-                    kernel_variance = estimates.var(unbiased=True)
-                    kernel_mean = estimates.mean()
+                    log_estimates = torch.stack(values).double()
+                    log_variance = _log_sample_variance(values)
+                    kernel_variance = log_variance.exp()
+                    log_kernel_mean = (
+                        torch.logsumexp(log_estimates, dim=0)
+                        - math.log(len(log_estimates))
+                    )
+                    kernel_mean = log_kernel_mean.exp()
                     kernel_bias_squared = (kernel_mean - truth).square()
                     rows.append(
                         {
@@ -112,6 +144,9 @@ def run(states, wo, wi, bias, args, logger):
                             "kernel_truth": truth,
                             "kernel_mean": float(kernel_mean),
                             "variance": float(kernel_variance),
+                            "log10_variance": float(
+                                log_variance / math.log(10)
+                            ),
                             "std": float(kernel_variance.sqrt()),
                             "relative_std": float(
                                 kernel_variance.sqrt() / max(abs(truth), 1e-8)
@@ -155,25 +190,39 @@ def plot_kernel_variance(rows):
         if row["kind"] == "kernel" and row["m"] == 2048
     ]
     for rank_band in sorted({row["rank_band"] for row in subset}):
-        temperatures = sorted({row["tau"] for row in subset})
-        medians = [
-            np.median(
-                [
-                    row["variance"]
-                    for row in subset
-                    if row["rank_band"] == rank_band
-                    and row["tau"] == temperature
-                ]
+        points = []
+        for temperature in sorted({row["tau"] for row in subset}):
+            values = [
+                row.get("log10_variance", np.nan)
+                for row in subset
+                if row["rank_band"] == rank_band
+                and row["tau"] == temperature
+            ]
+            finite = [value for value in values if np.isfinite(value)]
+            if finite:
+                points.append((temperature, float(np.median(finite))))
+        if points:
+            axis.plot(
+                [temperature for temperature, _ in points],
+                [median for _, median in points],
+                label=rank_band,
             )
-            for temperature in temperatures
-        ]
-        axis.plot(temperatures, medians, label=rank_band)
-    axis.set_yscale("log")
     axis.set(
         xlabel="kernel temperature",
-        ylabel="median Var_seed[phi(w)^T phi(q)] (m=2048)",
+        ylabel="median log10 Var_seed[phi(w)^T phi(q)] (m=2048)",
     )
-    axis.legend()
+    if axis.lines:
+        axis.legend()
+    else:
+        axis.text(
+            0.5,
+            0.5,
+            "No finite log-variance values.\n"
+            "Rerun S3 to replace the old underflowed cache.",
+            ha="center",
+            va="center",
+            transform=axis.transAxes,
+        )
     figure.tight_layout()
     save_figure(figure, "s3_single_kernel_variance_tau")
     plt.close(figure)

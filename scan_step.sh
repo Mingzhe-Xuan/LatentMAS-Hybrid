@@ -1,10 +1,11 @@
 #!/bin/bash
 ###############################################################################
-# Scan LatentMAS latent_steps on the default Qwen3-8B HumanEval+ experiment.
+# Scan LatentMAS latent_steps on the first 30 samples of every benchmark.
 #
 # Submit: qsub scan_step.sh
 # Override alignment: qsub -v ALIGN_METHOD=identical scan_step.sh
-# Runtime log and final summary: step_state.txt
+# Runtime log: step_state.txt
+# Incremental machine-readable summary: step_summary.tsv
 ###############################################################################
 
 #PBS -N x_scan_step
@@ -28,6 +29,7 @@ if [ ! -f run.py ]; then
 fi
 
 STATE_FILE="${STATE_FILE:-step_state.txt}"
+SUMMARY_FILE="${SUMMARY_FILE:-step_summary.tsv}"
 exec > "${STATE_FILE}" 2>&1
 export PYTHONUNBUFFERED=1
 
@@ -42,7 +44,6 @@ if echo "${CUDA_VISIBLE_DEVICES:-}" | grep -q "GPU-"; then
 fi
 
 MODEL_NAME="Qwen/Qwen3-8B"
-TASK="humanevalplus"
 PROMPT="sequential"
 ALIGN_METHOD="${ALIGN_METHOD:-kernel}"
 LATENT_STEP_VALUES=(0 10 20 40 80)
@@ -60,7 +61,18 @@ KERNEL_FEATURES=1024
 KERNEL_TEMPERATURE=1.0
 KERNEL_CHUNK_SIZE=4096
 
-MAX_NEW_TOKENS="$(python3 - "${TASK}" <<'PY'
+mapfile -t TASK_VALUES < <(python3 - <<'PY'
+import json
+from pathlib import Path
+
+params = json.loads(Path("params_dict.json").read_text(encoding="utf-8"))
+for task in params:
+    print(task)
+PY
+)
+
+resolve_max_new_tokens() {
+    python3 - "$1" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -74,150 +86,173 @@ try:
 except (OSError, json.JSONDecodeError):
     print(fallback)
 PY
-)"
+}
+
+print_summary() {
+    python3 - "${SUMMARY_FILE}" "${1:-}" <<'PY'
+import csv
+import sys
+from pathlib import Path
+
+summary_path = Path(sys.argv[1])
+task_filter = sys.argv[2]
+with summary_path.open(encoding="utf-8", newline="") as handle:
+    rows = list(csv.DictReader(handle, delimiter="\t"))
+if task_filter:
+    rows = [row for row in rows if row["task"] == task_filter]
+if not rows:
+    print("No completed runs to summarize.")
+    raise SystemExit
+
+headers = list(rows[0])
+widths = {
+    header: max(len(header), *(len(row[header]) for row in rows))
+    for header in headers
+}
+print("  ".join(header.rjust(widths[header]) for header in headers))
+print("  ".join("-" * widths[header] for header in headers))
+for row in rows:
+    print("  ".join(row[header].rjust(widths[header]) for header in headers))
+PY
+}
+
+printf '%s\n' \
+    $'task\tstep\tstatus\taccuracy\tcorrect\tsamples\ttime_s\ts_per_sample\ttext_in\tlatent_in\ttext_out\tlatent_out\ttokens_total\tresult_json' \
+    > "${SUMMARY_FILE}"
 
 echo "========================================================================"
 echo "Latent-step scan started at: $(date)"
 echo "Model        : ${MODEL_NAME}"
-echo "Task         : ${TASK}"
+echo "Tasks        : ${TASK_VALUES[*]}"
 echo "Method       : latent_mas"
 echo "Prompt       : ${PROMPT}"
 echo "Alignment    : ${ALIGN_METHOD}"
 echo "Latent steps : ${LATENT_STEP_VALUES[*]}"
 echo "Max samples  : ${MAX_SAMPLES}"
-echo "Max tokens   : ${MAX_NEW_TOKENS}"
+echo "Summary file : ${SUMMARY_FILE}"
 echo "CUDA devices : ${CUDA_VISIBLE_DEVICES:-unset}"
 echo "========================================================================"
 
-SUMMARY_ARGS=()
 STATUS=0
-RESULT_PATTERN="${TASK}_latent_mas_prompt_${PROMPT}_model_Qwen_Qwen3-8B_align_${ALIGN_METHOD}_*.json"
 
-for LATENT_STEPS in "${LATENT_STEP_VALUES[@]}"; do
+for TASK in "${TASK_VALUES[@]}"; do
+    MAX_NEW_TOKENS="$(resolve_max_new_tokens "${TASK}")"
+    RESULT_PATTERN="${TASK}_latent_mas_prompt_${PROMPT}_model_Qwen_Qwen3-8B_align_${ALIGN_METHOD}_*.json"
+
     echo ""
-    echo "------------------------------------------------------------------------"
-    echo "Running latent_steps=${LATENT_STEPS} at $(date)"
-    echo "------------------------------------------------------------------------"
+    echo "========================================================================"
+    echo "DATASET: ${TASK} (first ${MAX_SAMPLES} samples, max tokens ${MAX_NEW_TOKENS})"
+    echo "========================================================================"
 
-    MARKER_FILE="$(mktemp)"
-    python3 run.py \
-        --method latent_mas \
-        --model_name "${MODEL_NAME}" \
-        --task "${TASK}" \
-        --prompt "${PROMPT}" \
-        --align_method "${ALIGN_METHOD}" \
-        --max_samples "${MAX_SAMPLES}" \
-        --split "${SPLIT}" \
-        --device "${DEVICE}" \
-        --max_new_tokens "${MAX_NEW_TOKENS}" \
-        --temperature "${TEMPERATURE}" \
-        --top_p "${TOP_P}" \
-        --generate_bs "${GENERATE_BS}" \
-        --seed "${SEED}" \
-        --text_mas_context_length "${TEXT_MAS_CONTEXT_LENGTH}" \
-        --latent_steps "${LATENT_STEPS}" \
-        --align_ridge "${ALIGN_RIDGE}" \
-        --kernel_features "${KERNEL_FEATURES}" \
-        --kernel_temperature "${KERNEL_TEMPERATURE}" \
-        --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" \
-        --tensor_parallel_size 1 \
-        --gpu_memory_utilization 0.9 \
-        --trust_remote_code \
-        --think
-    RUN_STATUS=$?
+    for LATENT_STEPS in "${LATENT_STEP_VALUES[@]}"; do
+        echo ""
+        echo "------------------------------------------------------------------------"
+        echo "Running task=${TASK}, latent_steps=${LATENT_STEPS} at $(date)"
+        echo "------------------------------------------------------------------------"
 
-    if [ "${RUN_STATUS}" -ne 0 ]; then
-        echo "ERROR: latent_steps=${LATENT_STEPS} failed with status ${RUN_STATUS}."
-        STATUS="${RUN_STATUS}"
-        break
-    fi
+        MARKER_FILE="$(mktemp)"
+        python3 run.py \
+            --method latent_mas \
+            --model_name "${MODEL_NAME}" \
+            --task "${TASK}" \
+            --prompt "${PROMPT}" \
+            --align_method "${ALIGN_METHOD}" \
+            --max_samples "${MAX_SAMPLES}" \
+            --split "${SPLIT}" \
+            --device "${DEVICE}" \
+            --max_new_tokens "${MAX_NEW_TOKENS}" \
+            --temperature "${TEMPERATURE}" \
+            --top_p "${TOP_P}" \
+            --generate_bs "${GENERATE_BS}" \
+            --seed "${SEED}" \
+            --text_mas_context_length "${TEXT_MAS_CONTEXT_LENGTH}" \
+            --latent_steps "${LATENT_STEPS}" \
+            --align_ridge "${ALIGN_RIDGE}" \
+            --kernel_features "${KERNEL_FEATURES}" \
+            --kernel_temperature "${KERNEL_TEMPERATURE}" \
+            --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" \
+            --tensor_parallel_size 1 \
+            --gpu_memory_utilization 0.9 \
+            --trust_remote_code \
+            --think
+        RUN_STATUS=$?
 
-    RESULT_FILE="$(
-        find result -type f -name "${RESULT_PATTERN}" -newer "${MARKER_FILE}" -print |
-            sort |
-            tail -n 1
-    )"
-    if [ -z "${RESULT_FILE}" ]; then
-        echo "ERROR: Could not locate the result JSON for latent_steps=${LATENT_STEPS}."
-        STATUS=1
-        break
-    fi
+        if [ "${RUN_STATUS}" -ne 0 ]; then
+            echo "ERROR: task=${TASK}, latent_steps=${LATENT_STEPS} failed with status ${RUN_STATUS}."
+            printf '%s\t%s\tfailed(%s)\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\n' \
+                "${TASK}" "${LATENT_STEPS}" "${RUN_STATUS}" >> "${SUMMARY_FILE}"
+            STATUS=1
+            continue
+        fi
 
-    SUMMARY_ARGS+=("${LATENT_STEPS}" "${RESULT_FILE}")
-    echo "Result JSON: ${RESULT_FILE}"
-done
+        RESULT_FILE="$(
+            find result -type f -name "${RESULT_PATTERN}" -newer "${MARKER_FILE}" -print |
+                sort |
+                tail -n 1
+        )"
+        if [ -z "${RESULT_FILE}" ]; then
+            echo "ERROR: Could not locate the result JSON for task=${TASK}, latent_steps=${LATENT_STEPS}."
+            printf '%s\t%s\tmissing_json\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\n' \
+                "${TASK}" "${LATENT_STEPS}" >> "${SUMMARY_FILE}"
+            STATUS=1
+            continue
+        fi
 
-echo ""
-echo "========================================================================"
-echo "LATENT-STEP SUMMARY"
-echo "========================================================================"
-
-if [ "${#SUMMARY_ARGS[@]}" -gt 0 ]; then
-    python3 - "${SUMMARY_ARGS[@]}" <<'PY'
+        python3 - "${SUMMARY_FILE}" "${TASK}" "${LATENT_STEPS}" "${RESULT_FILE}" <<'PY'
+import csv
 import json
 import sys
 from pathlib import Path
 
-pairs = list(zip(sys.argv[1::2], sys.argv[2::2]))
-headers = [
-    "step",
-    "accuracy",
-    "correct",
-    "samples",
-    "time_s",
-    "s/sample",
-    "text_in",
-    "latent_in",
-    "text_out",
-    "latent_out",
-    "tokens_total",
+summary_file, task, step, result_file = sys.argv[1:]
+summary = json.loads(Path(result_file).read_text(encoding="utf-8"))
+results = summary["results"]
+timing = summary["timing"]
+tokens = results.get("tokens", {})
+
+def token_total(name):
+    value = tokens.get(name, {})
+    return int(value.get("total", 0)) if isinstance(value, dict) else 0
+
+text_in = token_total("text_input")
+latent_in = token_total("latent_input")
+text_out = token_total("text_output")
+latent_out = token_total("latent_output")
+row = [
+    task,
+    step,
+    "ok",
+    f'{results["accuracy"]:.6f}',
+    results["correct"],
+    results["processed"],
+    f'{timing["total_seconds"]:.4f}',
+    f'{timing["seconds_per_sample"]:.4f}',
+    text_in,
+    latent_in,
+    text_out,
+    latent_out,
+    text_in + latent_in + text_out + latent_out,
+    result_file,
 ]
-rows = []
-
-for step, result_file in pairs:
-    summary = json.loads(Path(result_file).read_text(encoding="utf-8"))
-    results = summary["results"]
-    timing = summary["timing"]
-    tokens = results.get("tokens", {})
-
-    def token_total(name):
-        value = tokens.get(name, {})
-        return int(value.get("total", 0)) if isinstance(value, dict) else 0
-
-    text_in = token_total("text_input")
-    latent_in = token_total("latent_input")
-    text_out = token_total("text_output")
-    latent_out = token_total("latent_output")
-    rows.append([
-        step,
-        f'{results["accuracy"]:.6f}',
-        str(results["correct"]),
-        str(results["processed"]),
-        f'{timing["total_seconds"]:.4f}',
-        f'{timing["seconds_per_sample"]:.4f}',
-        str(text_in),
-        str(latent_in),
-        str(text_out),
-        str(latent_out),
-        str(text_in + latent_in + text_out + latent_out),
-    ])
-
-widths = [
-    max(len(headers[index]), *(len(row[index]) for row in rows))
-    for index in range(len(headers))
-]
-print("  ".join(value.rjust(widths[index]) for index, value in enumerate(headers)))
-print("  ".join("-" * width for width in widths))
-for row in rows:
-    print("  ".join(value.rjust(widths[index]) for index, value in enumerate(row)))
-
-print()
-print("tokens_total = text_in + latent_in + text_out + latent_out")
-print("Note: input token totals are summed across agent roles and may include reused context.")
+with Path(summary_file).open("a", encoding="utf-8", newline="") as handle:
+    csv.writer(handle, delimiter="\t", lineterminator="\n").writerow(row)
 PY
-else
-    echo "No successful runs to summarize."
-fi
+        echo "Result JSON: ${RESULT_FILE}"
+    done
+
+    echo ""
+    echo "SUMMARY FOR ${TASK}"
+    print_summary "${TASK}"
+done
+
+echo ""
+echo "========================================================================"
+echo "FULL LATENT-STEP SUMMARY"
+echo "========================================================================"
+print_summary
+echo ""
+echo "tokens_total = text_in + latent_in + text_out + latent_out"
+echo "Note: input token totals are summed across agent roles and may include reused context."
 
 echo ""
 echo "Finished at: $(date)"
