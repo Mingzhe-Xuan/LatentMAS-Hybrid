@@ -96,7 +96,7 @@ def plot_s4(rows, args):
         contextual_stem("s4_pca_coordinates"),
     )
 
-    explained = singular_values.square()
+    explained = np.square(singular_values)
     explained /= explained.sum().clip(min=np.finfo(np.float64).eps)
     pc1_ratio = float(explained[0]) if len(explained) else 0.0
     pc2_ratio = float(explained[1]) if len(explained) > 1 else 0.0

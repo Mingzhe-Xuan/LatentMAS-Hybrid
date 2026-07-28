@@ -467,3 +467,73 @@ GPU 1: HF 辅助模型（latent 推理）
 | `--device2` | 缺省时同 `--device` | HF 辅助模型的设备；建议 latent+vLLM 时与 vLLM 分置两卡。 |
 | `--use_second_HF_model` | 关闭；指定即开启 | vLLM 同时使用时加载 HF 辅助模型，完成 latent hidden state、embedding 与 KV cache 计算。 |
 | `--enable_prefix_caching` | 关闭；指定即开启 | 启用 vLLM prefix cache；当前只在 `latent_mas` 时传给 vLLM，不能控制 HF `past_key_values`。 |
+
+## 13. `run.py` 输出统计量与计时口径
+
+本节解释结果 JSON 的当前实现口径。若干时间是 batch 墙钟时间的均摊值，并非单请求真实延迟；各阶段也并非全部互斥。
+
+### 13.1 各统计量是什么意思
+
+`results` 的总体字段：
+
+| 字段 | 当前含义 |
+| --- | --- |
+| `processed` | 实际完成并写入结果的题目数。 |
+| `correct` | `correct=True` 的题目数。 |
+| `accuracy` | `correct / processed`。 |
+| `output_tokens` | 正常等于所有 Agent 的 `text_output` 总数；LatentMAS 中通常主要来自 Judger。它按生成 token ID 计数，包含首个 EOS。只有旧结果没有 role metrics 时，才对可见 `output` 文本重新 tokenize。 |
+
+`results.tokens` 与 `results.role_metrics.<role>.tokens` 均含四类 token。每类的 `total` 是求和，`average_per_problem` 是总数除以题目数；role 内则除以该 role 的 `samples`。
+
+| 字段 | 当前含义 |
+| --- | --- |
+| `text_input` | 该 Agent 显式传入的非 padding prompt token 数；不一定包含 KV cache 中的历史上下文。 |
+| `latent_input` | 进入该 Agent 前逻辑上累计的 latent token/step 数；是通信量记账，并非离散 token ID。 |
+| `text_output` | 文本生成产生的 token ID 数，包含首个 EOS、排除后续 padding。 |
+| `latent_output` | latent rollout 步数，通常就是 `--latent_steps`；每步产生一个连续 embedding。 |
+
+每个 role 的其他字段：
+
+| 字段 | 当前含义 |
+| --- | --- |
+| `samples` | 带该 role metrics 的题目记录数。 |
+| `output_type` | 根据累计的文本/latent 输出是否非零，标成 `text`、`latent`、`mixed` 或 `none`。 |
+| `timing_sources` | 计时来源：`model_stage_boundaries` 为手工模型边界；`transformers_first_token_boundary` 为 Transformers 首 token 边界；`vllm_request_metrics` 为 vLLM request metrics 比例拆分。 |
+
+顶层 `timing`：
+
+| 字段 | 当前含义 |
+| --- | --- |
+| `total_seconds` | 从模型及 alignment state 初始化完成后，到所有 batch 推理、解析/判分和逐题日志完成为止的墙钟时间。模型/tokenizer 加载和 kernel/linear state 构建不在其中。 |
+| `seconds_per_sample` | `total_seconds / processed`；是整次运行的平均吞吐成本，不是某道题的真实 latency。 |
+| `model_phases.<phase>.total` | 各 batch 的阶段墙钟时间之和。batch 时间先除以 batch size 并写给每题，汇总时再求和。 |
+| `model_phases.<phase>.average_per_problem` | phase total 除以全部题目数，是均摊成本。 |
+
+四个 phase 的边界：
+
+| phase | 当前含义 |
+| --- | --- |
+| `prefill_seconds` | latent Agent 中是显式 prompt 在已有 cache 上的一次前向；文本生成的 HF 路径是从 `generate()` 开始到首次 logits 交给 logits processor；vLLM 路径是按 request metrics 推算的 TTFT 比例。 |
+| `latent_decode_seconds` | 完成全部 latent steps 的墙钟时间，包含每步 alignment、Transformer 前向、Python 循环和少量张量构造。 |
+| `alignment_seconds` | latent loop 内用 CUDA event（CPU 用 `perf_counter`）累计的 hidden→input embedding 映射时间。kernel 的在线随机特征及 `S/z` 计算在这里。 |
+| `text_decode_seconds` | HF 路径从首次 logits 已算出后，到整个 batch 的 `generate()` 返回；大致是首 token 之后的自回归循环。vLLM 路径是按请求 TTFT/decode duration 比例拆出的 decode 部分。 |
+
+### 13.2 目前计时中可能存在的问题
+
+1. **`latent_decode_seconds` 与 `alignment_seconds` 重叠。** alignment 位于 latent loop 内，后者是前者的子集。四个 phase 相加会重复计算，不能与 `total_seconds` 对账。若要互斥分解，应另报 `latent_model_seconds = latent_decode_seconds - alignment_seconds`，或直接测量互斥区间。
+
+2. **batch 时间被平均分给每题，无法解释单题 latency。** `build_agent_metrics()` 把整批 phase 时间除以 `batch_size`，再给批内每题写入同一个值。HF 文本生成以整个 batch 完成为结束边界：短输出也会等待最长输出，然后获得相同均摊时间。因此“输出 token 少但 text decoding 长”并不证明这些 token 本身解码慢；当前没有逐请求完成时间。
+
+3. **`text_output` 与 `text_decode_seconds` 边界不一致。** `text_output` 包括首 token 和 EOS，HF 的 decode 计时却从首 token logits 已算出后才开始；首 token 主要落入 prefill。decode 还含采样、停止检查和 `generate()` bookkeeping，短输出时直接计算 tokens/s 尤其失真。
+
+4. **token 少不代表计算量小。** Judger 每个 token 都要关注已有 KV cache。LatentMAS 默认保留前三个 Agent 的 prompt 和 latent steps，少量输出也可能因长 `past_key_values` 而慢。summary 未记录生成开始时的实际 `past_len`、padding 后 batch 宽度、逐题完成时刻或 tokens/s。在模型、prompt 和 latent steps 相同时，三种 alignment 产生的 cache 长度应相同；kernel 改变的是 latent 值及 alignment 开销。若 kernel 的文本 decode 显著更慢，应先核对实际生成长度、batch 组成、上下文长度和采样轨迹，不能只凭现有汇总归因。
+
+5. **kernel 构建时间被排除在 `total_seconds` 外。** `ModelWrapper` 初始化时已调用 `_ensure_alignment_state()`；ORF、词表分块特征和 `S/z` 预聚合都发生在 `start_time` 之前。当前 total/alignment 只反映在线部分，端到端比较会低估 kernel/linear 的首次启动成本。
+
+6. **Hybrid 的跨模型 transfer 与 cache 重建没有 phase 统计。** `transfer_via_realignment()` 及目标模型 KV cache 重建位于已记录 phase 之外。它们计入 total，却不在 alignment、prefill 或 text decode 中，造成未解释空档。
+
+7. **vLLM 拆分只是比例估计。** 代码把并发请求各自的 TTFT/decode duration 求和，再以此比例切分一次 batch 墙钟时间。continuous batching 中请求区间会重叠，所以它既不是严格的全局阶段时间，也不是单题 latency。
+
+8. **总时间与 phase 覆盖范围不同。** total 还包含数据迭代、tokenization、prompt 构造、答案解析、代码题执行、进度条和日志 I/O；phase 只覆盖部分模型调用。total 使用 `time.time()`，phase 使用单调的 `perf_counter()`/CUDA event，也不宜严格加减。
+
+综上，当前没有发现“kernel alignment 被直接算进 HF `text_decode_seconds`”这一明确边界错误：latent loop 结束前会同步 CUDA，文本计时又在 `generate()` 内重新起表。更可能的问题是统计口径不足，尤其是 batch makespan 均摊、首 token 边界不一致及未记录实际 cache 长度，使“少量输出 token 对应很长 text decoding”看起来像单题异常。现有数据适合粗略比较整批吞吐，不足以支持逐题 latency 或严格的 kernel/identical 阶段归因。
