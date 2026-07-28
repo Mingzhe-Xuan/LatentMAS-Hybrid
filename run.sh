@@ -82,7 +82,7 @@ MODEL_NAME="Qwen/Qwen3-8B"  # Hugging Face model ID passed to --model_name.
 TASK="humanevalplus"        # Evaluation dataset/task name.
 PROMPT_SEQUENTIAL="sequential"      # Sequential multi-agent architecture.
 PROMPT_HIERARCHICAL="hierarchical"  # Hierarchical multi-agent architecture.
-MAX_SAMPLES=-1                # Number of examples; -1 evaluates all examples.
+MAX_SAMPLES=30                # Number of examples; -1 evaluates all examples.
 SPLIT="test"                 # Dataset split requested from the task loader.
 DEVICE="cuda"                # PyTorch device used by the HF backend.
 
@@ -108,12 +108,12 @@ PY
 fi
 TEMPERATURE=0.6       # Sampling temperature.
 TOP_P=0.95            # Nucleus-sampling probability threshold.
-GENERATE_BS=10        # Generation batch size.
+GENERATE_BS=15        # Generation batch size.
 SEED=42               # Random seed for reproducibility.
 
 ## --- TextMAS / LatentMAS settings ---
 TEXT_MAS_CONTEXT_LENGTH=-1  # TextMAS context limit; -1 means unlimited.
-LATENT_STEPS=45             # Number of latent reasoning steps.
+LATENT_STEPS=10             # Number of latent reasoning steps.
 TRUST_REMOTE_CODE=true      # Pass --trust_remote_code when the model requires it.
 SEQUENTIAL_INFO_ONLY=false   # Retain only each agent's own prompt + latent KV before the next agent.
 LATENT_ONLY=false            # Retain only latent KV before the next agent (implies SEQUENTIAL_INFO_ONLY).
