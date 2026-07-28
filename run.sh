@@ -186,7 +186,7 @@ fi
 ##   --kernel_seed SEED       default: None; omitted uses --seed.
 ##   --use_vllm               default: false; enables vLLM backend.
 ##   --sequential_info_only   default: false; preserve only the current agent's prompt + latent KV cache.
-##   --latent_only            default: true; preserve only latent KV cache; implies --sequential_info_only.
+##   --latent_only            default: false; preserve only latent KV cache; implies --sequential_info_only.
 ##   --enable_prefix_caching  default: false; only relevant with vLLM.
 ##   --use_second_HF_model    default: false; only relevant with latent_mas + vLLM.
 ##   --device2 DEVICE         default: None, then run.py uses --device.
@@ -220,11 +220,11 @@ echo ""
     # python3 run.py --method text_mas --prompt "${PROMPT_SEQUENTIAL}" "${COMMON[@]}" &&  # around 0.577
     # Run all LatentMAS alignment methods sequentially before hierarchical.
     # python3 run.py --method latent_mas --prompt "${PROMPT_SEQUENTIAL}" --align_method identical "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" && # very weak
-    # python3 run.py --method latent_mas --prompt "${PROMPT_SEQUENTIAL}" --align_method linear "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" && # Easy to explode
+    python3 run.py --method latent_mas --prompt "${PROMPT_SEQUENTIAL}" --align_method linear "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" && # Easy to explode
     python3 run.py --method latent_mas --prompt "${PROMPT_SEQUENTIAL}" --align_method kernel "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" &&
-    python3 run.py --method latent_mas --prompt "${PROMPT_HIERARCHICAL}" --align_method identical "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" &&
-    python3 run.py --method latent_mas --prompt "${PROMPT_HIERARCHICAL}" --align_method linear "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" &&
-    python3 run.py --method latent_mas --prompt "${PROMPT_HIERARCHICAL}" --align_method kernel "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}"
+    # python3 run.py --method latent_mas --prompt "${PROMPT_HIERARCHICAL}" --align_method identical "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" &&
+    # python3 run.py --method latent_mas --prompt "${PROMPT_HIERARCHICAL}" --align_method linear "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" &&
+    # python3 run.py --method latent_mas --prompt "${PROMPT_HIERARCHICAL}" --align_method kernel "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}"
     STATUS=$?
 
     echo ""
