@@ -5,15 +5,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}" || exit 1
 
 TASK_SCRIPTS=(
-    exp_aime2024.sh
-    exp_aime2025.sh
-    exp_arc_challenge.sh
-    exp_arc_easy.sh
-    exp_gpqa.sh
-    exp_gsm8k.sh
-    exp_humanevalplus.sh
-    exp_mbppplus.sh
-    exp_medqa.sh
+    run_aime2024.sh
+    run_aime2025.sh
+    run_arc_challenge.sh
+    run_arc_easy.sh
+    run_gpqa.sh
+    run_gsm8k.sh
+    run_humanevalplus.sh
+    run_mbppplus.sh
+    run_medqa.sh
 )
 
 if ! command -v qsub >/dev/null 2>&1; then
