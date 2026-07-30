@@ -44,7 +44,7 @@ if echo "${CUDA_VISIBLE_DEVICES:-}" | grep -q "GPU-"; then
 fi
 
 MODEL_NAME="Qwen/Qwen3-8B"
-PROMPT="sequential"
+PROMPT="hierarchical"
 ALIGN_METHOD="${ALIGN_METHOD:-kernel}"
 LATENT_STEP_VALUES=(0 10 20 40 80)
 
