@@ -107,13 +107,6 @@ def files_sha256(paths):
     return digest.hexdigest()
 
 
-def trajectory_implementation_sha256():
-    return files_sha256(
-        (
-            ROOT / "exp" / "latent_cot" / "trajectory.py",
-        )
-    )
-
 
 def run_implementation_sha256():
     return files_sha256(
@@ -272,7 +265,7 @@ def expected_manifest(args, indexed_items, wrapper):
                 "text_generation_performed": False,
             },
             "trust_remote_code": bool(args.trust_remote_code),
-            "trajectory_implementation_sha256": trajectory_implementation_sha256(),
+
         },
         "provenance": {
             "git_commit": git_commit(),
@@ -300,6 +293,25 @@ def identity_differences(expected, actual, prefix=""):
                 differences.extend(identity_differences(expected[key], actual[key], field))
     elif expected != actual:
         differences.append({"field": prefix, "expected": expected, "actual": actual})
+    return differences
+
+
+def trajectory_cache_differences(expected, actual):
+    differences = identity_differences(
+        expected.get("schema_version"),
+        actual.get("schema_version"),
+        "schema_version",
+    )
+    expected_identity = expected["cache_identity"]
+    actual_identity = actual.get("cache_identity", {})
+    for field, expected_value in expected_identity.items():
+        differences.extend(
+            identity_differences(
+                expected_value,
+                actual_identity.get(field),
+                f"cache_identity.{field}",
+            )
+        )
     return differences
 
 
@@ -337,16 +349,7 @@ def load_or_collect(args, indexed_items, wrapper, logger):
     cache_hit = have_pt and have_manifest and not args.force_recollect
     if cache_hit:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        differences = identity_differences(
-            {
-                "schema_version": expected["schema_version"],
-                "cache_identity": expected["cache_identity"],
-            },
-            {
-                "schema_version": manifest.get("schema_version"),
-                "cache_identity": manifest.get("cache_identity"),
-            },
-        )
+        differences = trajectory_cache_differences(expected, manifest)
         if differences:
             raise RuntimeError(
                 "Refusing incompatible C0 trajectory cache:\n"

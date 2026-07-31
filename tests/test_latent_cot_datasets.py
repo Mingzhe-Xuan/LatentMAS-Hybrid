@@ -67,6 +67,22 @@ def load_run_functions(gsm8k_loader, mbppplus_loader):
     return namespace
 
 
+def load_cache_difference_functions():
+    tree = ast.parse(RUN_SOURCE.read_text(encoding="utf-8"))
+    wanted = {"identity_differences", "trajectory_cache_differences"}
+    selected = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in wanted
+    ]
+    namespace = {}
+    exec(
+        compile(ast.Module(body=selected, type_ignores=[]), str(RUN_SOURCE), "exec"),
+        namespace,
+    )
+    return namespace
+
+
 class FakeAxis:
     def __init__(self):
         self.title = None
@@ -221,6 +237,40 @@ class LatentCotPlotTests(unittest.TestCase):
         self.assertEqual(
             [axis.title for axis in fake_plot.axes], ["GSM8K", "MBPP+"]
         )
+
+
+class LatentCotTrajectoryCacheTests(unittest.TestCase):
+    def test_legacy_implementation_hash_is_ignored(self):
+        compare = load_cache_difference_functions()["trajectory_cache_differences"]
+        expected = {
+            "schema_version": 1,
+            "cache_identity": {
+                "dataset": "gsm8k",
+                "latent_steps": 50,
+                "prompt_template_sha256": "prompt-hash",
+            },
+        }
+        actual = {
+            "schema_version": 1,
+            "cache_identity": {
+                **expected["cache_identity"],
+                "trajectory_implementation_sha256": "legacy-code-hash",
+            },
+        }
+        self.assertEqual(compare(expected, actual), [])
+
+    def test_changed_semantic_identity_is_rejected(self):
+        compare = load_cache_difference_functions()["trajectory_cache_differences"]
+        expected = {
+            "schema_version": 1,
+            "cache_identity": {"dataset": "gsm8k", "latent_steps": 50},
+        }
+        actual = {
+            "schema_version": 1,
+            "cache_identity": {"dataset": "gsm8k", "latent_steps": 20},
+        }
+        differences = compare(expected, actual)
+        self.assertEqual(differences[0]["field"], "cache_identity.latent_steps")
 
 
 if __name__ == "__main__":
