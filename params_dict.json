@@ -4,7 +4,7 @@
         "generation_bs": 2,
         "latent_steps": {
             "sequential": 20,
-            "hierarchical": 20
+            "hierarchical": 10
         }
     },
     "aime2025": {
@@ -12,7 +12,7 @@
         "generation_bs": 2,
         "latent_steps": {
             "sequential": 0,
-            "hierarchical": 20
+            "hierarchical": 10
         }
     },
     "arc_challenge": {
@@ -20,7 +20,7 @@
         "generation_bs": 16,
         "latent_steps": {
             "sequential": 20,
-            "hierarchical": 20
+            "hierarchical": 10
         }
     },
     "arc_easy": {
@@ -28,7 +28,7 @@
         "generation_bs": 16,
         "latent_steps": {
             "sequential": 10,
-            "hierarchical": 20
+            "hierarchical": 10
         }
     },
     "gpqa": {
@@ -36,7 +36,7 @@
         "generation_bs": 5,
         "latent_steps": {
             "sequential": 10,
-            "hierarchical": 20
+            "hierarchical": 80
         }
     },
     "gsm8k": {
@@ -52,7 +52,7 @@
         "generation_bs": 8,
         "latent_steps": {
             "sequential": 20,
-            "hierarchical": 20
+            "hierarchical": 40
         }
     },
     "mbppplus": {
@@ -60,7 +60,7 @@
         "generation_bs": 8,
         "latent_steps": {
             "sequential": 10,
-            "hierarchical": 20
+            "hierarchical": 80
         }
     },
     "medqa": {
@@ -68,7 +68,7 @@
         "generation_bs": 8,
         "latent_steps": {
             "sequential": 0,
-            "hierarchical": 20
+            "hierarchical": 10
         }
     }
 }
