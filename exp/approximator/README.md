@@ -25,7 +25,11 @@ directly under `exp/cache/mappings/`. Both directories are flat: filenames
 expose stable generation and mapping parameters and contain no timestamps or
 hash-derived names. A matching cache is reused by default.
 Use `--force_recollect` to replace it, or `--reuse_trajectory` to require a
-matching existing cache and prohibit Phase A.
+matching existing cache and prohibit Phase A. Trajectory compatibility uses
+only requested question contents, the role-to-model mapping, trajectory
+generation settings, collection alignment settings, and the generation seed.
+Code hashes, model/tokenizer fingerprints, library versions, and extra cached
+questions do not prevent reuse.
 
 S1 and S2 share one full mapping cache. Its flat filename inherits the
 trajectory parameters; the manifest additionally verifies the trajectory
