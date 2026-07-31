@@ -29,6 +29,7 @@ if str(ROOT) not in sys.path:
 
 from data import load_gsm8k, load_mbppplus
 from trajectory import (
+    ALIGNMENTS,
     collect,
     load_model,
     prompt_template_sha256,
@@ -37,7 +38,7 @@ from trajectory import (
 from utils import auto_device, set_seed
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 OUTPUT_ROOT = ROOT / "exp_result" / "latent_cot"
 RUNS_DIR = OUTPUT_ROOT / "runs"
 TRAJECTORY_DIR = ROOT / "exp" / "cache" / "trajectories"
@@ -56,6 +57,11 @@ def parse_args(argv=None):
     parser.add_argument("--probe_seed", type=int, default=42)
     parser.add_argument("--bootstrap_replicates", type=int, default=1000)
     parser.add_argument("--entropy_chunk_size", type=int, default=8)
+    parser.add_argument("--kernel_features", type=int, default=2048)
+    parser.add_argument("--kernel_temperature", type=float, default=1.0)
+    parser.add_argument("--kernel_seed", type=int, default=101)
+    parser.add_argument("--kernel_chunk_size", type=int, default=4096)
+    parser.add_argument("--align_ridge", type=float, default=1e-5)
     parser.add_argument(
         "--reuse_trajectory",
         action="store_true",
@@ -71,6 +77,10 @@ def parse_args(argv=None):
         parser.error("--max_questions and --latent_steps must be positive")
     if args.bootstrap_replicates < 1 or args.entropy_chunk_size < 1:
         parser.error("bootstrap/chunk sizes must be positive")
+    if args.kernel_features < 1 or args.kernel_chunk_size < 1:
+        parser.error("kernel feature/chunk sizes must be positive")
+    if args.kernel_temperature <= 0 or args.align_ridge < 0:
+        parser.error("kernel temperature must be positive and ridge non-negative")
     args.device = auto_device(args.device)
     args.task = args.dataset
     args.seed = args.probe_seed
@@ -171,6 +181,12 @@ def trajectory_paths(args):
             f"q={args.max_questions}",
             f"seed={args.probe_seed}",
             f"k={args.latent_steps}",
+            f"a={cache_component('-'.join(ALIGNMENTS))}",
+            f"km={args.kernel_features}",
+            f"kt={cache_component(repr(args.kernel_temperature))}",
+            f"ks={args.kernel_seed}",
+            f"kc={args.kernel_chunk_size}",
+            f"lr={cache_component(repr(args.align_ridge))}",
             f"prompt={cache_component(prompt_template_version(args.dataset))}",
             f"rc={int(args.trust_remote_code)}",
         )
@@ -255,7 +271,15 @@ def expected_manifest(args, indexed_items, wrapper):
             "prompt_template_sha256": prompt_template_sha256(args.dataset),
             "latent_steps": args.latent_steps,
             "question_selection_seed": args.probe_seed,
-            "recurrence": "repository_identical_mean_norm_scaled_feedback",
+            "alignments": list(ALIGNMENTS),
+            "recurrence": "aligned_feedback_comparison_v1",
+            "alignment_config": {
+                "linear_ridge": args.align_ridge,
+                "kernel_features": args.kernel_features,
+                "kernel_temperature": args.kernel_temperature,
+                "kernel_seed": args.kernel_seed,
+                "kernel_chunk_size": args.kernel_chunk_size,
+            },
             "recurrence_target_embedding_mean_norm": float(
                 wrapper.target_embedding_mean_norm.detach().cpu()
             ),
@@ -319,8 +343,18 @@ def validate_trajectory(trajectory, manifest, args):
     if trajectory.get("schema_version") != SCHEMA_VERSION:
         raise RuntimeError("C0 trajectory schema mismatch.")
     records = trajectory.get("records")
-    if not isinstance(records, list) or len(records) != manifest.get("question_count"):
-        raise RuntimeError("C0 trajectory question count mismatch.")
+    if not isinstance(records, list) or len(records) != manifest.get("record_count"):
+        raise RuntimeError("C0 trajectory record count mismatch.")
+    expected_pairs = {
+        (item_id, alignment)
+        for item_id in manifest.get("cache_identity", {}).get("question_ids", [])
+        for alignment in ALIGNMENTS
+    }
+    actual_pairs = {
+        (record.get("item_id"), record.get("alignment")) for record in records
+    }
+    if actual_pairs != expected_pairs or len(records) != len(expected_pairs):
+        raise RuntimeError("C0 trajectory alignment coverage mismatch.")
     for record in records:
         hidden = record.get("hidden_states")
         if (
@@ -331,12 +365,14 @@ def validate_trajectory(trajectory, manifest, args):
             or hidden.shape[0] > args.latent_steps
             or hidden.shape[0] != record.get("valid_step_count")
         ):
-            raise RuntimeError(f"Invalid C0 hidden trajectory for item {record.get('item_id')}.")
+            raise RuntimeError(
+                f"Invalid C0 hidden trajectory for item {record.get('item_id')} "
+                f"alignment {record.get('alignment')}."
+            )
         if record.get("requested_step_count") != args.latent_steps:
             raise RuntimeError("C0 requested step count mismatch.")
         if record.get("rollout_complete") and hidden.shape[0] != args.latent_steps:
             raise RuntimeError("Complete C0 rollout lacks required hidden states.")
-
 
 def load_or_collect(args, indexed_items, wrapper, logger):
     expected = expected_manifest(args, indexed_items, wrapper)
@@ -373,6 +409,7 @@ def load_or_collect(args, indexed_items, wrapper, logger):
             "dataset": args.dataset,
             "split": args.split,
             "latent_steps": args.latent_steps,
+            "alignments": list(ALIGNMENTS),
             "prompt_template_version": prompt_template_version(args.dataset),
             "trajectory_is_complete": all(r["rollout_complete"] for r in records),
         }
@@ -380,21 +417,22 @@ def load_or_collect(args, indexed_items, wrapper, logger):
         temporary = trajectory_path.with_name(trajectory_path.name + ".tmp")
         torch.save(trajectory, temporary)
         temporary.replace(trajectory_path)
-        failed_questions_by_reason = {}
+        failed_records_by_reason = {}
         for record in records:
             if record["failure_reason"]:
                 reason = record["failure_reason"]
-                failed_questions_by_reason[reason] = (
-                    failed_questions_by_reason.get(reason, 0) + 1
+                failed_records_by_reason[reason] = (
+                    failed_records_by_reason.get(reason, 0) + 1
                 )
         manifest = {
             **expected,
             "generated_at": datetime.now().isoformat(timespec="seconds"),
             "trajectory_sha256": file_sha256(trajectory_path),
-            "question_count": len(records),
-            "complete_question_count": sum(r["rollout_complete"] for r in records),
-            "failed_question_count": sum(not r["rollout_complete"] for r in records),
-            "failed_questions_by_reason": failed_questions_by_reason,
+            "question_count": len(indexed_items),
+            "record_count": len(records),
+            "complete_record_count": sum(r["rollout_complete"] for r in records),
+            "failed_record_count": sum(not r["rollout_complete"] for r in records),
+            "failed_records_by_reason": failed_records_by_reason,
         }
         write_json(manifest_path, manifest)
         logger.info("C0 Phase A saved %d questions to %s", len(records), trajectory_path)
@@ -456,6 +494,7 @@ def entropy_rows(trajectory, wrapper, args, logger):
             rows.append(
                 {
                     "dataset": args.dataset,
+                    "alignment": record["alignment"],
                     "item_id": int(record["item_id"]),
                     "step": int(step),
                     "entropy_nats": entropy,
@@ -533,36 +572,50 @@ def plot_summary(summaries, path, context):
         squeeze=False,
     )
     display_names = {"gsm8k": "GSM8K", "mbppplus": "MBPP+"}
+    colors = {
+        "identical": "#4c78a8",
+        "linear": "#f58518",
+        "kernel": "#54a24b",
+    }
     for axis, dataset in zip(axes[0], datasets):
-        steps = summaries[dataset]["steps"]
-        x = np.array([row["step"] for row in steps])
-        mean = np.array(
-            [np.nan if row["mean"] is None else row["mean"] for row in steps]
-        )
-        median = np.array(
-            [np.nan if row["median"] is None else row["median"] for row in steps]
-        )
-        low = np.array(
-            [np.nan if row["ci95_low"] is None else row["ci95_low"] for row in steps]
-        )
-        high = np.array(
-            [np.nan if row["ci95_high"] is None else row["ci95_high"] for row in steps]
-        )
-        axis.plot(x, mean, label="Mean entropy", color="#1f77b4", linewidth=2)
-        axis.fill_between(x, low, high, color="#1f77b4", alpha=0.2, label="95% CI")
-        axis.plot(
-            x,
-            median,
-            label="Median entropy",
-            color="#ff7f0e",
-            linestyle="--",
-        )
+        for alignment in ALIGNMENTS:
+            steps = summaries[dataset]["alignments"][alignment]["steps"]
+            x = np.array([row["step"] for row in steps])
+            mean = np.array(
+                [np.nan if row["mean"] is None else row["mean"] for row in steps]
+            )
+            low = np.array(
+                [
+                    np.nan if row["ci95_low"] is None else row["ci95_low"]
+                    for row in steps
+                ]
+            )
+            high = np.array(
+                [
+                    np.nan if row["ci95_high"] is None else row["ci95_high"]
+                    for row in steps
+                ]
+            )
+            axis.plot(
+                x,
+                mean,
+                label=alignment,
+                color=colors[alignment],
+                linewidth=2,
+            )
+            axis.fill_between(
+                x,
+                low,
+                high,
+                color=colors[alignment],
+                alpha=0.12,
+            )
         axis.set_xlabel("Latent step")
         axis.set_title(display_names.get(dataset, dataset))
         axis.grid(alpha=0.25)
-        axis.legend()
+        axis.legend(title="Alignment")
     axes[0][0].set_ylabel("Output entropy (nats)")
-    figure.suptitle("C0: output entropy across latent recurrence")
+    figure.suptitle("C0: entropy by latent alignment recurrence")
     figure.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(path)
@@ -636,20 +689,29 @@ def main(argv=None):
                     f"C0 row-count invariant failed for {dataset}: "
                     f"{len(rows)} != {expected_row_count}."
                 )
-            summary = summarize(rows, dataset_args)
+            alignment_summaries = {
+                alignment: summarize(
+                    [row for row in rows if row["alignment"] == alignment],
+                    dataset_args,
+                )
+                for alignment in ALIGNMENTS
+            }
+            summary = {
+                "dataset": dataset,
+                "alignments": alignment_summaries,
+            }
             summary.update(
                 {
-                    "dataset": dataset,
                     "trajectory": str(trajectory_path),
                     "trajectory_cache_hit": cache_hit,
-                    "complete_rollout_question_count": cache_manifest[
-                        "complete_question_count"
+                    "complete_rollout_record_count": cache_manifest[
+                        "complete_record_count"
                     ],
-                    "failed_rollout_question_count": cache_manifest[
-                        "failed_question_count"
+                    "failed_rollout_record_count": cache_manifest[
+                        "failed_record_count"
                     ],
-                    "failed_rollout_questions_by_reason": cache_manifest[
-                        "failed_questions_by_reason"
+                    "failed_rollout_records_by_reason": cache_manifest[
+                        "failed_records_by_reason"
                     ],
                     "model_name": args.model_name,
                     "model_revision": cache_manifest["cache_identity"][
@@ -695,18 +757,26 @@ def main(argv=None):
             "split": args.split,
             "question_selection_seed": args.probe_seed,
             "latent_steps": args.latent_steps,
+            "alignments": list(ALIGNMENTS),
             "metrics": str(metrics_path),
             "summary": str(summary_path),
         }
         plot_summary(summaries, figure_path, context)
 
-        valid_rows_by_dataset = {
-            dataset: sum(row["finite"] for row in all_rows if row["dataset"] == dataset)
+        valid_rows_by_series = {
+            f"{dataset}.{alignment}": sum(
+                row["finite"]
+                for row in all_rows
+                if row["dataset"] == dataset and row["alignment"] == alignment
+            )
             for dataset in datasets
+            for alignment in ALIGNMENTS
         }
-        if any(count == 0 for count in valid_rows_by_dataset.values()):
-            failed = [name for name, count in valid_rows_by_dataset.items() if not count]
-            raise RuntimeError(f"C0 produced no finite entropy observations for: {failed}")
+        if any(count == 0 for count in valid_rows_by_series.values()):
+            failed = [name for name, count in valid_rows_by_series.items() if not count]
+            raise RuntimeError(
+                f"C0 produced no finite entropy observations for: {failed}"
+            )
         first_summary = summaries[datasets[0]]
         run_manifest.update(
             {
@@ -725,8 +795,8 @@ def main(argv=None):
                     "output_embedding_has_bias"
                 ],
                 "row_count": len(all_rows),
-                "finite_row_count": sum(valid_rows_by_dataset.values()),
-                "finite_rows_by_dataset": valid_rows_by_dataset,
+                "finite_row_count": sum(valid_rows_by_series.values()),
+                "finite_rows_by_series": valid_rows_by_series,
                 "artifacts": {
                     "metrics": str(metrics_path),
                     "summary": str(summary_path),

@@ -9,6 +9,15 @@ from typing import Any, Dict, List, Tuple
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from alignment import (
+    AlignmentState,
+    apply_alignment,
+    build_kernel_state,
+    build_linear_state,
+)
+
+ALIGNMENTS = ("identical", "linear", "kernel")
+
 SYSTEM_PROMPT = (
     "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
 )
@@ -71,7 +80,7 @@ def prompt_template_sha256(dataset: str) -> str:
 
 
 class C0Model:
-    """Minimal loader for the repository's same-model identical recurrence."""
+    """Minimal loader for same-model aligned latent recurrence."""
 
     def __init__(self, args):
         self.model_name = args.model_name
@@ -97,6 +106,7 @@ class C0Model:
         self.model.eval()
         if hasattr(self.model.config, "use_cache"):
             self.model.config.use_cache = True
+        self._alignment_cache = {}
 
     def render_chat(self, messages, add_generation_prompt=True):
         if getattr(self.tokenizer, "chat_template", None):
@@ -123,6 +133,48 @@ def _empty_hidden(hidden_size: int) -> torch.Tensor:
     return torch.empty((0, hidden_size), dtype=torch.float32, device="cpu")
 
 
+def build_alignment_states(wrapper: C0Model, args) -> Dict[str, AlignmentState]:
+    key = (
+        args.kernel_features,
+        args.kernel_temperature,
+        args.kernel_seed,
+        args.kernel_chunk_size,
+        args.align_ridge,
+    )
+    if key in wrapper._alignment_cache:
+        return wrapper._alignment_cache[key]
+    output_head = wrapper.model.get_output_embeddings()
+    input_head = wrapper.model.get_input_embeddings()
+    if output_head is None or input_head is None:
+        raise RuntimeError("C0 alignment requires input and output embedding weights.")
+    output_weight = output_head.weight.detach().float()
+    input_weight = input_head.weight.detach().float()
+    output_bias = getattr(output_head, "bias", None)
+    output_bias = None if output_bias is None else output_bias.detach().float()
+    states = {
+        "identical": AlignmentState(
+            method="identical",
+            target_norm=wrapper.target_embedding_mean_norm,
+        ),
+        "linear": build_linear_state(
+            output_weight,
+            input_weight,
+            ridge=args.align_ridge,
+        ),
+        "kernel": build_kernel_state(
+            output_weight,
+            input_weight,
+            output_bias,
+            feature_count=args.kernel_features,
+            temperature=args.kernel_temperature,
+            seed=args.kernel_seed,
+            chunk_size=args.kernel_chunk_size,
+        ),
+    }
+    wrapper._alignment_cache[key] = states
+    return states
+
+
 @torch.inference_mode()
 def collect_item(
     wrapper: C0Model,
@@ -130,6 +182,8 @@ def collect_item(
     item: Dict[str, Any],
     latent_steps: int,
     dataset: str,
+    alignment: str,
+    alignment_state: AlignmentState,
 ) -> Dict[str, Any]:
     messages = prompt_messages(item["question"], dataset)
     rendered_prompt = wrapper.render_chat(messages, add_generation_prompt=True)
@@ -166,14 +220,7 @@ def collect_item(
                 last_hidden[0].detach().to(device="cpu", dtype=torch.float32)
             )
 
-            # Match the repository's same-model `identical` recurrence: identity
-            # feedback with input-embedding mean-norm scaling. C0's readout below
-            # remains W_out-only and does not compare cross-space mappings.
-            latent_vec = last_hidden.float()
-            latent_vec = latent_vec * (
-                wrapper.target_embedding_mean_norm
-                / latent_vec.norm(dim=-1, keepdim=True).clamp_min(1e-6)
-            )
+            latent_vec = apply_alignment(last_hidden, alignment_state)
             latent_embed = latent_vec.to(last_hidden.dtype).unsqueeze(1)
             outputs = wrapper.model(
                 inputs_embeds=latent_embed,
@@ -216,6 +263,7 @@ def collect_item(
         "prompt_token_count": int(attention_mask.sum().item()),
         "model_name": wrapper.model_name,
         "dataset": dataset,
+        "alignment": alignment,
         "prompt_template_version": prompt_template_version(dataset),
         "hidden_states": stacked,
         "final_hidden": final_hidden,
@@ -234,6 +282,7 @@ def collect(
     logger,
 ) -> List[Dict[str, Any]]:
     records = []
+    alignment_states = build_alignment_states(wrapper, args)
     for number, (item_id, item) in enumerate(indexed_items, start=1):
         logger.info(
             "C0 Phase A: question %d/%d (item_id=%d) started.",
@@ -241,17 +290,26 @@ def collect(
             len(indexed_items),
             item_id,
         )
-        record = collect_item(
-            wrapper, item_id, item, args.latent_steps, args.dataset
-        )
-        records.append(record)
-        logger.info(
-            "C0 Phase A: item_id=%d saved %d/%d hidden states; failure=%s.",
-            item_id,
-            record["valid_step_count"],
-            args.latent_steps,
-            record["failure_reason"],
-        )
-        if record["failure_reason"] and torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        for alignment in ALIGNMENTS:
+            record = collect_item(
+                wrapper,
+                item_id,
+                item,
+                args.latent_steps,
+                args.dataset,
+                alignment,
+                alignment_states[alignment],
+            )
+            records.append(record)
+            logger.info(
+                "C0 Phase A: item_id=%d alignment=%s saved %d/%d hidden states; "
+                "failure=%s.",
+                item_id,
+                alignment,
+                record["valid_step_count"],
+                args.latent_steps,
+                record["failure_reason"],
+            )
+            if record["failure_reason"] and torch.cuda.is_available():
+                torch.cuda.empty_cache()
     return records

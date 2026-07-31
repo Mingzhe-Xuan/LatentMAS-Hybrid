@@ -16,7 +16,7 @@ RUN_SOURCE = ROOT / "exp" / "latent_cot" / "run.py"
 def load_prompt_functions():
     tree = ast.parse(TRAJECTORY_SOURCE.read_text(encoding="utf-8"))
     selected = []
-    wanted_assignments = {"SYSTEM_PROMPT", "PROMPT_TEMPLATES"}
+    wanted_assignments = {"ALIGNMENTS", "SYSTEM_PROMPT", "PROMPT_TEMPLATES"}
     wanted_functions = {
         "prompt_template_version",
         "prompt_messages",
@@ -86,9 +86,10 @@ def load_cache_difference_functions():
 class FakeAxis:
     def __init__(self):
         self.title = None
+        self.lines = []
 
     def plot(self, *args, **kwargs):
-        pass
+        self.lines.append(kwargs)
 
     def fill_between(self, *args, **kwargs):
         pass
@@ -144,6 +145,7 @@ def load_plot_summary(fake_plot):
         "plt": fake_plot,
         "np": SimpleNamespace(array=lambda values: values, nan=float("nan")),
         "write_json": lambda path, payload: None,
+        "ALIGNMENTS": PROMPTS["ALIGNMENTS"],
     }
     exec(
         compile(ast.Module(body=selected, type_ignores=[]), str(RUN_SOURCE), "exec"),
@@ -227,8 +229,13 @@ class LatentCotPlotTests(unittest.TestCase):
             "ci95_low": 0.8,
             "ci95_high": 1.2,
         }
+        alignments = PROMPTS["ALIGNMENTS"]
+        series = {alignment: {"steps": [step]} for alignment in alignments}
         plot_summary(
-            {"gsm8k": {"steps": [step]}, "mbppplus": {"steps": [step]}},
+            {
+                "gsm8k": {"alignments": series},
+                "mbppplus": {"alignments": series},
+            },
             ROOT / "unused.pdf",
             {},
         )
@@ -237,6 +244,25 @@ class LatentCotPlotTests(unittest.TestCase):
         self.assertEqual(
             [axis.title for axis in fake_plot.axes], ["GSM8K", "MBPP+"]
         )
+        for axis in fake_plot.axes:
+            self.assertEqual(
+                [line["label"] for line in axis.lines], list(alignments)
+            )
+            self.assertEqual(len({line["color"] for line in axis.lines}), 3)
+
+
+class LatentCotAlignmentTests(unittest.TestCase):
+    def test_alignment_order_is_fixed(self):
+        self.assertEqual(
+            PROMPTS["ALIGNMENTS"], ("identical", "linear", "kernel")
+        )
+
+    def test_recurrence_applies_alignment_before_feedback(self):
+        source = TRAJECTORY_SOURCE.read_text(encoding="utf-8")
+        self.assertIn(
+            "latent_vec = apply_alignment(last_hidden, alignment_state)", source
+        )
+        self.assertIn('"alignment": alignment', source)
 
 
 class LatentCotTrajectoryCacheTests(unittest.TestCase):
