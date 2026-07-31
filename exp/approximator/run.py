@@ -255,6 +255,13 @@ def parse_args(argv=None):
     parser.add_argument("--skip_float64_audit", action="store_true")
     parser.add_argument("--s3_replicates", type=int, default=32)
     parser.add_argument("--s3_max_questions", type=int, default=50)
+    parser.add_argument(
+        "--s3_tail_epsilons",
+        nargs="+",
+        type=float,
+        default=[0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0],
+        help="Absolute L2 thresholds for S3 empirical tail probabilities.",
+    )
     parser.add_argument("--bootstrap_replicates", type=int, default=1000)
     parser.add_argument("--run_s2_calibration", action="store_true")
     parser.add_argument("--run_s1_performance", action="store_true")
@@ -274,6 +281,12 @@ def parse_args(argv=None):
         parser.error("--temperature must be > 0 and --top_p must be in (0, 1]")
     if args.s3_replicates < 2:
         parser.error("--s3_replicates must be at least 2 for sample variance")
+    if not args.s3_tail_epsilons or any(
+        not np.isfinite(epsilon) or epsilon <= 0
+        for epsilon in args.s3_tail_epsilons
+    ):
+        parser.error("--s3_tail_epsilons must contain finite positive values")
+    args.s3_tail_epsilons = tuple(sorted(set(args.s3_tail_epsilons)))
 
     args.agent_models = tuple(args.agent_models)
     args.task = args.dataset
@@ -917,6 +930,9 @@ def s3_metric_block(rows, args):
                 "relative_std": "relative_std",
                 "bias_squared": "bias2",
                 "mse": "mse",
+                "l2_error_mean": "l2_error_mean",
+                "l2_error_rmse": "l2_error_rmse",
+                "mean_squared_l2_error": "mean_squared_l2_error",
             },
             args,
         ),
@@ -964,6 +980,106 @@ def s3_summaries(rows, args, metadata):
     }
 
 
+def s3_tail_summaries(question_rows, seed_rows, args, metadata):
+    """Summarize tail probabilities with question-cluster bootstrap CIs."""
+    configurations = {}
+    pairs = sorted({(row["m"], row["tau"]) for row in question_rows})
+    for feature_count, temperature in pairs:
+        thresholds = {}
+        for epsilon in sorted(
+            {
+                row["epsilon"]
+                for row in question_rows
+                if row["m"] == feature_count and row["tau"] == temperature
+            }
+        ):
+            subset = [
+                row
+                for row in question_rows
+                if row["m"] == feature_count
+                and row["tau"] == temperature
+                and row["epsilon"] == epsilon
+            ]
+            seeds = [
+                row
+                for row in seed_rows
+                if row["m"] == feature_count
+                and row["tau"] == temperature
+                and row["epsilon"] == epsilon
+            ]
+            thresholds[short_float(epsilon)] = {
+                "epsilon": float(epsilon),
+                "event": "absolute_l2_error_gt_epsilon",
+                "observation_count": sum(
+                    row["observation_count"] for row in subset
+                ),
+                "valid_observation_count": sum(
+                    row["valid_observation_count"] for row in subset
+                ),
+                "exceedance_count": sum(
+                    row["exceedance_count"] for row in subset
+                ),
+                "empirical_tail_probability": common.clustered_metric(
+                    subset, "empirical_tail_probability", args
+                ),
+                "mean_squared_l2_error": common.clustered_metric(
+                    subset, "mean_squared_l2_error", args
+                ),
+                "markov_mse_upper_bound": common.clustered_metric(
+                    subset, "markov_mse_upper_bound", args
+                ),
+                "bound_gap": common.clustered_metric(
+                    subset, "bound_gap", args
+                ),
+                "by_seed_exceedance_rate": common.describe_values(
+                    [
+                        row["exceedance_rate"]
+                        for row in seeds
+                        if row.get("exceedance_rate") is not None
+                        and np.isfinite(row["exceedance_rate"])
+                    ],
+                    state_count=len(seeds),
+                ),
+            }
+        key = f"m{feature_count}.tau{short_float(temperature)}"
+        configurations[key] = {
+            "configuration": {
+                "m": int(feature_count),
+                "tau": float(temperature),
+            },
+            "thresholds": thresholds,
+        }
+    headline_key = "m2048.tau1"
+    headline = configurations.get(headline_key, {"thresholds": {}})
+    return (
+        {
+            **summary_header("s3_tail", metadata),
+            "definition": {
+                "error": "absolute_l2_norm(F_hat - F)",
+                "event": "error > epsilon",
+                "independent_bootstrap_unit": "question",
+                "within_question": "mean over states and random-feature seeds",
+                "upper_bound": "min(1, E[||F_hat-F||_2^2] / epsilon^2)",
+                "upper_bound_note": (
+                    "Markov bound with the second moment estimated from S3 "
+                    "replicates; it does not assume the normalized map is unbiased."
+                ),
+            },
+            **headline,
+        },
+        {
+            **summary_header("s3_tail_grid", metadata),
+            "definition": {
+                "error": "absolute_l2_norm(F_hat - F)",
+                "event": "error > epsilon",
+                "independent_bootstrap_unit": "question",
+                "upper_bound": "plug-in Markov MSE bound",
+            },
+            "configurations": configurations,
+        },
+    )
+
+
 def run_phase_b(path, trajectory, method, args, logger):
     complete_states = [State(**record) for record in trajectory["states"]]
     all_states = sample_analysis_states(complete_states, args)
@@ -1003,6 +1119,8 @@ def run_phase_b(path, trajectory, method, args, logger):
                 "probe_seed",
             )
         },
+        "s3_replicates": int(args.s3_replicates),
+        "s3_tail_epsilons": list(args.s3_tail_epsilons),
     }
     common.set_artifact_context(metadata)
     write_json(
@@ -1121,13 +1239,25 @@ def run_phase_b(path, trajectory, method, args, logger):
                     "s2_calibration_summary",
                 )
         elif study == "s3":
-            rows = s3.run(analysis_states, wo, wi, bias, args, logger)
+            rows, tail_question_rows, tail_seed_rows = s3.run(
+                analysis_states, wo, wi, bias, args, logger
+            )
             common.write_rows(rows, "s3_variance")
+            common.write_rows(tail_question_rows, "s3_tail_by_question")
+            common.write_rows(tail_seed_rows, "s3_tail_by_seed")
             headline, grid = s3_summaries(rows, args, metadata)
             common.write_summary(headline, "s3_summary")
             common.write_summary(grid, "s3_grid_summary")
+            tail_headline, tail_grid = s3_tail_summaries(
+                tail_question_rows, tail_seed_rows, args, metadata
+            )
+            common.write_summary(tail_headline, "s3_tail_summary")
+            common.write_summary(tail_grid, "s3_tail_grid_summary")
             s3.plot_s3(rows)
             s3.plot_kernel_variance(rows)
+            s3.plot_tail_epsilon(tail_question_rows, args)
+            s3.plot_tail_temperature(tail_question_rows, args)
+            s3.plot_tail_by_seed(tail_seed_rows)
             s3.plot_forest(rows)
         else:
             rows, summary = s4.run(

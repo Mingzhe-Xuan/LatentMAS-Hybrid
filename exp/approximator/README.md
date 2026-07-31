@@ -57,3 +57,36 @@ coordinates, per-state rows, or per-seed arrays. Continuous metrics report
 count, mean, median, sample variance, standard deviation, quantiles, and
 question-cluster bootstrap confidence intervals. State values are averaged
 within each question before cross-question statistics are computed.
+
+## S3 tail-probability analysis
+
+S3 evaluates the absolute mapping error `||F_hat - F||_2` across independent
+random-feature seeds. Thresholds are configured with
+`--s3_tail_epsilons`; defaults are `0.01 0.02 0.05 0.1 0.2 0.5 1.0`.
+For example:
+
+```bash
+python exp/approximator/run.py \
+  --agent_models Qwen/Qwen3-4B \
+  --dataset arc_easy --split test --study s3 --reuse_trajectory \
+  --max_questions 50 --max_states_per_question 50 \
+  --s3_tail_epsilons 0.01 0.05 0.1 0.2 0.5 1.0
+```
+
+Outputs include:
+
+- `metrics/s3_tail_by_question.parquet`: per-question empirical tail
+  probability, second moment, and `min(1, MSE / epsilon^2)` Markov bound;
+- `metrics/s3_tail_by_seed.parquet`: question-balanced exceedance rate for
+  every random-feature seed and threshold;
+- `summaries/s3_tail_summary.json`: the `m=2048, tau=1` headline with
+  question-cluster bootstrap confidence intervals;
+- `summaries/s3_tail_grid_summary.json`: all `(m, tau, epsilon)` cells;
+- `figures/s3_tail_probability_epsilon.pdf`: empirical multi-epsilon curves,
+  95% question-bootstrap bands, and theoretical upper bounds;
+- `figures/s3_tail_probability_temperature.pdf`: temperature ablation;
+- `figures/s3_tail_probability_by_seed.pdf`: seed-level exceedance heatmap.
+
+The displayed theoretical curve is a plug-in Markov bound using the empirical
+second moment from S3 replicates. It does not assume that the normalized
+kernel mapping is unbiased.

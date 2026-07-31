@@ -12,5 +12,6 @@
   "max_questions": 10,
   "max_states_per_question": 20,
   "probe_seed": 42,
+  "s3_tail_epsilons": [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0],
   "study": "all"
 }
