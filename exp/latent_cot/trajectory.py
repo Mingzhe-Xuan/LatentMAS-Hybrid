@@ -9,15 +9,27 @@ from typing import Any, Dict, List, Tuple
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-PROMPT_TEMPLATE_VERSION = "c0_gsm8k_question_v1"
 SYSTEM_PROMPT = (
     "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
 )
-USER_PROMPT_TEMPLATE = """Solve the following math problem. Reason step by step.
+PROMPT_TEMPLATES = {
+    "gsm8k": {
+        "version": "c0_gsm8k_question_v1",
+        "user_template": """Solve the following math problem. Reason step by step.
 
 Question: {question}
 
-Work out the solution carefully."""
+Work out the solution carefully.""",
+    },
+    "mbppplus": {
+        "version": "c0_mbppplus_question_v1",
+        "user_template": """Solve the following Python programming problem. Reason step by step.
+
+Task: {question}
+
+Work out a correct and self-contained solution carefully.""",
+    },
+}
 
 
 def _ensure_pad_token(tokenizer) -> None:
@@ -35,18 +47,23 @@ def _past_length(past_key_values) -> int:
     return int(past_key_values[0][0].shape[-2])
 
 
-def prompt_messages(question: str) -> List[Dict[str, str]]:
+def prompt_template_version(dataset: str) -> str:
+    return PROMPT_TEMPLATES[dataset]["version"]
+
+
+def prompt_messages(question: str, dataset: str) -> List[Dict[str, str]]:
+    template = PROMPT_TEMPLATES[dataset]["user_template"]
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": USER_PROMPT_TEMPLATE.format(question=question)},
+        {"role": "user", "content": template.format(question=question)},
     ]
 
 
-def prompt_template_sha256() -> str:
+def prompt_template_sha256(dataset: str) -> str:
     payload = {
-        "version": PROMPT_TEMPLATE_VERSION,
+        "version": prompt_template_version(dataset),
         "system": SYSTEM_PROMPT,
-        "user_template": USER_PROMPT_TEMPLATE,
+        "user_template": PROMPT_TEMPLATES[dataset]["user_template"],
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -112,8 +129,9 @@ def collect_item(
     item_id: int,
     item: Dict[str, Any],
     latent_steps: int,
+    dataset: str,
 ) -> Dict[str, Any]:
-    messages = prompt_messages(item["question"])
+    messages = prompt_messages(item["question"], dataset)
     rendered_prompt = wrapper.render_chat(messages, add_generation_prompt=True)
     encoded = wrapper.tokenizer(
         rendered_prompt,
@@ -197,6 +215,8 @@ def collect_item(
         "prompt_attention_mask": attention_mask[0].detach().cpu().tolist(),
         "prompt_token_count": int(attention_mask.sum().item()),
         "model_name": wrapper.model_name,
+        "dataset": dataset,
+        "prompt_template_version": prompt_template_version(dataset),
         "hidden_states": stacked,
         "final_hidden": final_hidden,
         "valid_step_count": int(stacked.shape[0]),
@@ -221,7 +241,9 @@ def collect(
             len(indexed_items),
             item_id,
         )
-        record = collect_item(wrapper, item_id, item, args.latent_steps)
+        record = collect_item(
+            wrapper, item_id, item, args.latent_steps, args.dataset
+        )
         records.append(record)
         logger.info(
             "C0 Phase A: item_id=%d saved %d/%d hidden states; failure=%s.",

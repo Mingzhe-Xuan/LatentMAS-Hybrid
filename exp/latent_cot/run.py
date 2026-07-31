@@ -27,12 +27,12 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from data import load_gsm8k
+from data import load_gsm8k, load_mbppplus
 from trajectory import (
-    PROMPT_TEMPLATE_VERSION,
     collect,
     load_model,
     prompt_template_sha256,
+    prompt_template_version,
 )
 from utils import auto_device, set_seed
 
@@ -47,7 +47,9 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--study", choices=["c0"], default="c0")
     parser.add_argument("--model_name", default="Qwen/Qwen3-4B")
-    parser.add_argument("--dataset", choices=["gsm8k"], default="gsm8k")
+    parser.add_argument(
+        "--dataset", choices=["all", "gsm8k", "mbppplus"], default="all"
+    )
     parser.add_argument("--split", default="test")
     parser.add_argument("--max_questions", type=int, default=512)
     parser.add_argument("--latent_steps", type=int, default=50)
@@ -176,7 +178,7 @@ def trajectory_paths(args):
             f"q={args.max_questions}",
             f"seed={args.probe_seed}",
             f"k={args.latent_steps}",
-            f"prompt={cache_component(PROMPT_TEMPLATE_VERSION)}",
+            f"prompt={cache_component(prompt_template_version(args.dataset))}",
             f"rc={int(args.trust_remote_code)}",
         )
     )
@@ -188,8 +190,18 @@ def trajectory_paths(args):
     )
 
 
+def selected_datasets(args):
+    if args.dataset == "all":
+        return ("gsm8k", "mbppplus")
+    return (args.dataset,)
+
+
 def sampled_items(args):
-    indexed = list(enumerate(load_gsm8k(split=args.split)))
+    loaders = {
+        "gsm8k": load_gsm8k,
+        "mbppplus": load_mbppplus,
+    }
+    indexed = list(enumerate(loaders[args.dataset](split=args.split)))
     random.Random(args.probe_seed).shuffle(indexed)
     return indexed[: args.max_questions]
 
@@ -246,8 +258,8 @@ def expected_manifest(args, indexed_items, wrapper):
             "model_name": args.model_name,
             "model_fingerprint": model_fingerprint(wrapper),
             "tokenizer_fingerprint": tokenizer_fingerprint(wrapper.tokenizer),
-            "prompt_template_version": PROMPT_TEMPLATE_VERSION,
-            "prompt_template_sha256": prompt_template_sha256(),
+            "prompt_template_version": prompt_template_version(args.dataset),
+            "prompt_template_sha256": prompt_template_sha256(args.dataset),
             "latent_steps": args.latent_steps,
             "question_selection_seed": args.probe_seed,
             "recurrence": "repository_identical_mean_norm_scaled_feedback",
@@ -358,7 +370,7 @@ def load_or_collect(args, indexed_items, wrapper, logger):
             "dataset": args.dataset,
             "split": args.split,
             "latent_steps": args.latent_steps,
-            "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+            "prompt_template_version": prompt_template_version(args.dataset),
             "trajectory_is_complete": all(r["rollout_complete"] for r in records),
         }
         trajectory_path.parent.mkdir(parents=True, exist_ok=True)
@@ -440,6 +452,7 @@ def entropy_rows(trajectory, wrapper, args, logger):
                 )
             rows.append(
                 {
+                    "dataset": args.dataset,
                     "item_id": int(record["item_id"]),
                     "step": int(step),
                     "entropy_nats": entropy,
@@ -506,34 +519,52 @@ def summarize(rows, args):
     }
 
 
-def plot_summary(summary, path, context):
-    steps = summary["steps"]
-    x = np.array([row["step"] for row in steps])
-    mean = np.array([np.nan if row["mean"] is None else row["mean"] for row in steps])
-    median = np.array(
-        [np.nan if row["median"] is None else row["median"] for row in steps]
+def plot_summary(summaries, path, context):
+    datasets = list(summaries)
+    figure, axes = plt.subplots(
+        1,
+        len(datasets),
+        figsize=(7 * len(datasets), 5),
+        sharex=True,
+        sharey=True,
+        squeeze=False,
     )
-    low = np.array(
-        [np.nan if row["ci95_low"] is None else row["ci95_low"] for row in steps]
-    )
-    high = np.array(
-        [np.nan if row["ci95_high"] is None else row["ci95_high"] for row in steps]
-    )
-    figure, axis = plt.subplots(figsize=(8, 5))
-    axis.plot(x, mean, label="Mean entropy", color="#1f77b4", linewidth=2)
-    axis.fill_between(x, low, high, color="#1f77b4", alpha=0.2, label="95% CI")
-    axis.plot(x, median, label="Median entropy", color="#ff7f0e", linestyle="--")
-    axis.set_xlabel("Latent step")
-    axis.set_ylabel("Output entropy (nats)")
-    axis.set_title("C0: output entropy across latent recurrence")
-    axis.grid(alpha=0.25)
-    axis.legend()
+    display_names = {"gsm8k": "GSM8K", "mbppplus": "MBPP+"}
+    for axis, dataset in zip(axes[0], datasets):
+        steps = summaries[dataset]["steps"]
+        x = np.array([row["step"] for row in steps])
+        mean = np.array(
+            [np.nan if row["mean"] is None else row["mean"] for row in steps]
+        )
+        median = np.array(
+            [np.nan if row["median"] is None else row["median"] for row in steps]
+        )
+        low = np.array(
+            [np.nan if row["ci95_low"] is None else row["ci95_low"] for row in steps]
+        )
+        high = np.array(
+            [np.nan if row["ci95_high"] is None else row["ci95_high"] for row in steps]
+        )
+        axis.plot(x, mean, label="Mean entropy", color="#1f77b4", linewidth=2)
+        axis.fill_between(x, low, high, color="#1f77b4", alpha=0.2, label="95% CI")
+        axis.plot(
+            x,
+            median,
+            label="Median entropy",
+            color="#ff7f0e",
+            linestyle="--",
+        )
+        axis.set_xlabel("Latent step")
+        axis.set_title(display_names.get(dataset, dataset))
+        axis.grid(alpha=0.25)
+        axis.legend()
+    axes[0][0].set_ylabel("Output entropy (nats)")
+    figure.suptitle("C0: output entropy across latent recurrence")
     figure.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(path)
     plt.close(figure)
     write_json(path.with_suffix(".json"), context)
-
 
 def safe_name(value):
     return re.sub(r"[^A-Za-z0-9._-]+", "-", str(value)).strip("._-") or "unknown"
@@ -548,7 +579,8 @@ def create_run_dir(args):
     model_leaf = args.model_name.rsplit("/", 1)[-1].rsplit(chr(92), 1)[-1]
     model = safe_name(model_leaf)
     name = (
-        f"gsm8k_{safe_name(args.split)}_c0_{model}_k{args.latent_steps}_"
+        f"{safe_name(args.dataset)}_{safe_name(args.split)}_c0_{model}_"
+        f"k{args.latent_steps}_"
         f"q{args.max_questions}_seed{args.probe_seed}_{timestamp}_{digest}"
     )
     path = RUNS_DIR / name
@@ -567,9 +599,11 @@ def main(argv=None):
     run_dir = create_run_dir(args)
     run_manifest_path = run_dir / "run_manifest.json"
     started = time.time()
+    datasets = selected_datasets(args)
     run_manifest = {
         "status": "running",
         "study": "c0",
+        "datasets": list(datasets),
         "run_directory": str(run_dir),
         "started_at": datetime.now().isoformat(timespec="seconds"),
         "args": vars(args),
@@ -581,89 +615,115 @@ def main(argv=None):
     write_json(run_manifest_path, run_manifest)
     logger.info("C0 run directory: %s", run_dir)
     try:
-        indexed_items = sampled_items(args)
         wrapper = load_model(args)
-        trajectory_path, manifest_path, trajectory, cache_manifest, cache_hit = (
-            load_or_collect(args, indexed_items, wrapper, logger)
-        )
-        rows = entropy_rows(trajectory, wrapper, args, logger)
-        expected_row_count = len(trajectory["records"]) * args.latent_steps
-        if len(rows) != expected_row_count:
-            raise RuntimeError(
-                f"C0 row-count invariant failed: {len(rows)} != {expected_row_count}."
+        all_rows = []
+        summaries = {}
+        dataset_contexts = {}
+        for dataset in datasets:
+            dataset_args = argparse.Namespace(**{**vars(args), "dataset": dataset})
+            logger.info("C0 dataset %s started.", dataset)
+            indexed_items = sampled_items(dataset_args)
+            trajectory_path, manifest_path, trajectory, cache_manifest, cache_hit = (
+                load_or_collect(dataset_args, indexed_items, wrapper, logger)
             )
-        summary = summarize(rows, args)
+            rows = entropy_rows(trajectory, wrapper, dataset_args, logger)
+            expected_row_count = len(trajectory["records"]) * args.latent_steps
+            if len(rows) != expected_row_count:
+                raise RuntimeError(
+                    f"C0 row-count invariant failed for {dataset}: "
+                    f"{len(rows)} != {expected_row_count}."
+                )
+            summary = summarize(rows, dataset_args)
+            summary.update(
+                {
+                    "dataset": dataset,
+                    "trajectory": str(trajectory_path),
+                    "trajectory_cache_hit": cache_hit,
+                    "complete_rollout_question_count": cache_manifest[
+                        "complete_question_count"
+                    ],
+                    "failed_rollout_question_count": cache_manifest[
+                        "failed_question_count"
+                    ],
+                    "failed_rollout_questions_by_reason": cache_manifest[
+                        "failed_questions_by_reason"
+                    ],
+                    "model_name": args.model_name,
+                    "model_revision": cache_manifest["cache_identity"][
+                        "model_fingerprint"
+                    ]["resolved_commit"],
+                    "prompt_template_version": prompt_template_version(dataset),
+                    "prompt_template_sha256": prompt_template_sha256(dataset),
+                    "tokenizer_fingerprint": cache_manifest["cache_identity"][
+                        "tokenizer_fingerprint"
+                    ],
+                    "output_embedding_has_bias": cache_manifest["provenance"][
+                        "output_embedding_has_bias"
+                    ],
+                }
+            )
+            summaries[dataset] = summary
+            all_rows.extend(rows)
+            dataset_contexts[dataset] = {
+                "trajectory": str(trajectory_path),
+                "trajectory_manifest": str(manifest_path),
+                "trajectory_manifest_sha256": file_sha256(manifest_path),
+                "trajectory_cache_hit": cache_hit,
+                "prompt_template_version": prompt_template_version(dataset),
+                "prompt_template_sha256": prompt_template_sha256(dataset),
+            }
+            logger.info("C0 dataset %s completed.", dataset)
+
         metrics_path = run_dir / "metrics" / "c0_entropy_by_step.parquet"
         summary_path = run_dir / "summaries" / "c0_summary.json"
         figure_path = run_dir / "figures" / "c0_entropy_vs_step.pdf"
-        write_parquet(metrics_path, rows)
-        summary.update(
-            {
-                "trajectory": str(trajectory_path),
-                "trajectory_cache_hit": cache_hit,
-                "complete_rollout_question_count": cache_manifest[
-                    "complete_question_count"
-                ],
-                "failed_rollout_question_count": cache_manifest[
-                    "failed_question_count"
-                ],
-                "failed_rollout_questions_by_reason": cache_manifest[
-                    "failed_questions_by_reason"
-                ],
-                "model_name": args.model_name,
-                "model_revision": cache_manifest["cache_identity"]["model_fingerprint"][
-                    "resolved_commit"
-                ],
-                "prompt_template_version": PROMPT_TEMPLATE_VERSION,
-                "tokenizer_fingerprint": cache_manifest["cache_identity"][
-                    "tokenizer_fingerprint"
-                ],
-                "output_embedding_has_bias": cache_manifest["provenance"][
-                    "output_embedding_has_bias"
-                ],
-            }
-        )
-        write_json(summary_path, summary)
+        write_parquet(metrics_path, all_rows)
+        summary_payload = {
+            "study": "c0",
+            "datasets": summaries,
+            "dataset_order": list(datasets),
+        }
+        write_json(summary_path, summary_payload)
         context = {
             "study": "c0",
             "model_name": args.model_name,
-            "model_revision": summary["model_revision"],
-            "dataset": args.dataset,
+            "datasets": dataset_contexts,
+            "dataset_order": list(datasets),
             "split": args.split,
             "question_selection_seed": args.probe_seed,
             "latent_steps": args.latent_steps,
-            "prompt_template_version": PROMPT_TEMPLATE_VERSION,
-            "trajectory": str(trajectory_path),
-            "trajectory_manifest": str(manifest_path),
-            "trajectory_manifest_sha256": file_sha256(manifest_path),
-            "trajectory_cache_hit": cache_hit,
             "metrics": str(metrics_path),
             "summary": str(summary_path),
         }
-        plot_summary(summary, figure_path, context)
-        valid_rows = sum(row["finite"] for row in rows)
+        plot_summary(summaries, figure_path, context)
+
+        valid_rows_by_dataset = {
+            dataset: sum(row["finite"] for row in all_rows if row["dataset"] == dataset)
+            for dataset in datasets
+        }
+        if any(count == 0 for count in valid_rows_by_dataset.values()):
+            failed = [name for name, count in valid_rows_by_dataset.items() if not count]
+            raise RuntimeError(f"C0 produced no finite entropy observations for: {failed}")
+        first_summary = summaries[datasets[0]]
         run_manifest.update(
             {
-                "status": "completed" if valid_rows else "failed",
+                "status": "completed",
                 "completed_at": datetime.now().isoformat(timespec="seconds"),
                 "elapsed_seconds": time.time() - started,
-                "trajectory_cache": {
-                    "cache_hit": cache_hit,
-                    "trajectory_file": str(trajectory_path),
-                    "manifest_file": str(manifest_path),
-                },
-                "model_revision": summary["model_revision"],
-                "tokenizer_fingerprint": summary["tokenizer_fingerprint"],
-                "prompt_template_version": PROMPT_TEMPLATE_VERSION,
-                "prompt_template_sha256": prompt_template_sha256(),
+                "dataset_runs": dataset_contexts,
+                "model_revision": first_summary["model_revision"],
+                "tokenizer_fingerprint": first_summary["tokenizer_fingerprint"],
                 "generation": {
                     "do_sample": False,
                     "decoding": "greedy",
                     "text_generation_performed": False,
                 },
-                "output_embedding_has_bias": summary["output_embedding_has_bias"],
-                "row_count": len(rows),
-                "finite_row_count": valid_rows,
+                "output_embedding_has_bias": first_summary[
+                    "output_embedding_has_bias"
+                ],
+                "row_count": len(all_rows),
+                "finite_row_count": sum(valid_rows_by_dataset.values()),
+                "finite_rows_by_dataset": valid_rows_by_dataset,
                 "artifacts": {
                     "metrics": str(metrics_path),
                     "summary": str(summary_path),
@@ -672,8 +732,6 @@ def main(argv=None):
             }
         )
         write_json(run_manifest_path, run_manifest)
-        if not valid_rows:
-            raise RuntimeError("C0 produced no finite entropy observations.")
         logger.info("C0 completed in %.1fs.", time.time() - started)
     except Exception as error:
         run_manifest.update(
@@ -688,7 +746,6 @@ def main(argv=None):
         write_json(run_manifest_path, run_manifest)
         logger.exception("C0 failed.")
         raise
-
 
 if __name__ == "__main__":
     main()

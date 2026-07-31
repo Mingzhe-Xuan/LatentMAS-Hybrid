@@ -1,0 +1,227 @@
+import ast
+import hashlib
+import json
+import random
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Dict, List
+
+
+ROOT = Path(__file__).parents[1]
+TRAJECTORY_SOURCE = ROOT / "exp" / "latent_cot" / "trajectory.py"
+RUN_SOURCE = ROOT / "exp" / "latent_cot" / "run.py"
+
+
+def load_prompt_functions():
+    tree = ast.parse(TRAJECTORY_SOURCE.read_text(encoding="utf-8"))
+    selected = []
+    wanted_assignments = {"SYSTEM_PROMPT", "PROMPT_TEMPLATES"}
+    wanted_functions = {
+        "prompt_template_version",
+        "prompt_messages",
+        "prompt_template_sha256",
+    }
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id in wanted_assignments
+            for target in node.targets
+        ):
+            selected.append(node)
+        elif isinstance(node, ast.FunctionDef) and node.name in wanted_functions:
+            selected.append(node)
+    namespace = {
+        "hashlib": hashlib,
+        "json": json,
+        "Dict": Dict,
+        "List": List,
+    }
+    exec(
+        compile(
+            ast.Module(body=selected, type_ignores=[]),
+            str(TRAJECTORY_SOURCE),
+            "exec",
+        ),
+        namespace,
+    )
+    return namespace
+
+
+def load_run_functions(gsm8k_loader, mbppplus_loader):
+    tree = ast.parse(RUN_SOURCE.read_text(encoding="utf-8"))
+    selected = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name in {"selected_datasets", "sampled_items"}
+    ]
+    namespace = {
+        "load_gsm8k": gsm8k_loader,
+        "load_mbppplus": mbppplus_loader,
+        "random": random,
+    }
+    exec(
+        compile(ast.Module(body=selected, type_ignores=[]), str(RUN_SOURCE), "exec"),
+        namespace,
+    )
+    return namespace
+
+
+class FakeAxis:
+    def __init__(self):
+        self.title = None
+
+    def plot(self, *args, **kwargs):
+        pass
+
+    def fill_between(self, *args, **kwargs):
+        pass
+
+    def set_xlabel(self, *args, **kwargs):
+        pass
+
+    def set_ylabel(self, *args, **kwargs):
+        pass
+
+    def set_title(self, title):
+        self.title = title
+
+    def grid(self, *args, **kwargs):
+        pass
+
+    def legend(self, *args, **kwargs):
+        pass
+
+
+class FakeFigure:
+    def suptitle(self, *args, **kwargs):
+        pass
+
+    def tight_layout(self):
+        pass
+
+    def savefig(self, path):
+        self.saved_path = path
+
+
+class FakePlot:
+    def __init__(self):
+        self.axes = [FakeAxis(), FakeAxis()]
+        self.subplots_args = None
+
+    def subplots(self, rows, columns, **kwargs):
+        self.subplots_args = (rows, columns, kwargs)
+        return FakeFigure(), [self.axes]
+
+    def close(self, figure):
+        pass
+
+
+def load_plot_summary(fake_plot):
+    tree = ast.parse(RUN_SOURCE.read_text(encoding="utf-8"))
+    selected = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "plot_summary"
+    ]
+    namespace = {
+        "plt": fake_plot,
+        "np": SimpleNamespace(array=lambda values: values, nan=float("nan")),
+        "write_json": lambda path, payload: None,
+    }
+    exec(
+        compile(ast.Module(body=selected, type_ignores=[]), str(RUN_SOURCE), "exec"),
+        namespace,
+    )
+    return namespace["plot_summary"]
+
+
+PROMPTS = load_prompt_functions()
+
+
+class LatentCotPromptTests(unittest.TestCase):
+    def test_gsm8k_prompt_remains_unchanged(self):
+        messages = PROMPTS["prompt_messages"]("What is 2 + 2?", "gsm8k")
+        self.assertEqual(
+            messages[1]["content"],
+            "Solve the following math problem. Reason step by step.\n\n"
+            "Question: What is 2 + 2?\n\n"
+            "Work out the solution carefully.",
+        )
+
+    def test_mbppplus_prompt_uses_parallel_programming_structure(self):
+        messages = PROMPTS["prompt_messages"]("Write add(a, b).", "mbppplus")
+        content = messages[1]["content"]
+        self.assertIn("Python programming problem", content)
+        self.assertIn("Reason step by step", content)
+        self.assertIn("Task: Write add(a, b).", content)
+        self.assertIn("self-contained solution", content)
+
+    def test_dataset_prompts_have_distinct_versions_and_hashes(self):
+        version = PROMPTS["prompt_template_version"]
+        digest = PROMPTS["prompt_template_sha256"]
+        self.assertEqual(version("gsm8k"), "c0_gsm8k_question_v1")
+        self.assertEqual(version("mbppplus"), "c0_mbppplus_question_v1")
+        self.assertNotEqual(digest("gsm8k"), digest("mbppplus"))
+
+
+class LatentCotDatasetDispatchTests(unittest.TestCase):
+    def test_default_all_selects_both_datasets_in_plot_order(self):
+        functions = load_run_functions(lambda split: (), lambda split: ())
+        selected = functions["selected_datasets"](SimpleNamespace(dataset="all"))
+        self.assertEqual(selected, ("gsm8k", "mbppplus"))
+
+    def test_single_dataset_selection_remains_available(self):
+        functions = load_run_functions(lambda split: (), lambda split: ())
+        selected = functions["selected_datasets"](
+            SimpleNamespace(dataset="mbppplus")
+        )
+        self.assertEqual(selected, ("mbppplus",))
+
+    def test_mbppplus_loader_receives_requested_split(self):
+        calls = []
+
+        def gsm8k_loader(split):
+            raise AssertionError("GSM8K loader must not be called")
+
+        def mbppplus_loader(split):
+            calls.append(split)
+            return ({"question": f"task-{index}"} for index in range(4))
+
+        sampled_items = load_run_functions(
+            gsm8k_loader, mbppplus_loader
+        )["sampled_items"]
+        args = SimpleNamespace(
+            dataset="mbppplus", split="test", probe_seed=42, max_questions=2
+        )
+        rows = sampled_items(args)
+        self.assertEqual(calls, ["test"])
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(row[1]["question"].startswith("task-") for row in rows))
+
+
+class LatentCotPlotTests(unittest.TestCase):
+    def test_combined_result_uses_two_labeled_subplots(self):
+        fake_plot = FakePlot()
+        plot_summary = load_plot_summary(fake_plot)
+        step = {
+            "step": 0,
+            "mean": 1.0,
+            "median": 0.9,
+            "ci95_low": 0.8,
+            "ci95_high": 1.2,
+        }
+        plot_summary(
+            {"gsm8k": {"steps": [step]}, "mbppplus": {"steps": [step]}},
+            ROOT / "unused.pdf",
+            {},
+        )
+        self.assertEqual(fake_plot.subplots_args[0:2], (1, 2))
+        self.assertTrue(fake_plot.subplots_args[2]["sharey"])
+        self.assertEqual(
+            [axis.title for axis in fake_plot.axes], ["GSM8K", "MBPP+"]
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -6,7 +6,7 @@
 #   qsub exp.sh
 #   qsub -v EXP_TARGET=approximator exp.sh
 #   qsub -v EXP_TARGET=approximator,STUDY=s3,DATASET=arc_easy,SPLIT=train exp.sh
-#   qsub -v EXP_TARGET=latent_cot,METHOD=kernel,DATASET=gsm8k exp.sh
+#   qsub -v EXP_TARGET=latent_cot exp.sh
 #   qsub -v EXP_TARGET=latent_comm,STUDY=m2,DATASET=arc_challenge exp.sh
 ###############################################################################
 
@@ -118,7 +118,7 @@ case "${EXP_TARGET}" in
         ;;
     latent_cot)
         STUDY="${STUDY:-c0}"; MODEL_PAIR="${MODEL_PAIR:-c0}"
-        DATASET="${DATASET:-gsm8k}"; SPLIT="${SPLIT:-test}"
+        DATASET="${DATASET:-all}"; SPLIT="${SPLIT:-test}"
         MAX_QUESTIONS="${MAX_QUESTIONS:-50}"; MODEL_NAME="${MODEL_NAME:-Qwen/Qwen3-4B}"
         LATENT_STEPS="${LATENT_STEPS:-50}"; ENTRY="exp/latent_cot/run.py"
         ARGS=(--study "${STUDY}" --model_name "${MODEL_NAME}" --dataset "${DATASET}" --split "${SPLIT}" --probe_seed "${PROBE_SEED}" --max_questions "${MAX_QUESTIONS}" --latent_steps "${LATENT_STEPS}" --device "${DEVICE}")
