@@ -63,19 +63,41 @@ def plot_s4(rows, args):
             "invalid_state_count": len(all_keys),
             "mapped_embedding_count": 0,
         }
-    matrix = np.asarray([row["embedding"] for row in chosen], dtype=np.float32)
-    centered = matrix - matrix.mean(0)
-    _, singular_values, components = np.linalg.svd(centered, full_matrices=False)
-    coordinates = centered @ components[:2].T
-    if coordinates.shape[1] < 2:
-        coordinates = np.pad(
-            coordinates, ((0, 0), (0, 2 - coordinates.shape[1]))
+    methods = ("exact", "linear", "kernel")
+    pca_ratios = {}
+    for method in methods:
+        subset = [row for row in chosen if row["method"] == method]
+        matrix = np.asarray(
+            [row["embedding"] for row in subset], dtype=np.float32
         )
-    for row, coordinate in zip(chosen, coordinates):
-        row["pc1"], row["pc2"] = float(coordinate[0]), float(coordinate[1])
+        centered = matrix - matrix.mean(0)
+        _, singular_values, components = np.linalg.svd(
+            centered, full_matrices=False
+        )
+        coordinates = centered @ components[:2].T
+        if coordinates.shape[1] < 2:
+            coordinates = np.pad(
+                coordinates, ((0, 0), (0, 2 - coordinates.shape[1]))
+            )
+        for row, coordinate in zip(subset, coordinates):
+            row["pc1"], row["pc2"] = (
+                float(coordinate[0]),
+                float(coordinate[1]),
+            )
+        explained = np.square(singular_values)
+        explained /= explained.sum().clip(
+            min=np.finfo(np.float64).eps
+        )
+        pc1_ratio = float(explained[0]) if len(explained) else 0.0
+        pc2_ratio = float(explained[1]) if len(explained) > 1 else 0.0
+        pca_ratios[method] = {
+            "pc1_explained_variance_ratio": pc1_ratio,
+            "pc2_explained_variance_ratio": pc2_ratio,
+            "pc1_pc2_cumulative_ratio": pc1_ratio + pc2_ratio,
+        }
 
-    figure, axes = plt.subplots(1, 3, figsize=(15, 4), sharex=True, sharey=True)
-    for axis, method in zip(axes, ("exact", "linear", "kernel")):
+    figure, axes = plt.subplots(1, 3, figsize=(15, 4))
+    for axis, method in zip(axes, methods):
         subset = [row for row in chosen if row["method"] == method]
         axis.scatter(
             [row["pc1"] for row in subset],
@@ -85,37 +107,36 @@ def plot_s4(rows, args):
             s=8,
             alpha=0.7,
         )
-        axis.set_title(method)
-        axis.set_xlabel("PC1")
-    axes[0].set_ylabel("PC2")
+        ratios = pca_ratios[method]
+        axis.set_title(
+            f"{method}\n"
+            f"PC1 {ratios['pc1_explained_variance_ratio']:.1%}, "
+            f"PC2 {ratios['pc2_explained_variance_ratio']:.1%}"
+        )
+        axis.set(xlabel="PC1", ylabel="PC2")
     figure.tight_layout()
-    save_figure(figure, "s4_shared_pca")
+    save_figure(figure, "s4_per_method_pca")
     plt.close(figure)
     write_rows(
         [{key: value for key, value in row.items() if key != "embedding"} for row in chosen],
         contextual_stem("s4_pca_coordinates"),
     )
 
-    explained = np.square(singular_values)
-    explained /= explained.sum().clip(min=np.finfo(np.float64).eps)
-    pc1_ratio = float(explained[0]) if len(explained) else 0.0
-    pc2_ratio = float(explained[1]) if len(explained) > 1 else 0.0
     summary = {
         "input_state_count": len(all_keys),
         "valid_state_count": len(keys),
         "invalid_state_count": len(all_keys) - len(keys),
         "mapped_embedding_count": len(chosen),
         "pca": {
-            "pc1_explained_variance_ratio": pc1_ratio,
-            "pc2_explained_variance_ratio": pc2_ratio,
-            "pc1_pc2_cumulative_ratio": pc1_ratio + pc2_ratio,
+            "fit": "per_method",
             "by_method": {},
         },
         "paired_geometry": {},
     }
-    for method in ("exact", "linear", "kernel"):
+    for method in methods:
         subset = [row for row in chosen if row["method"] == method]
         summary["pca"]["by_method"][method] = {
+            **pca_ratios[method],
             "pc1": clustered_metric(subset, "pc1", args),
             "pc2": clustered_metric(subset, "pc2", args),
             "entropy": clustered_metric(subset, "entropy", args),
@@ -164,6 +185,9 @@ def plot_s4(rows, args):
         }
 
     if args.s4_tsne:
+        matrix = np.asarray(
+            [row["embedding"] for row in chosen], dtype=np.float32
+        )
         try:
             from sklearn.manifold import TSNE
         except ImportError as error:

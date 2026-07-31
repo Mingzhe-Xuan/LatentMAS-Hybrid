@@ -42,9 +42,18 @@ class S4PlotTests(unittest.TestCase):
 
         pca = summary["pca"]
         self.assertEqual(summary["mapped_embedding_count"], 6)
-        self.assertGreaterEqual(pca["pc1_explained_variance_ratio"], 0.0)
-        self.assertLessEqual(pca["pc1_pc2_cumulative_ratio"], 1.0)
-        self.assertAlmostEqual(pca["pc1_pc2_cumulative_ratio"], 1.0)
+        self.assertEqual(pca["fit"], "per_method")
+        for method in ("exact", "linear", "kernel"):
+            method_pca = pca["by_method"][method]
+            self.assertGreaterEqual(
+                method_pca["pc1_explained_variance_ratio"], 0.0
+            )
+            self.assertLessEqual(
+                method_pca["pc1_pc2_cumulative_ratio"], 1.0
+            )
+            self.assertAlmostEqual(
+                method_pca["pc1_pc2_cumulative_ratio"], 1.0
+            )
 
 
 if __name__ == "__main__":
