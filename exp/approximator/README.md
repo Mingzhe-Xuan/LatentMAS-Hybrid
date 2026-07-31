@@ -90,3 +90,27 @@ Outputs include:
 The displayed theoretical curve is a plug-in Markov bound using the empirical
 second moment from S3 replicates. It does not assume that the normalized
 kernel mapping is unbiased.
+
+## S4 joint alignment visualization
+
+S4 constructs four vectors for every sampled Refiner latent state: the raw
+hidden state immediately before the output logits, the exact
+probability-weighted target input embedding, and the Linear and Kernel aligned
+states. It then creates two independent joint-fit visualizations:
+
+- `figures/s4_linear_joint_reduction.pdf`: hidden, exact embedding, and
+  Linear-aligned states;
+- `figures/s4_kernel_joint_reduction.pdf`: hidden, exact embedding, and
+  Kernel-aligned states.
+
+Each PDF contains joint PCA and joint t-SNE panels by default. Pass
+`--no_s4_tsne` to disable t-SNE and generate PCA-only figures. Blue denotes raw hidden states, orange denotes exact
+embedding states, and green denotes aligned states. No per-class
+standardization is applied, so the plots retain the actual scale and geometry
+of the three spaces.
+
+Coordinate artifacts are written to
+`metrics/s4_joint_pca_coordinates.parquet` and, when enabled,
+`metrics/s4_joint_tsne_coordinates.parquet`. Raw hidden and target embedding
+vectors must have the same dimension; S4 fails explicitly when a cross-model
+pair does not satisfy that requirement.

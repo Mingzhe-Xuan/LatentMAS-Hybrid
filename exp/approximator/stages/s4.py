@@ -1,10 +1,36 @@
 from .common import *
 
 
+ALIGNMENTS = ("linear", "kernel")
+JOINT_SPACES = (
+    ("hidden", "hidden"),
+    ("embedding", "exact"),
+)
+SPACE_STYLES = {
+    "hidden": {"color": "#4C78A8", "marker": "o", "label": "hidden state"},
+    "embedding": {
+        "color": "#F58518",
+        "marker": "o",
+        "label": "embedding state (exact)",
+    },
+    "aligned": {"color": "#54A24B", "marker": "x", "label": "aligned state"},
+}
+
+
 def run(states, wo, wi, bias, kernel, args, logger):
+    source_dimension = int(wo.shape[1])
+    target_dimension = int(wi.shape[1])
+    if source_dimension != target_dimension:
+        raise ValueError(
+            "S4 raw-hidden joint visualization requires equal source-hidden "
+            f"and target-embedding dimensions, got {source_dimension} and "
+            f"{target_dimension}."
+        )
+
     linear = build_linear_state(wo, wi, ridge=1e-5)
     rows = []
     for state in states:
+        hidden_value = state.vector.to(wo.device, dtype=wo.dtype)
         exact_value, probabilities = exact(
             state.vector, wo, wi, bias, args.kernel_temperature
         )
@@ -15,6 +41,7 @@ def run(states, wo, wi, bias, kernel, args, logger):
             -(probabilities * probabilities.clamp_min(1e-30).log()).sum()
         )
         for method, value in (
+            ("hidden", hidden_value),
             ("exact", exact_value),
             ("linear", linear_value),
             ("kernel", kernel_value),
@@ -24,144 +51,240 @@ def run(states, wo, wi, bias, kernel, args, logger):
                     **base(state),
                     "method": method,
                     "entropy": entropy,
-                    "embedding": value.cpu().tolist(),
+                    "embedding": value.detach().float().cpu().tolist(),
                 }
             )
-    logger.info("S4: generated exact/linear/kernel Refiner-to-Judger outputs.")
+    logger.info(
+        "S4: generated hidden/exact/linear/kernel Refiner-to-Judger vectors."
+    )
     summary = plot_s4(rows, args)
     return rows, summary
 
 
-def plot_s4(rows, args):
-    by_state = {}
-    for row in rows:
-        key = (
-            row["item_id"],
-            row["position"],
-            row["turn_id"],
-            row["agent_id"],
-        )
-        by_state.setdefault(key, []).append(row)
-    all_keys = list(by_state)
-    keys = [
-        key
-        for key, state_rows in by_state.items()
-        if len(state_rows) == 3
-        and all(
-            np.isfinite(np.asarray(row["embedding"], dtype=np.float32)).all()
-            for row in state_rows
-        )
-    ]
-    random.Random(args.probe_seed).shuffle(keys)
-    chosen = [
-        row for key in keys[: min(2000, len(keys))] for row in by_state[key]
-    ]
-    if not chosen:
-        return {
-            "input_state_count": len(all_keys),
-            "valid_state_count": 0,
-            "invalid_state_count": len(all_keys),
-            "mapped_embedding_count": 0,
-        }
-    methods = ("exact", "linear", "kernel")
-    pca_ratios = {}
-    for method in methods:
-        subset = [row for row in chosen if row["method"] == method]
-        matrix = np.asarray(
-            [row["embedding"] for row in subset], dtype=np.float32
-        )
-        centered = matrix - matrix.mean(0)
-        _, singular_values, components = np.linalg.svd(
-            centered, full_matrices=False
-        )
-        coordinates = centered @ components[:2].T
-        if coordinates.shape[1] < 2:
-            coordinates = np.pad(
-                coordinates, ((0, 0), (0, 2 - coordinates.shape[1]))
-            )
-        for row, coordinate in zip(subset, coordinates):
-            row["pc1"], row["pc2"] = (
-                float(coordinate[0]),
-                float(coordinate[1]),
-            )
-        explained = np.square(singular_values)
-        explained /= explained.sum().clip(
-            min=np.finfo(np.float64).eps
-        )
-        pc1_ratio = float(explained[0]) if len(explained) else 0.0
-        pc2_ratio = float(explained[1]) if len(explained) > 1 else 0.0
-        pca_ratios[method] = {
-            "pc1_explained_variance_ratio": pc1_ratio,
-            "pc2_explained_variance_ratio": pc2_ratio,
-            "pc1_pc2_cumulative_ratio": pc1_ratio + pc2_ratio,
-        }
-
-    figure, axes = plt.subplots(1, 3, figsize=(15, 4))
-    for axis, method in zip(axes, methods):
-        subset = [row for row in chosen if row["method"] == method]
-        axis.scatter(
-            [row["pc1"] for row in subset],
-            [row["pc2"] for row in subset],
-            c=[row["entropy"] for row in subset],
-            cmap="viridis",
-            s=8,
-            alpha=0.7,
-        )
-        ratios = pca_ratios[method]
-        axis.set_title(
-            f"{method}\n"
-            f"PC1 {ratios['pc1_explained_variance_ratio']:.1%}, "
-            f"PC2 {ratios['pc2_explained_variance_ratio']:.1%}"
-        )
-        axis.set(xlabel="PC1", ylabel="PC2")
-    figure.tight_layout()
-    save_figure(figure, "s4_per_method_pca")
-    plt.close(figure)
-    write_rows(
-        [{key: value for key, value in row.items() if key != "embedding"} for row in chosen],
-        contextual_stem("s4_pca_coordinates"),
+def _state_key(row):
+    return (
+        row["item_id"],
+        row["position"],
+        row["turn_id"],
+        row["agent_id"],
     )
 
-    summary = {
-        "input_state_count": len(all_keys),
-        "valid_state_count": len(keys),
-        "invalid_state_count": len(all_keys) - len(keys),
-        "mapped_embedding_count": len(chosen),
-        "pca": {
-            "fit": "per_method",
-            "by_method": {},
-        },
-        "paired_geometry": {},
+
+def _valid_states(rows, probe_seed):
+    by_state = {}
+    for row in rows:
+        by_state.setdefault(_state_key(row), {})[row["method"]] = row
+    required = {"hidden", "exact", "linear", "kernel"}
+    keys = []
+    dimensions = set()
+    for key, methods in by_state.items():
+        if not required.issubset(methods):
+            continue
+        arrays = [
+            np.asarray(methods[method]["embedding"], dtype=np.float32)
+            for method in required
+        ]
+        if not all(array.ndim == 1 and np.isfinite(array).all() for array in arrays):
+            continue
+        state_dimensions = {array.shape[0] for array in arrays}
+        if len(state_dimensions) != 1:
+            continue
+        dimensions.update(state_dimensions)
+        keys.append(key)
+    if len(dimensions) > 1:
+        raise ValueError(
+            "S4 joint visualization found inconsistent vector dimensions: "
+            f"{sorted(dimensions)}"
+        )
+    random.Random(probe_seed).shuffle(keys)
+    selected_keys = keys[: min(2000, len(keys))]
+    return by_state, keys, selected_keys, (next(iter(dimensions)) if dimensions else 0)
+
+
+def _joint_entries(by_state, selected_keys, alignment):
+    entries = []
+    specification = JOINT_SPACES + (("aligned", alignment),)
+    for key in selected_keys:
+        methods = by_state[key]
+        for space, method in specification:
+            row = methods[method]
+            entries.append(
+                {
+                    **{
+                        name: value
+                        for name, value in row.items()
+                        if name not in ("embedding", "method")
+                    },
+                    "alignment": alignment,
+                    "space": space,
+                    "source_method": method,
+                    "embedding": row["embedding"],
+                }
+            )
+    return entries
+
+
+def _pca(entries):
+    try:
+        from sklearn.decomposition import PCA
+    except ImportError as error:
+        raise RuntimeError("S4 joint PCA requires scikit-learn") from error
+    matrix = np.asarray([row["embedding"] for row in entries], dtype=np.float32)
+    component_count = min(2, matrix.shape[0], matrix.shape[1])
+    estimator = PCA(
+        n_components=component_count,
+        svd_solver="randomized",
+        random_state=101,
+    )
+    coordinates = estimator.fit_transform(matrix)
+    if coordinates.shape[1] < 2:
+        coordinates = np.pad(
+            coordinates, ((0, 0), (0, 2 - coordinates.shape[1]))
+        )
+    ratios = np.zeros(2, dtype=np.float64)
+    ratios[: len(estimator.explained_variance_ratio_)] = (
+        estimator.explained_variance_ratio_
+    )
+    coordinate_rows = []
+    for row, coordinate in zip(entries, coordinates):
+        coordinate_rows.append(
+            {
+                **{key: value for key, value in row.items() if key != "embedding"},
+                "reducer": "pca",
+                "x": float(coordinate[0]),
+                "y": float(coordinate[1]),
+                "pc1": float(coordinate[0]),
+                "pc2": float(coordinate[1]),
+            }
+        )
+    return coordinate_rows, {
+        "pc1_explained_variance_ratio": float(ratios[0]),
+        "pc2_explained_variance_ratio": float(ratios[1]),
+        "pc1_pc2_cumulative_ratio": float(ratios.sum()),
     }
-    for method in methods:
-        subset = [row for row in chosen if row["method"] == method]
-        summary["pca"]["by_method"][method] = {
-            **pca_ratios[method],
-            "pc1": clustered_metric(subset, "pc1", args),
-            "pc2": clustered_metric(subset, "pc2", args),
+
+
+def _tsne(entries):
+    try:
+        from sklearn.manifold import TSNE
+    except ImportError as error:
+        raise RuntimeError("--s4_tsne requires scikit-learn") from error
+    matrix = np.asarray([row["embedding"] for row in entries], dtype=np.float32)
+    if len(matrix) <= 50:
+        raise ValueError("S4 joint t-SNE needs more than 50 vectors")
+    estimator = TSNE(
+        n_components=2,
+        init="pca",
+        perplexity=50,
+        learning_rate="auto",
+        max_iter=1500,
+        random_state=101,
+    )
+    coordinates = estimator.fit_transform(matrix)
+    coordinate_rows = []
+    for row, coordinate in zip(entries, coordinates):
+        coordinate_rows.append(
+            {
+                **{key: value for key, value in row.items() if key != "embedding"},
+                "reducer": "tsne",
+                "x": float(coordinate[0]),
+                "y": float(coordinate[1]),
+                "tsne1": float(coordinate[0]),
+                "tsne2": float(coordinate[1]),
+            }
+        )
+    return coordinate_rows, float(estimator.kl_divergence_)
+
+
+def _scatter_joint(axis, rows, title, xlabel, ylabel):
+    for space in ("hidden", "embedding", "aligned"):
+        subset = [row for row in rows if row["space"] == space]
+        style = SPACE_STYLES[space]
+        axis.scatter(
+            [row["x"] for row in subset],
+            [row["y"] for row in subset],
+            c=style["color"],
+            marker=style["marker"],
+            label=style["label"],
+            s=12 if space != "aligned" else 16,
+            alpha=0.55 if space == "hidden" else 0.7,
+            linewidths=0.8 if space == "aligned" else 0,
+        )
+    axis.set(title=title, xlabel=xlabel, ylabel=ylabel)
+    axis.grid(True, alpha=0.18)
+    axis.legend(fontsize=8)
+
+
+def _plot_joint_reduction(alignment, pca_rows, pca_ratios, tsne_rows=None):
+    panel_count = 2 if tsne_rows is not None else 1
+    figure, axes = plt.subplots(
+        1,
+        panel_count,
+        figsize=(7 * panel_count, 5),
+        squeeze=False,
+    )
+    _scatter_joint(
+        axes[0, 0],
+        pca_rows,
+        (
+            "Joint PCA\n"
+            f"PC1 {pca_ratios['pc1_explained_variance_ratio']:.1%}, "
+            f"PC2 {pca_ratios['pc2_explained_variance_ratio']:.1%}"
+        ),
+        "PC1",
+        "PC2",
+    )
+    if tsne_rows is not None:
+        _scatter_joint(
+            axes[0, 1],
+            tsne_rows,
+            "Joint t-SNE",
+            "t-SNE 1",
+            "t-SNE 2",
+        )
+    figure.suptitle(
+        f"S4 {alignment.capitalize()} alignment: hidden vs embedding vs aligned"
+    )
+    figure.tight_layout()
+    save_figure(figure, f"s4_{alignment}_joint_reduction")
+    plt.close(figure)
+
+
+def _space_summary(rows, first_coordinate, second_coordinate, args):
+    output = {}
+    for space in ("hidden", "embedding", "aligned"):
+        subset = [row for row in rows if row["space"] == space]
+        output[space] = {
+            first_coordinate: clustered_metric(subset, first_coordinate, args),
+            second_coordinate: clustered_metric(subset, second_coordinate, args),
             "entropy": clustered_metric(subset, "entropy", args),
         }
+    return output
 
-    by_all_state = {}
+
+def _paired_geometry(rows, args):
+    by_state = {}
     for row in rows:
-        key = (
-            row["item_id"],
-            row["position"],
-            row["turn_id"],
-            row["agent_id"],
-        )
-        by_all_state.setdefault(key, {})[row["method"]] = row
+        by_state.setdefault(_state_key(row), {})[row["method"]] = row
+    output = {}
     for first, second in (
+        ("hidden", "exact"),
+        ("hidden", "linear"),
+        ("hidden", "kernel"),
         ("exact", "linear"),
         ("exact", "kernel"),
         ("linear", "kernel"),
     ):
         pair_rows = []
-        for methods in by_all_state.values():
+        for methods in by_state.values():
             if first not in methods or second not in methods:
                 continue
             left = np.asarray(methods[first]["embedding"], dtype=np.float64)
             right = np.asarray(methods[second]["embedding"], dtype=np.float64)
+            if left.shape != right.shape or not (
+                np.isfinite(left).all() and np.isfinite(right).all()
+            ):
+                continue
             left_norm = np.linalg.norm(left)
             right_norm = np.linalg.norm(right)
             absolute = np.linalg.norm(left - right)
@@ -175,7 +298,7 @@ def plot_s4(rows, args):
                     ),
                 }
             )
-        summary["paired_geometry"][f"{first}_vs_{second}"] = {
+        output[f"{first}_vs_{second}"] = {
             metric: clustered_metric(pair_rows, metric, args)
             for metric in (
                 "absolute_l2_error",
@@ -183,43 +306,94 @@ def plot_s4(rows, args):
                 "cosine_similarity",
             )
         }
+    return output
 
-    if args.s4_tsne:
-        matrix = np.asarray(
-            [row["embedding"] for row in chosen], dtype=np.float32
-        )
-        try:
-            from sklearn.manifold import TSNE
-        except ImportError as error:
-            raise RuntimeError("--s4_tsne requires scikit-learn") from error
-        if len(matrix) <= 50:
-            raise ValueError("S4 t-SNE needs more than 50 mapping rows")
-        estimator = TSNE(
-            n_components=2,
-            init="pca",
-            perplexity=50,
-            learning_rate="auto",
-            max_iter=1500,
-            random_state=101,
-        )
-        tsne = estimator.fit_transform(matrix)
-        for row, coordinate in zip(chosen, tsne):
-            row["tsne1"], row["tsne2"] = float(coordinate[0]), float(coordinate[1])
-        write_rows(
-            [
-                {key: value for key, value in row.items() if key != "embedding"}
-                for row in chosen
-            ],
-            contextual_stem("s4_tsne_coordinates"),
-        )
-        summary["tsne"] = {
-            "kl_divergence": float(estimator.kl_divergence_),
-            "by_method": {},
+
+def plot_s4(rows, args):
+    by_state, valid_keys, selected_keys, dimension = _valid_states(
+        rows, args.probe_seed
+    )
+    if not selected_keys:
+        input_state_count = len({_state_key(row) for row in rows})
+        return {
+            "input_state_count": input_state_count,
+            "valid_state_count": 0,
+            "invalid_state_count": input_state_count,
+            "selected_state_count": 0,
+            "mapped_embedding_count": 0,
+            "joint_point_count_per_alignment": 0,
         }
-        for method in ("exact", "linear", "kernel"):
-            subset = [row for row in chosen if row["method"] == method]
-            summary["tsne"]["by_method"][method] = {
-                "tsne1": clustered_metric(subset, "tsne1", args),
-                "tsne2": clustered_metric(subset, "tsne2", args),
+
+    pca_coordinate_rows = []
+    tsne_coordinate_rows = []
+    pca_by_alignment = {}
+    tsne_by_alignment = {}
+    reductions = {}
+    for alignment in ALIGNMENTS:
+        entries = _joint_entries(by_state, selected_keys, alignment)
+        pca_rows, pca_ratios = _pca(entries)
+        pca_coordinate_rows.extend(pca_rows)
+        pca_by_alignment[alignment] = {
+            **pca_ratios,
+            "fit": "joint_hidden_embedding_aligned",
+            "by_space": _space_summary(pca_rows, "pc1", "pc2", args),
+        }
+        tsne_rows = None
+        if args.s4_tsne:
+            tsne_rows, kl_divergence = _tsne(entries)
+            tsne_coordinate_rows.extend(tsne_rows)
+            tsne_by_alignment[alignment] = {
+                "fit": "joint_hidden_embedding_aligned",
+                "kl_divergence": kl_divergence,
+                "by_space": _space_summary(
+                    tsne_rows, "tsne1", "tsne2", args
+                ),
             }
+        reductions[alignment] = (pca_rows, pca_ratios, tsne_rows)
+
+    write_rows(pca_coordinate_rows, contextual_stem("s4_joint_pca_coordinates"))
+    if tsne_coordinate_rows:
+        write_rows(
+            tsne_coordinate_rows,
+            contextual_stem("s4_joint_tsne_coordinates"),
+        )
+    for alignment, (pca_rows, ratios, tsne_rows) in reductions.items():
+        _plot_joint_reduction(alignment, pca_rows, ratios, tsne_rows)
+
+    input_state_count = len({_state_key(row) for row in rows})
+    summary = {
+        "input_state_count": input_state_count,
+        "valid_state_count": len(valid_keys),
+        "invalid_state_count": input_state_count - len(valid_keys),
+        "selected_state_count": len(selected_keys),
+        "mapped_embedding_count": len(selected_keys) * 4,
+        "vector_dimension": dimension,
+        "joint_point_count_per_alignment": len(selected_keys) * 3,
+        "preprocessing": (
+            "joint fit on raw vectors; global PCA centering only; "
+            "no per-space scaling or standardization"
+        ),
+        "spaces": {
+            "hidden": "raw Refiner hidden state immediately before logits",
+            "embedding": "exact probability-weighted target input embedding",
+            "aligned": "linear- or kernel-aligned target-space state",
+        },
+        "pca": {
+            "fit": "separate joint fit for each alignment",
+            "by_alignment": pca_by_alignment,
+        },
+        "paired_geometry": _paired_geometry(rows, args),
+    }
+    if args.s4_tsne:
+        summary["tsne"] = {
+            "fit": "separate joint fit for each alignment",
+            "parameters": {
+                "init": "pca",
+                "perplexity": 50,
+                "learning_rate": "auto",
+                "max_iter": 1500,
+                "random_state": 101,
+            },
+            "by_alignment": tsne_by_alignment,
+        }
     return summary

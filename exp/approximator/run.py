@@ -265,7 +265,20 @@ def parse_args(argv=None):
     parser.add_argument("--bootstrap_replicates", type=int, default=1000)
     parser.add_argument("--run_s2_calibration", action="store_true")
     parser.add_argument("--run_s1_performance", action="store_true")
-    parser.add_argument("--s4_tsne", action="store_true")
+    s4_tsne = parser.add_mutually_exclusive_group()
+    s4_tsne.add_argument(
+        "--s4_tsne",
+        dest="s4_tsne",
+        action="store_true",
+        help="Enable S4 joint t-SNE panels (default).",
+    )
+    s4_tsne.add_argument(
+        "--no_s4_tsne",
+        dest="s4_tsne",
+        action="store_false",
+        help="Disable S4 t-SNE and generate PCA-only joint figures.",
+    )
+    parser.set_defaults(s4_tsne=True)
     args = parser.parse_args(argv)
     if len(args.agent_models) == 1:
         args.agent_models *= 4
