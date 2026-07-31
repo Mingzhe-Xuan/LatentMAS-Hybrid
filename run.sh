@@ -129,12 +129,57 @@ PY
 }
 TEMPERATURE=0.6       # Sampling temperature.
 TOP_P=0.95            # Nucleus-sampling probability threshold.
-GENERATE_BS=10        # Generation batch size.
+# Empty means use params_dict.json[TASK].generation_bs; fallback: 10.
+GENERATE_BS="${GENERATE_BS:-}"
+resolve_generate_bs() {
+    if [ -n "${GENERATE_BS}" ]; then
+        printf '%s\n' "${GENERATE_BS}"
+        return
+    fi
+
+    python3 - "$1" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+fallback = 10
+try:
+    params = json.loads(Path("params_dict.json").read_text(encoding="utf-8"))
+    task_params = params.get(sys.argv[1], {})
+    value = task_params.get("generation_bs", fallback) if isinstance(task_params, dict) else fallback
+    print(value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else fallback)
+except (OSError, json.JSONDecodeError):
+    print(fallback)
+PY
+}
 SEED=42               # Random seed for reproducibility.
 
 ## --- TextMAS / LatentMAS settings ---
 TEXT_MAS_CONTEXT_LENGTH=-1  # TextMAS context limit; -1 means unlimited.
-LATENT_STEPS=20             # Number of latent reasoning steps.
+# Empty means use params_dict.json[TASK].latent_steps[PROMPT]; fallback: 20.
+LATENT_STEPS="${LATENT_STEPS:-}"
+resolve_latent_steps() {
+    if [ -n "${LATENT_STEPS}" ]; then
+        printf '%s\n' "${LATENT_STEPS}"
+        return
+    fi
+
+    python3 - "$1" "$2" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+fallback = 20
+try:
+    params = json.loads(Path("params_dict.json").read_text(encoding="utf-8"))
+    task_params = params.get(sys.argv[1], {})
+    latent_steps = task_params.get("latent_steps", {}) if isinstance(task_params, dict) else {}
+    value = latent_steps.get(sys.argv[2], fallback) if isinstance(latent_steps, dict) else fallback
+    print(value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else fallback)
+except (OSError, json.JSONDecodeError):
+    print(fallback)
+PY
+}
 TRUST_REMOTE_CODE=true      # Pass --trust_remote_code when the model requires it.
 SEQUENTIAL_INFO_ONLY=false   # Retain only each agent's own prompt + latent KV before the next agent.
 LATENT_ONLY=false            # Retain only latent KV before the next agent (implies SEQUENTIAL_INFO_ONLY).
@@ -152,6 +197,8 @@ TENSOR_PARALLEL_SIZE=1      # Number of GPUs used for vLLM tensor parallelism.
 GPU_MEMORY_UTILIZATION=0.9  # Fraction of each GPU vLLM may reserve.
 
 build_common_args() {
+local prompt="$1"
+RESOLVED_LATENT_STEPS="$(resolve_latent_steps "${TASK}" "${prompt}")"
 COMMON=(
     # Core dataset / model settings
     --model_name "${MODEL_NAME}"             # Required model ID
@@ -164,12 +211,12 @@ COMMON=(
     --max_new_tokens "${RESOLVED_MAX_NEW_TOKENS}" # Task default from params_dict.json; fallback: 20000
     --temperature "${TEMPERATURE}"           # run.py default: 0.6
     --top_p "${TOP_P}"                       # run.py default: 0.95
-    --generate_bs "${GENERATE_BS}"           # run.py default: 10
+    --generate_bs "${RESOLVED_GENERATE_BS}"  # Task default from params_dict.json; fallback: 10
     --seed "${SEED}"                         # run.py default: 42
 
     # TextMAS / LatentMAS settings
     --text_mas_context_length "${TEXT_MAS_CONTEXT_LENGTH}" # run.py default: -1 (unlimited)
-    --latent_steps "${LATENT_STEPS}"         # run.py default: 45
+    --latent_steps "${RESOLVED_LATENT_STEPS}" # Task/prompt default from params_dict.json; fallback: 20
 
     # Alignment settings. --align_method is varied per LatentMAS command below.
     --align_ridge "${ALIGN_RIDGE}"           # run.py default: 1e-5; used by linear
@@ -224,7 +271,9 @@ run_suite() {
     MODEL_NAME="${suite_model}"
     TASK="${suite_task}"
     RESOLVED_MAX_NEW_TOKENS="$(resolve_max_new_tokens "${TASK}")"
-    build_common_args
+    RESOLVED_GENERATE_BS="$(resolve_generate_bs "${TASK}")"
+    RESOLVED_SEQUENTIAL_LATENT_STEPS="$(resolve_latent_steps "${TASK}" "${PROMPT_SEQUENTIAL}")"
+    RESOLVED_HIERARCHICAL_LATENT_STEPS="$(resolve_latent_steps "${TASK}" "${PROMPT_HIERARCHICAL}")"
 
     echo "========================================================================"
     echo "  Job ID       : ${PBS_JOBID:-local}"
@@ -232,10 +281,10 @@ run_suite() {
     echo "  Model        : ${MODEL_NAME}"
     echo "  Task         : ${TASK}"
     echo "  Latent prompts: ${PROMPT_SEQUENTIAL}, ${PROMPT_HIERARCHICAL}"
-    echo "  Generate BS  : ${GENERATE_BS}"
+    echo "  Generate BS  : ${RESOLVED_GENERATE_BS}"
     echo "  Max samples  : ${MAX_SAMPLES}"
     echo "  Max tokens   : ${RESOLVED_MAX_NEW_TOKENS}"
-    echo "  Latent steps : ${LATENT_STEPS}"
+    echo "  Latent steps : ${PROMPT_SEQUENTIAL}=${RESOLVED_SEQUENTIAL_LATENT_STEPS}, ${PROMPT_HIERARCHICAL}=${RESOLVED_HIERARCHICAL_LATENT_STEPS}"
     echo "  vLLM         : ${USE_VLLM}"
     echo "  CUDA devices : ${CUDA_VISIBLE_DEVICES:-unset}"
     echo "  Sequential info only: ${SEQUENTIAL_INFO_ONLY}"
@@ -244,14 +293,20 @@ run_suite() {
     echo "========================================================================"
 
     # Baseline and TextMAS use the sequential architecture.
+    build_common_args "${PROMPT_SEQUENTIAL}"
     python3 run.py --method baseline --prompt "${PROMPT_SEQUENTIAL}" "${COMMON[@]}" &&
+    build_common_args "${PROMPT_HIERARCHICAL}"
     python3 run.py --method baseline --prompt "${PROMPT_HIERARCHICAL}" "${COMMON[@]}" &&
+    build_common_args "${PROMPT_SEQUENTIAL}"
     python3 run.py --method text_mas --prompt "${PROMPT_SEQUENTIAL}" "${COMMON[@]}" &&
+    build_common_args "${PROMPT_HIERARCHICAL}"
     python3 run.py --method text_mas --prompt "${PROMPT_HIERARCHICAL}" "${COMMON[@]}" &&
     # Run all LatentMAS alignment methods sequentially before hierarchical.
+    build_common_args "${PROMPT_SEQUENTIAL}"
     python3 run.py --method latent_mas --prompt "${PROMPT_SEQUENTIAL}" --align_method identical "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" && # very weak
     python3 run.py --method latent_mas --prompt "${PROMPT_SEQUENTIAL}" --align_method linear "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" && # Easy to explode
     python3 run.py --method latent_mas --prompt "${PROMPT_SEQUENTIAL}" --align_method kernel "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" &&
+    build_common_args "${PROMPT_HIERARCHICAL}"
     python3 run.py --method latent_mas --prompt "${PROMPT_HIERARCHICAL}" --align_method identical "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" &&
     python3 run.py --method latent_mas --prompt "${PROMPT_HIERARCHICAL}" --align_method linear "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" &&
     python3 run.py --method latent_mas --prompt "${PROMPT_HIERARCHICAL}" --align_method kernel "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}"
