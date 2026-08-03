@@ -6,7 +6,7 @@
             "sequential": 20,
             "hierarchical": 10
         },
-        "times": 32
+        "times": 8
     },
     "aime2025": {
         "max_token": 20000,
@@ -15,7 +15,7 @@
             "sequential": 0,
             "hierarchical": 10
         },
-        "times": 32
+        "times": 8
     },
     "arc_challenge": {
         "max_token": 2048,
