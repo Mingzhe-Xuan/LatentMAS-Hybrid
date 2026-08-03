@@ -14,39 +14,61 @@
 
 ### 1.1 全量实验
 
-在 `params_dict.json` 的全部 9 个任务和 Qwen3-4B/8B/14B 上提交全矩阵：
+`run_all.sh` 是完整矩阵的推荐入口：9 个 dataset × 3 个 model × 10 个配置，共 270 个数组子任务。每个子任务只运行一个配置，并由 `#PBS -J 1-270%3` 将全局并发上限设为 3：
+
+```bash
+bash run_all.sh
+# 或直接提交
+qsub run_all.sh
+```
+
+10 个配置固定为：
+
+```text
+baseline   × sequential/hierarchical × identical
+text_mas   × sequential/hierarchical × identical
+latent_mas × sequential/hierarchical × identical/linear/kernel
+```
+
+不要额外传 `-J`，否则会覆盖脚本内的数组范围或并发限制。也可以让单个 `run.sh` 作业串行执行全部任务和模型，但它不是 270-task 独立排队方式：
 
 ```bash
 qsub -v "FULL_EXP=true" run.sh
 ```
 
-更推荐使用数据集 Job Array。下面的命令提交 9 个数据集子任务，PBS 最多同时运行 3 个；任一任务结束后会自动启动下一个：
+### 1.2 状态文件、跳过与总进度
 
-```bash
-bash run_all.sh
+每个配置的完整 stdout/stderr 平铺写入根目录 `state/`，不创建 dataset、model 或 method 子目录：
+
+```text
+state/<dataset>_<method>_<prompt>_<model>_state.txt
 ```
 
-也可以直接提交：
+模型名中的 `/` 会转换为 `_`。LatentMAS 把 alignment 合并到 method，例如：
 
-```bash
-qsub run_all.sh
+```text
+state/arc_easy_latent_mas_kernel_sequential_Qwen_Qwen3-4B_state.txt
 ```
 
-`run_all.sh` 使用 `#PBS -J 1-9%3`。不要再对它额外添加 `-J`，否则会覆盖脚本中的数组范围或并发设置。
+默认只检查当前配置的精确状态文件；存在时只跳过该配置。旧文件 `state_<dataset>.txt` 不参与判断。强制忽略已有配置状态文件：
 
-默认情况下，每个数组子任务会先检查提交目录中的 `state_<dataset>.txt`。文件存在时，该数据集会被标记为 skipped，且不会覆盖已有结果。例如，`state_aime2024.txt` 存在时会跳过 AIME 2024。
-
-若需要忽略已有 state 文件并强制运行全部数据集，本地入口使用：
 
 ```bash
 bash run_all.sh --force_all
-```
-
-直接通过 PBS 提交时使用环境变量：
-
-```bash
 qsub -v "FORCE_ALL=true" run_all.sh
 ```
+
+根目录 `state.txt` 是并发安全的追加式 TSV 账本，通过 `flock` 防止三个子任务互相覆盖。字段依次为 `timestamp`、`job_id`、`array_index`、`dataset`、`method`、`prompt`、`alignment`、`model`、`status`、`detail`；状态为 `STARTED`、`SKIPPED`、`COMPLETED`、`FAILED`。常用查看方式：
+
+```bash
+column -t -s $'\t' state.txt | less -S
+tail -n 30 state.txt
+awk -F '\t' 'NR > 1 { count[$9]++ } END { for (s in count) print s, count[s] }' state.txt
+```
+
+method、prompt 或 alignment 非法时会在创建配置状态文件前退出；`baseline` 和 `text_mas` 只允许 `identical`，`latent_mas` 允许 `identical`、`linear`、`kernel`。
+
+### 1.3 单任务与单配置入口
 
 当前数据集脚本为：
 
@@ -70,7 +92,9 @@ qsub run_arc_easy.sh
 qsub run.sh
 ```
 
-### 1.2 method 消融
+该入口默认写入 `state/run_state.txt`，不会覆盖数组任务使用的根进度账本 `state.txt`；可用 `STATE_FILE` 覆盖其日志路径。
+
+### 1.4 method 消融
 
 一个标准 `run.sh` suite 已经自动包含 identical、linear、kernel，并同时包含 baseline 与 TextMAS，因此完整 method 消融无需分别提交：
 
@@ -94,7 +118,7 @@ python3 run.py --method text_mas --model_name Qwen/Qwen3-8B --task arc_easy --pr
 python3 run.py --method latent_mas --align_method kernel --model_name Qwen/Qwen3-8B --task arc_easy --prompt sequential --max_samples 30 --split test --latent_steps 10 --kernel_features 1024 --seed 42 --trust_remote_code
 ```
 
-### 1.3 dataset 消融
+### 1.5 dataset 消融
 
 使用已有 PBS 包装脚本逐数据集提交：
 
@@ -112,25 +136,25 @@ for dataset in aime2024 aime2025 arc_challenge arc_easy gpqa gsm8k humanevalplus
 done
 ```
 
-### 1.4 max_samples 消融
+### 1.6 max_samples 消融
 
-注意：当前 `run.sh` 写死了 `MAX_SAMPLES=30`，所以 `qsub -v MAX_SAMPLES=... run.sh` 不会生效。请直接调用 `run.py`：
+`run.sh` 和 `run_all.sh` 都允许通过 PBS 变量覆盖 `MAX_SAMPLES`。例如分别提交完整矩阵：
 
 ```bash
 for max_samples in 10 30 50 100; do
-  python3 run.py --method latent_mas --align_method kernel --model_name Qwen/Qwen3-8B --task arc_easy --prompt sequential --max_samples "${max_samples}" --split test --latent_steps 10 --kernel_features 1024 --seed 42 --trust_remote_code
+  qsub -v "MAX_SAMPLES=${max_samples},FORCE_ALL=true" run_all.sh
 done
 ```
 
 `--max_samples -1` 表示使用该 split 的全部样本。
 
-### 1.5 kernel_features 消融
+### 1.7 kernel_features 消融
 
-注意：当前 `run.sh` 写死了 `KERNEL_FEATURES=1024`，所以 `qsub -v KERNEL_FEATURES=... run.sh` 不会生效。请直接调用 `run.py`：
+`KERNEL_FEATURES` 同样可传入 `run.sh` 或 `run_all.sh`：
 
 ```bash
 for kernel_features in 256 512 1024 2048 4096; do
-  python3 run.py --method latent_mas --align_method kernel --model_name Qwen/Qwen3-8B --task arc_easy --prompt sequential --max_samples 30 --split test --latent_steps 10 --kernel_features "${kernel_features}" --kernel_temperature 1.0 --kernel_seed 42 --kernel_chunk_size 4096 --seed 42 --trust_remote_code
+  qsub -v "KERNEL_FEATURES=${kernel_features},FORCE_ALL=true" run_all.sh
 done
 ```
 
@@ -258,4 +282,4 @@ python3 run.py --method latent_mas --align_method kernel --model_name Qwen/Qwen3
 qsub -v "EXP_TARGET=latent_cot,DATASET=gsm8k,MAX_QUESTIONS=2,LATENT_STEPS=3,M=256" exp.sh
 ```
 
-实验输出分别写入 `result/`、`logging/` 和 `exp_result/`；PBS 运行日志分别记录到 `state*.txt` 与 `exp_state.txt`。
+实验输出分别写入 `result/`、`logging/` 和 `exp_result/`；主任务的配置日志位于 `state/`、总进度位于根目录 `state.txt`，解析实验日志位于 `exp_state.txt`。

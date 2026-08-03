@@ -4,7 +4,7 @@
 #PBS -q gpu_ded
 #PBS -l walltime=72:00:00
 #PBS -l select=1:ncpus=12:ngpus=1
-#PBS -J 1-9%3
+#PBS -J 1-270%3
 #PBS -j oe
 
 set -euo pipefail
@@ -12,6 +12,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBMIT_DIR="${PBS_O_WORKDIR:-${SCRIPT_DIR}}"
 FORCE_ALL="${FORCE_ALL:-false}"
+MAX_SAMPLES="${MAX_SAMPLES:-30}"
+KERNEL_FEATURES="${KERNEL_FEATURES:-1024}"
+KERNEL_TEMPERATURE="${KERNEL_TEMPERATURE:-1.0}"
+KERNEL_CHUNK_SIZE="${KERNEL_CHUNK_SIZE:-4096}"
+ALIGN_RIDGE="${ALIGN_RIDGE:-1e-5}"
+PROGRESS_FILE="${SUBMIT_DIR}/state.txt"
 
 for ARG in "$@"; do
     case "${ARG}" in
@@ -24,27 +30,39 @@ for ARG in "$@"; do
     esac
 done
 
-TASK_SCRIPTS=(
-    run_aime2024.sh
-    run_aime2025.sh
-    run_arc_challenge.sh
-    run_arc_easy.sh
-    run_gpqa.sh
-    run_gsm8k.sh
-    run_humanevalplus.sh
-    run_mbppplus.sh
-    run_medqa.sh
+DATASETS=(
+    aime2024 aime2025 arc_challenge arc_easy gpqa gsm8k
+    humanevalplus mbppplus medqa
+)
+MODELS=("Qwen/Qwen3-4B" "Qwen/Qwen3-8B" "Qwen/Qwen3-14B")
+METHODS=(
+    baseline baseline text_mas text_mas
+    latent_mas latent_mas latent_mas latent_mas latent_mas latent_mas
+)
+PROMPTS=(
+    sequential hierarchical sequential hierarchical
+    sequential sequential sequential hierarchical hierarchical hierarchical
+)
+ALIGNMENTS=(
+    identical identical identical identical
+    identical linear kernel identical linear kernel
 )
 
-# Preserve the convenient local entry point. Running `bash run_all.sh` submits
-# this file once; #PBS -J creates nine subjobs and %3 caps active subjobs.
+DATASET_COUNT=${#DATASETS[@]}
+MODEL_COUNT=${#MODELS[@]}
+CONFIG_COUNT=${#METHODS[@]}
+TOTAL_COUNT=$((DATASET_COUNT * MODEL_COUNT * CONFIG_COUNT))
+
+# `bash run_all.sh` submits the array once. Every array subjob is independently
+# queued by PBS; %3 is the global running-job limit.
 if [[ -z "${PBS_ARRAY_INDEX:-}" ]]; then
     if ! command -v qsub >/dev/null 2>&1; then
         echo "ERROR: qsub was not found in PATH."
         exit 127
     fi
-    JOB_ID="$(cd "${SCRIPT_DIR}" && qsub -v "FORCE_ALL=${FORCE_ALL}" "${BASH_SOURCE[0]}")"
-    echo "Submitted dataset array ${JOB_ID}: 9 tasks, maximum concurrency 3, force_all=${FORCE_ALL}."
+    VARIABLES="FORCE_ALL=${FORCE_ALL},MAX_SAMPLES=${MAX_SAMPLES},KERNEL_FEATURES=${KERNEL_FEATURES},KERNEL_TEMPERATURE=${KERNEL_TEMPERATURE},KERNEL_CHUNK_SIZE=${KERNEL_CHUNK_SIZE},ALIGN_RIDGE=${ALIGN_RIDGE}"
+    JOB_ID="$(cd "${SCRIPT_DIR}" && qsub -v "${VARIABLES}" "${BASH_SOURCE[0]}")"
+    echo "Submitted ${JOB_ID}: ${TOTAL_COUNT} independently queued configs, maximum concurrency 3, force_all=${FORCE_ALL}."
     exit 0
 fi
 
@@ -52,28 +70,89 @@ if ! [[ "${PBS_ARRAY_INDEX}" =~ ^[0-9]+$ ]]; then
     echo "ERROR: invalid PBS_ARRAY_INDEX=${PBS_ARRAY_INDEX}"
     exit 2
 fi
-
-TASK_INDEX=$((PBS_ARRAY_INDEX - 1))
-if (( TASK_INDEX < 0 || TASK_INDEX >= ${#TASK_SCRIPTS[@]} )); then
-    echo "ERROR: PBS_ARRAY_INDEX=${PBS_ARRAY_INDEX} is outside 1-${#TASK_SCRIPTS[@]}."
+ARRAY_OFFSET=$((PBS_ARRAY_INDEX - 1))
+if (( ARRAY_OFFSET < 0 || ARRAY_OFFSET >= TOTAL_COUNT )); then
+    echo "ERROR: PBS_ARRAY_INDEX=${PBS_ARRAY_INDEX} is outside 1-${TOTAL_COUNT}."
     exit 2
 fi
 
-SCRIPT_NAME="${TASK_SCRIPTS[${TASK_INDEX}]}"
-SCRIPT_PATH="${SUBMIT_DIR}/${SCRIPT_NAME}"
-if [[ ! -f "${SCRIPT_PATH}" ]]; then
-    echo "ERROR: missing task script: ${SCRIPT_PATH}"
-    exit 2
-fi
+CONFIG_INDEX=$((ARRAY_OFFSET % CONFIG_COUNT))
+MODEL_INDEX=$(((ARRAY_OFFSET / CONFIG_COUNT) % MODEL_COUNT))
+DATASET_INDEX=$((ARRAY_OFFSET / (CONFIG_COUNT * MODEL_COUNT)))
 
-TASK_NAME="${SCRIPT_NAME#run_}"
-TASK_NAME="${TASK_NAME%.sh}"
-STATE_PATH="${SUBMIT_DIR}/state_${TASK_NAME}.txt"
+TASK="${DATASETS[${DATASET_INDEX}]}"
+MODEL_NAME="${MODELS[${MODEL_INDEX}]}"
+CONFIG_METHOD="${METHODS[${CONFIG_INDEX}]}"
+CONFIG_PROMPT="${PROMPTS[${CONFIG_INDEX}]}"
+CONFIG_ALIGNMENT="${ALIGNMENTS[${CONFIG_INDEX}]}"
+
+case "${CONFIG_METHOD}" in
+    baseline|text_mas)
+        if [[ "${CONFIG_ALIGNMENT}" != "identical" ]]; then
+            echo "ERROR: ${CONFIG_METHOD} only supports identical alignment."
+            exit 2
+        fi
+        ;;
+    latent_mas)
+        case "${CONFIG_ALIGNMENT}" in
+            identical|linear|kernel) ;;
+            *) echo "ERROR: invalid alignment: ${CONFIG_ALIGNMENT}"; exit 2 ;;
+        esac
+        ;;
+    *) echo "ERROR: invalid method: ${CONFIG_METHOD}"; exit 2 ;;
+esac
+case "${CONFIG_PROMPT}" in
+    sequential|hierarchical) ;;
+    *) echo "ERROR: invalid prompt: ${CONFIG_PROMPT}"; exit 2 ;;
+esac
+
+STATE_METHOD="${CONFIG_METHOD}"
+if [[ "${CONFIG_METHOD}" == "latent_mas" ]]; then
+    STATE_METHOD="${CONFIG_METHOD}_${CONFIG_ALIGNMENT}"
+fi
+MODEL_SLUG="$(printf '%s' "${MODEL_NAME}" | tr -c 'A-Za-z0-9._-' '_')"
+STATE_DIR="${SUBMIT_DIR}/state"
+STATE_PATH="${STATE_DIR}/${TASK}_${STATE_METHOD}_${CONFIG_PROMPT}_${MODEL_SLUG}_state.txt"
+mkdir -p "${STATE_DIR}"
+
+append_progress() {
+    local status="$1"
+    local detail="${2//$'\t'/ }"
+    detail="${detail//$'\n'/ }"
+    (
+        flock -x 9
+        if [[ ! -s "${PROGRESS_FILE}" ]]; then
+            printf 'timestamp\tjob_id\tarray_index\tdataset\tmethod\tprompt\talignment\tmodel\tstatus\tdetail\n' >&9
+        fi
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$(date --iso-8601=seconds)" "${PBS_JOBID:-local}" "${PBS_ARRAY_INDEX}" \
+            "${TASK}" "${CONFIG_METHOD}" "${CONFIG_PROMPT}" "${CONFIG_ALIGNMENT}" \
+            "${MODEL_NAME}" "${status}" "${detail}" >&9
+    ) 9>> "${PROGRESS_FILE}"
+}
+
 if [[ "${FORCE_ALL}" != "true" && -e "${STATE_PATH}" ]]; then
-    echo "Skipped ${TASK_NAME}: state file already exists: ${STATE_PATH}"
+    append_progress SKIPPED "state file exists: ${STATE_PATH}"
+    echo "Skipped existing config: ${STATE_PATH}"
     exit 0
 fi
 
-echo "Array job ${PBS_JOBID:-unknown}, index ${PBS_ARRAY_INDEX}: ${SCRIPT_NAME}"
+RUN_SCRIPT="${SUBMIT_DIR}/run.sh"
+if [[ ! -f "${RUN_SCRIPT}" ]]; then
+    echo "ERROR: missing run script: ${RUN_SCRIPT}"
+    exit 2
+fi
+
+echo "Array ${PBS_JOBID:-unknown}[${PBS_ARRAY_INDEX}]: ${TASK} ${MODEL_NAME} ${CONFIG_METHOD}/${CONFIG_PROMPT}/${CONFIG_ALIGNMENT}"
 cd "${SUBMIT_DIR}" || exit 1
-exec bash "${SCRIPT_PATH}"
+append_progress STARTED "state file: ${STATE_PATH}"
+export FULL_EXP=false TASK_ONLY=true SINGLE_CONFIG=true CAPTURE_ALL_OUTPUT=true
+export TASK MODEL_NAME CONFIG_METHOD CONFIG_PROMPT CONFIG_ALIGNMENT STATE_FILE="${STATE_PATH}"
+export MAX_SAMPLES KERNEL_FEATURES KERNEL_TEMPERATURE KERNEL_CHUNK_SIZE ALIGN_RIDGE
+if bash "${RUN_SCRIPT}"; then
+    append_progress COMPLETED "state file: ${STATE_PATH}"
+else
+    STATUS=$?
+    append_progress FAILED "exit ${STATUS}; state file: ${STATE_PATH}"
+    exit "${STATUS}"
+fi

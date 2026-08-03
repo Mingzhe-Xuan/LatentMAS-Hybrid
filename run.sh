@@ -6,7 +6,7 @@
 # Submit full matrix:     qsub -v FULL_EXP=true run.sh
 # Local full matrix:      bash run.sh --full_exp
 # Monitor: qstat -u $USER
-# Runtime log: state.txt by default (overridable with STATE_FILE)
+# Runtime log: state/run_state.txt by default (overridable with STATE_FILE)
 ###############################################################################
 
 ## Job name
@@ -26,6 +26,58 @@
 
 ## Merge stderr into stdout for cleaner output
 #PBS -j oe
+
+FULL_EXP="${FULL_EXP:-false}"
+TASK_ONLY="${TASK_ONLY:-false}"
+STATE_FILE="${STATE_FILE:-state/run_state.txt}"
+SINGLE_CONFIG="${SINGLE_CONFIG:-false}"
+CONFIG_METHOD="${CONFIG_METHOD:-}"
+CONFIG_PROMPT="${CONFIG_PROMPT:-}"
+CONFIG_ALIGNMENT="${CONFIG_ALIGNMENT:-identical}"
+CAPTURE_ALL_OUTPUT="${CAPTURE_ALL_OUTPUT:-false}"
+RUN_OUTPUT_WRAPPED="${RUN_OUTPUT_WRAPPED:-false}"
+for ARG in "$@"; do
+    case "${ARG}" in
+        --full_exp) FULL_EXP=true ;;
+        *)
+            echo "ERROR: Unknown argument: ${ARG}"
+            echo "Usage: bash run.sh [--full_exp]"
+            exit 2
+            ;;
+    esac
+done
+
+if [ "${SINGLE_CONFIG}" = true ]; then
+    case "${CONFIG_METHOD}" in
+        baseline|text_mas)
+            if [ "${CONFIG_ALIGNMENT}" != "identical" ]; then
+                echo "ERROR: ${CONFIG_METHOD} only supports identical alignment."
+                exit 2
+            fi
+            ;;
+        latent_mas)
+            case "${CONFIG_ALIGNMENT}" in
+                identical|linear|kernel) ;;
+                *) echo "ERROR: invalid CONFIG_ALIGNMENT=${CONFIG_ALIGNMENT}"; exit 2 ;;
+            esac
+            ;;
+        *) echo "ERROR: invalid CONFIG_METHOD=${CONFIG_METHOD}"; exit 2 ;;
+    esac
+    case "${CONFIG_PROMPT}" in
+        sequential|hierarchical) ;;
+        *) echo "ERROR: invalid CONFIG_PROMPT=${CONFIG_PROMPT}"; exit 2 ;;
+    esac
+fi
+
+# Array jobs request an outer wrapper so module setup, diagnostics, stdout and
+# stderr all land in the configuration's exact state file. Validation above
+# deliberately runs before the redirection creates that file.
+if [ "${CAPTURE_ALL_OUTPUT}" = true ] && [ "${RUN_OUTPUT_WRAPPED}" != true ]; then
+    mkdir -p "$(dirname "${STATE_FILE}")"
+    export FULL_EXP TASK_ONLY STATE_FILE SINGLE_CONFIG CONFIG_METHOD CONFIG_PROMPT CONFIG_ALIGNMENT
+    export CAPTURE_ALL_OUTPUT RUN_OUTPUT_WRAPPED=true
+    exec bash "${BASH_SOURCE[0]}" "$@" > "${STATE_FILE}" 2>&1
+fi
 
 ## ========================== Environment =====================================
 module purge
@@ -49,20 +101,6 @@ if [ ! -f run.py ]; then
     exit 1
 fi
 export PYTHONUNBUFFERED=1
-
-FULL_EXP="${FULL_EXP:-false}"
-TASK_ONLY="${TASK_ONLY:-false}"
-STATE_FILE="${STATE_FILE:-state.txt}"
-for ARG in "$@"; do
-    case "${ARG}" in
-        --full_exp) FULL_EXP=true ;;
-        *)
-            echo "ERROR: Unknown argument: ${ARG}"
-            echo "Usage: bash run.sh [--full_exp]"
-            exit 2
-            ;;
-    esac
-done
 
 ## Optional Hugging Face cache location. Uncomment and edit if your cluster
 ## recommends a project scratch/cache directory.
@@ -98,9 +136,9 @@ MODEL_NAME="${MODEL_NAME:-Qwen/Qwen3-8B}" # Hugging Face model ID passed to --mo
 TASK="${TASK:-humanevalplus}"              # Evaluation dataset/task name.
 PROMPT_SEQUENTIAL="sequential"      # Sequential multi-agent architecture.
 PROMPT_HIERARCHICAL="hierarchical"  # Hierarchical multi-agent architecture.
-MAX_SAMPLES=30                # Number of examples; -1 evaluates all examples.
-SPLIT="test"                 # Dataset split requested from the task loader.
-DEVICE="cuda"                # PyTorch device used by the HF backend.
+MAX_SAMPLES="${MAX_SAMPLES:-30}" # Number of examples; -1 evaluates all examples.
+SPLIT="${SPLIT:-test}"       # Dataset split requested from the task loader.
+DEVICE="${DEVICE:-cuda}"     # PyTorch device used by the HF backend.
 
 ## --- Generation settings ---
 # Empty means use params_dict.json[TASK].max_token; an absent/unknown task
@@ -210,10 +248,10 @@ LATENT_ONLY=false            # Retain only latent KV before the next agent (impl
 THINK=true                  # Insert <think> before latent rollout starts.
 
 ## --- Alignment settings ---
-ALIGN_RIDGE=1e-5           # Ridge regularization for linear alignment.
-KERNEL_FEATURES=1024       # Random-feature count for kernel alignment.
-KERNEL_TEMPERATURE=1.0     # Kernel alignment temperature.
-KERNEL_CHUNK_SIZE=4096     # Chunk size for kernel alignment computation.
+ALIGN_RIDGE="${ALIGN_RIDGE:-1e-5}"                 # Linear ridge.
+KERNEL_FEATURES="${KERNEL_FEATURES:-1024}"         # Random-feature count.
+KERNEL_TEMPERATURE="${KERNEL_TEMPERATURE:-1.0}"   # Kernel temperature.
+KERNEL_CHUNK_SIZE="${KERNEL_CHUNK_SIZE:-4096}"    # Kernel chunk size.
 
 ## --- vLLM backend settings ---
 USE_VLLM=false              # Whether to enable the optional vLLM backend.
@@ -360,7 +398,13 @@ run_suite() {
     echo "  Sequential info only: ${SEQUENTIAL_INFO_ONLY}"
     echo "  Latent only  : ${LATENT_ONLY}"
     echo "  Think token  : ${THINK}"
+    echo "  Single config: ${SINGLE_CONFIG} ${CONFIG_METHOD}/${CONFIG_PROMPT}/${CONFIG_ALIGNMENT}"
     echo "========================================================================"
+
+    if [ "${SINGLE_CONFIG}" = true ]; then
+        run_repeated "${CONFIG_METHOD}" "${CONFIG_PROMPT}" "${CONFIG_ALIGNMENT}"
+        return $?
+    fi
 
     run_repeated baseline "${PROMPT_SEQUENTIAL}" identical &&
     run_repeated baseline "${PROMPT_HIERARCHICAL}" identical &&
@@ -395,7 +439,8 @@ fi
 
 RUN_TIME="${RUN_TIME:-$(date +%Y%m%d_%H%M%S)}"
 RUN_TIME="$(printf '%s' "${RUN_TIME}" | tr -c 'A-Za-z0-9._-' '_')"
-{
+mkdir -p "$(dirname "${STATE_FILE}")"
+run_main() {
     STATUS=0
     for CURRENT_MODEL in "${MODELS[@]}"; do
         for CURRENT_TASK in "${TASKS[@]}"; do
@@ -410,5 +455,11 @@ RUN_TIME="$(printf '%s' "${RUN_TIME}" | tr -c 'A-Za-z0-9._-' '_')"
     echo ""
     echo "Finished at: $(date)"
     echo "Exit status: ${STATUS}"
-    exit "${STATUS}"
-} > "${STATE_FILE}" 2>&1
+    return "${STATUS}"
+}
+
+if [ "${RUN_OUTPUT_WRAPPED}" = true ]; then
+    run_main
+else
+    run_main > "${STATE_FILE}" 2>&1
+fi
