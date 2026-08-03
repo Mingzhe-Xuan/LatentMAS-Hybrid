@@ -14,7 +14,17 @@
 
 ### 1.1 全量实验
 
-`run_all.sh` 是完整矩阵的推荐入口：9 个 dataset × 3 个 model × 10 个配置，共 270 个数组子任务。每个子任务只运行一个配置，并由 `#PBS -J 1-270%3` 将全局并发上限设为 3：
+`run_all.sh` 是完整矩阵的推荐入口。Qwen3-8B 和 Qwen3-14B 各运行全部 9 个 dataset；Qwen3-4B 只运行 6 个 dataset，跳过 `aime2024`、`aime2025`、`gpqa`。因此共有 `(9 + 9 + 6) × 10 = 240` 个数组子任务。每个子任务只运行一个配置，并由 `#PBS -J 1-240%3` 将全局并发上限设为 3。
+
+数组按模型分段，顺序为：
+
+```text
+1–90:    Qwen3-8B，全部 9 个 dataset
+91–180:  Qwen3-14B，全部 9 个 dataset
+181–240: Qwen3-4B，仅 arc_challenge、arc_easy、gsm8k、humanevalplus、mbppplus、medqa
+```
+
+提交方式：
 
 ```bash
 bash run_all.sh
@@ -30,7 +40,7 @@ text_mas   × sequential/hierarchical × identical
 latent_mas × sequential/hierarchical × identical/linear/kernel
 ```
 
-不要额外传 `-J`，否则会覆盖脚本内的数组范围或并发限制。也可以让单个 `run.sh` 作业串行执行全部任务和模型，但它不是 270-task 独立排队方式：
+不要额外传 `-J`，否则会覆盖脚本内的数组范围或并发限制。也可以让单个 `run.sh` 作业串行执行相同的过滤后矩阵，但它不是 240-task 独立排队方式：
 
 ```bash
 qsub -v "FULL_EXP=true" run.sh

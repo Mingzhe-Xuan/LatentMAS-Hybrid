@@ -418,7 +418,7 @@ run_suite() {
     run_repeated latent_mas "${PROMPT_HIERARCHICAL}" kernel
 }
 if [ "${FULL_EXP}" = true ]; then
-    MODELS=("Qwen/Qwen3-4B" "Qwen/Qwen3-8B" "Qwen/Qwen3-14B")
+    MODELS=("Qwen/Qwen3-8B" "Qwen/Qwen3-14B" "Qwen/Qwen3-4B")
     if [ "${TASK_ONLY}" = true ]; then
         TASKS=("${TASK}")
     else
@@ -444,6 +444,14 @@ run_main() {
     STATUS=0
     for CURRENT_MODEL in "${MODELS[@]}"; do
         for CURRENT_TASK in "${TASKS[@]}"; do
+            if [ "${CURRENT_MODEL}" = "Qwen/Qwen3-4B" ]; then
+                case "${CURRENT_TASK}" in
+                    aime2024|aime2025|gpqa)
+                        echo "Skipped unsupported model/task combination: model=${CURRENT_MODEL}, task=${CURRENT_TASK}"
+                        continue
+                        ;;
+                esac
+            fi
             run_suite "${CURRENT_MODEL}" "${CURRENT_TASK}" || {
                 STATUS=$?
                 echo "ERROR: Suite failed for model=${CURRENT_MODEL}, task=${CURRENT_TASK}"

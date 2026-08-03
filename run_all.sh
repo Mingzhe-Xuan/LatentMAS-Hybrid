@@ -4,7 +4,7 @@
 #PBS -q gpu_ded
 #PBS -l walltime=72:00:00
 #PBS -l select=1:ncpus=12:ngpus=1
-#PBS -J 1-270%3
+#PBS -J 1-240%3
 #PBS -j oe
 
 set -euo pipefail
@@ -34,7 +34,10 @@ DATASETS=(
     aime2024 aime2025 arc_challenge arc_easy gpqa gsm8k
     humanevalplus mbppplus medqa
 )
-MODELS=("Qwen/Qwen3-4B" "Qwen/Qwen3-8B" "Qwen/Qwen3-14B")
+MODELS=("Qwen/Qwen3-8B" "Qwen/Qwen3-14B" "Qwen/Qwen3-4B")
+FOUR_B_DATASETS=(
+    arc_challenge arc_easy gsm8k humanevalplus mbppplus medqa
+)
 METHODS=(
     baseline baseline text_mas text_mas
     latent_mas latent_mas latent_mas latent_mas latent_mas latent_mas
@@ -50,8 +53,10 @@ ALIGNMENTS=(
 
 DATASET_COUNT=${#DATASETS[@]}
 MODEL_COUNT=${#MODELS[@]}
+FOUR_B_DATASET_COUNT=${#FOUR_B_DATASETS[@]}
 CONFIG_COUNT=${#METHODS[@]}
-TOTAL_COUNT=$((DATASET_COUNT * MODEL_COUNT * CONFIG_COUNT))
+MODEL_DATASET_COUNT=$((DATASET_COUNT * 2 + FOUR_B_DATASET_COUNT))
+TOTAL_COUNT=$((MODEL_DATASET_COUNT * CONFIG_COUNT))
 
 # `bash run_all.sh` submits the array once. Every array subjob is independently
 # queued by PBS; %3 is the global running-job limit.
@@ -77,11 +82,18 @@ if (( ARRAY_OFFSET < 0 || ARRAY_OFFSET >= TOTAL_COUNT )); then
 fi
 
 CONFIG_INDEX=$((ARRAY_OFFSET % CONFIG_COUNT))
-MODEL_INDEX=$(((ARRAY_OFFSET / CONFIG_COUNT) % MODEL_COUNT))
-DATASET_INDEX=$((ARRAY_OFFSET / (CONFIG_COUNT * MODEL_COUNT)))
+MODEL_DATASET_INDEX=$((ARRAY_OFFSET / CONFIG_COUNT))
 
-TASK="${DATASETS[${DATASET_INDEX}]}"
-MODEL_NAME="${MODELS[${MODEL_INDEX}]}"
+if (( MODEL_DATASET_INDEX < DATASET_COUNT )); then
+    MODEL_NAME="${MODELS[0]}"
+    TASK="${DATASETS[${MODEL_DATASET_INDEX}]}"
+elif (( MODEL_DATASET_INDEX < DATASET_COUNT * 2 )); then
+    MODEL_NAME="${MODELS[1]}"
+    TASK="${DATASETS[$((MODEL_DATASET_INDEX - DATASET_COUNT))]}"
+else
+    MODEL_NAME="${MODELS[2]}"
+    TASK="${FOUR_B_DATASETS[$((MODEL_DATASET_INDEX - DATASET_COUNT * 2))]}"
+fi
 CONFIG_METHOD="${METHODS[${CONFIG_INDEX}]}"
 CONFIG_PROMPT="${PROMPTS[${CONFIG_INDEX}]}"
 CONFIG_ALIGNMENT="${ALIGNMENTS[${CONFIG_INDEX}]}"

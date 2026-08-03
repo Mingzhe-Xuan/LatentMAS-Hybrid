@@ -1,4 +1,4 @@
-"""Static checks for the 270-task PBS experiment array."""
+"""Static checks for the filtered 240-task PBS experiment array."""
 
 from itertools import product
 from pathlib import Path
@@ -23,17 +23,35 @@ class RunAllArrayTests(unittest.TestCase):
     def setUp(self) -> None:
         self.datasets = bash_array("DATASETS")
         self.models = bash_array("MODELS")
+        self.four_b_datasets = bash_array("FOUR_B_DATASETS")
         methods = bash_array("METHODS")
         prompts = bash_array("PROMPTS")
         alignments = bash_array("ALIGNMENTS")
         self.configs = list(zip(methods, prompts, alignments, strict=True))
+        self.model_dataset_pairs = [
+            *((model, dataset) for model in self.models[:2] for dataset in self.datasets),
+            *((self.models[2], dataset) for dataset in self.four_b_datasets),
+        ]
 
     def test_pbs_array_directive_and_dimensions(self) -> None:
-        self.assertRegex(RUN_ALL, r"(?m)^#PBS -J 1-270%3$")
+        self.assertRegex(RUN_ALL, r"(?m)^#PBS -J 1-240%3$")
         self.assertEqual(len(self.datasets), 9)
         self.assertEqual(len(self.models), 3)
+        self.assertEqual(len(self.four_b_datasets), 6)
         self.assertEqual(len(self.configs), 10)
-        self.assertEqual(len(self.datasets) * len(self.models) * len(self.configs), 270)
+        self.assertEqual(len(self.model_dataset_pairs) * len(self.configs), 240)
+
+    def test_model_order_and_four_b_exclusions(self) -> None:
+        self.assertEqual(
+            self.models,
+            ["Qwen/Qwen3-8B", "Qwen/Qwen3-14B", "Qwen/Qwen3-4B"],
+        )
+        excluded = {"aime2024", "aime2025", "gpqa"}
+        self.assertTrue(excluded.isdisjoint(self.four_b_datasets))
+        self.assertEqual(set(self.datasets) - set(self.four_b_datasets), excluded)
+        self.assertEqual(self.model_dataset_pairs[0], ("Qwen/Qwen3-8B", "aime2024"))
+        self.assertEqual(self.model_dataset_pairs[9], ("Qwen/Qwen3-14B", "aime2024"))
+        self.assertEqual(self.model_dataset_pairs[18], ("Qwen/Qwen3-4B", "arc_challenge"))
 
     def test_exact_configuration_matrix(self) -> None:
         expected = [
@@ -52,18 +70,20 @@ class RunAllArrayTests(unittest.TestCase):
 
     def test_all_state_file_names_are_unique(self) -> None:
         names = []
-        for dataset, model, (method, prompt, alignment) in product(
-            self.datasets, self.models, self.configs
+        for (model, dataset), (method, prompt, alignment) in product(
+            self.model_dataset_pairs, self.configs
         ):
             effective_method = f"{method}_{alignment}" if method == "latent_mas" else method
             model_slug = re.sub(r"[^A-Za-z0-9._-]", "_", model)
             names.append(f"{dataset}_{effective_method}_{prompt}_{model_slug}_state.txt")
-        self.assertEqual(len(names), 270)
-        self.assertEqual(len(set(names)), 270)
+        self.assertEqual(len(names), 240)
+        self.assertEqual(len(set(names)), 240)
         self.assertIn(
             "arc_easy_latent_mas_kernel_sequential_Qwen_Qwen3-4B_state.txt",
             names,
         )
+        for dataset in ("aime2024", "aime2025", "gpqa"):
+            self.assertFalse(any(name.startswith(f"{dataset}_") and "Qwen_Qwen3-4B" in name for name in names))
 
     def test_alignment_is_in_latent_state_identity(self) -> None:
         self.assertIn('STATE_METHOD="${CONFIG_METHOD}_${CONFIG_ALIGNMENT}"', RUN_ALL)
