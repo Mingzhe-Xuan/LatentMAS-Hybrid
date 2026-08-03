@@ -9,6 +9,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 RUN_ALL = (ROOT / "run_all.sh").read_text(encoding="utf-8")
+RUN_ALL_FAST = (ROOT / "run_all_fast.sh").read_text(encoding="utf-8")
 RUN = (ROOT / "run.sh").read_text(encoding="utf-8")
 
 
@@ -52,6 +53,19 @@ class RunAllArrayTests(unittest.TestCase):
         self.assertEqual(self.model_dataset_pairs[0], ("Qwen/Qwen3-8B", "aime2024"))
         self.assertEqual(self.model_dataset_pairs[9], ("Qwen/Qwen3-14B", "aime2024"))
         self.assertEqual(self.model_dataset_pairs[18], ("Qwen/Qwen3-4B", "arc_challenge"))
+
+    def test_fast_array_excludes_slow_datasets_for_every_model(self) -> None:
+        self.assertRegex(RUN_ALL_FAST, r"(?m)^#PBS -J 1-180%3$")
+        self.assertIn("FAST_ONLY=true", RUN_ALL_FAST)
+        self.assertIn('RUN_ALL_SCRIPT="${SUBMIT_DIR}/run_all.sh"', RUN_ALL_FAST)
+        self.assertIn('exec bash "${RUN_ALL_SCRIPT}"', RUN_ALL_FAST)
+        self.assertIn('if [[ "${FAST_ONLY}" == "true" ]]', RUN_ALL)
+        self.assertEqual(
+            len(self.four_b_datasets) * len(self.models) * len(self.configs),
+            180,
+        )
+        excluded = {"aime2024", "aime2025", "gpqa"}
+        self.assertTrue(excluded.isdisjoint(self.four_b_datasets))
 
     def test_exact_configuration_matrix(self) -> None:
         expected = [

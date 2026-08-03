@@ -32,6 +32,21 @@ bash run_all.sh
 qsub run_all.sh
 ```
 
+若希望完全排除耗时较长的 `aime2024`、`aime2025`、`gpqa`，使用快速数组入口：
+
+```bash
+bash run_all_fast.sh
+# 或
+qsub run_all_fast.sh
+```
+
+`run_all_fast.sh` 对 8B、14B、4B 都只运行 `arc_challenge`、`arc_easy`、`gsm8k`、`humanevalplus`、`mbppplus`、`medqa`，因此数组为 `6 × 3 × 10 = 180` 个子任务，PBS 指令是 `#PBS -J 1-180%3`。它复用同一套 `state/` 配置日志和根目录 `state.txt` 进度账本，也支持：
+
+```bash
+bash run_all_fast.sh --force_all
+qsub -v "FORCE_ALL=true" run_all_fast.sh
+```
+
 10 个配置固定为：
 
 ```text
