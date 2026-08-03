@@ -17,7 +17,7 @@ h_t^R\xrightarrow{W_{\mathrm{out}}^R}\operatorname{softmax}
 \xrightarrow{W_{\mathrm{in}}^J}e_t^J,
 $$
 
-其中 source 是 Refiner 的 `latent_reply_hidden`，target 是 Judger 的输入 embedding。每次运行首先执行真实的四角色 sequential hybrid 流程并缓存轨迹；S1--S4 从缓存中仅选择上述 source state。所有写入产物位于 `exp_result/approximator/runs/<run>/`；轨迹和 S1/S2 映射缓存位于 `exp_result/approximator/cache/`。
+其中 source 是 Refiner 的 `latent_reply_hidden`，target 是 Judger 的输入 embedding。每次运行首先执行真实的四角色 sequential hybrid 流程并缓存轨迹；S1--S4 从缓存中选择上述 source state。S4 默认另跑一条独立缓存的 TextMAS 轨迹，作为 receiver-side token embedding 几何参考，但不改变 S1--S3 的算子样本。所有写入产物位于 `exp_result/approximator/runs/<run>/`；长期轨迹缓存位于 `exp/cache/`，run-local manifest 与指标位于 `exp_result/approximator/runs/<run>/`。
 
 令 $q=h_t^R$，词表大小为 $V$，$w_i^\top=(W_{\mathrm{out}}^R)_{i,:}$，$c_i=(W_{\mathrm{in}}^J)_{i,:}$，$b_i=b_i^R$。exact reference 为
 
@@ -70,7 +70,7 @@ python exp/approximator/run.py \
 | S1 | 同 S0；映射边固定为 Refiner $\to$ Judger | 同 S0 的已缓存 Refiner `latent_reply_hidden` | $m=2048,\tau=1.0$，block-ORF seed 101，chunk 4096；float64 audit 最多 256 state | `s1_mapping.parquet`：每 state 的 $F$ relative-$L_2$/cosine、entropy、confidence、分母/NaN 标记；`s1_single_kernel.parquet`：按 rank band 的单核误差；可选 `s1_performance.parquet`：每次调用 latency | `run_manifest.json`；`s1_summary.json`：题目 cluster 汇总、CI；启用性能时其内包含 latency 汇总 | `s1_f_rel_l2.pdf`；`s1_error_conditioning.pdf` |
 | S2 | 同 S1 | 同一份 S1 mapping cache | 主分析不重算映射；可选 calibration：ORF/iid、$m=256/512/1024/2048/4096$、$\tau=0.7/1.0/1.3$、seed 101/202/303/404/505 | `s2_mapping.parquet`：每 state 的 KL/JS/TV/$L_1$/top-k；`s2_single_kernel.parquet`：rank 分层核误差；启用时 `s2_calibration.parquet`：family/$m$/$\tau$/seed/误差 | `run_manifest.json`；`s2_summary.json`；启用时 `s2_calibration_summary.json` | `s2_f_rel_l2.pdf`；`s2_error_propagation.pdf` |
 | S3 | 同 S1 | 同一 Refiner state pool；seed 42 shuffle 后至多 50 题、每题至多 16 state | $m=512/1024/2048$；$\tau=0.5,0.6,\ldots,2.0$；ORF seed 1001--1032（32 个） | `s3_variance.parquet`：每 state × $m$ × $\tau$ 的 kernel/$\hat F$ variance、std、bias$^2$、MSE 与 rank band | `run_manifest.json`；`s3_summary.json`（headline）；`s3_grid_summary.json`（$m$ × $\tau$ grid） | `s3_variance_tau.pdf`；`s3_single_kernel_variance_tau.pdf`；`s3_refiner_state_forest.pdf` |
-| S4 | 同 S1；另拟合 linear Refiner $\to$ Judger baseline | 同一 Refiner state pool，最多 2,000 个 exact/linear/kernel 完整三元组 | 主 ORF 设置同 S1；linear ridge $10^{-5}$；可选 t-SNE：seed 101 | `s4_embeddings.parquet`：每 state × method 的 Judger embedding；`s4_pca_coordinates.parquet`：PC1/PC2/entropy；启用时 `s4_tsne_coordinates.parquet` | `run_manifest.json`；`s4_summary.json`：PCA explained ratio 及三种方法的成对几何误差 | `s4_shared_pca.pdf` |
+| S4 | 同 S1；另拟合 linear baseline；默认增加真实 TextMAS 对照 | 同题 Refiner latent states 与 TextMAS Refiner 文本在 Judger prompt 中的 token embeddings；按题平衡后最多 2,000 个 | 主 ORF 设置同 S1；linear ridge $10^{-5}$；TextMAS 每角色默认最多 256 token；可选 t-SNE：seed 101 | `s4_embeddings.parquet`；`s4_joint_pca_coordinates.parquet`；启用时 `s4_joint_tsne_coordinates.parquet` | `run_manifest.json`；`s4_summary.json`：四组降维、空间汇总、latent 配对几何及 TextMAS 分布几何 | 四张 `s4_{linear,kernel}_{exact,text}_joint_reduction.pdf` |
 | C0 | 单模型 A=`Qwen/Qwen3-4B`，A 同时承担 latent recurrence 与 $W_{out}$ readout | GSM8K `test`；seed 42 shuffle 后取 512 题 | question prompt；greedy；$K=50$；每题保存 50 个 pre-unembedding hidden | `c0_entropy_by_step.parquet`：item ID、step、$H_t$、finite 标记、失败原因；恰为一题一步一行 | `run_manifest.json`；`c0_summary.json`：每个 step 的题数、mean、median、95% CI | `c0_entropy_vs_step.pdf`：横轴 step，纵轴 entropy，含 95% CI |
 | M0 | A=`Qwen/Qwen3-4B`，B=`Qwen/Qwen3-4B`；角色为 sender/answerer | ARC-Easy `test`；seed 42 shuffle 后取 512 题 | A 看完整题目并做 $K=50$ latent steps；B 永不接收题目/选项/A 文本；B greedy、最多 32 token；真实 `transfer_via_realignment` 注入 A 最终 hidden | `m0_per_question.parquet`：item ID、condition、配对 source ID、prediction、parsed、correct、message position、生成长度、失败原因；四条件各一行 | `run_manifest.json`；`m0_summary.json`：四条件 accuracy、相对 no-message 的 paired difference 与 95% CI | `m0_accuracy.pdf`：四条件 accuracy 与 paired-difference CI |
 
@@ -91,7 +91,7 @@ python exp/approximator/run.py \
 | `s3_variance_tau.pdf` | 单面板折线；横轴 $\tau$，纵轴（log scale）为每个 $m$ 下 state-level $\hat F$ variance 的 median；$m=512/1024/2048$ 各一条线。 | 固定 state、仅换 ORF seed 时，$\hat F$ 方差如何随温度和 feature 数改变。 |
 | `s3_single_kernel_variance_tau.pdf` | 单面板折线；横轴 $\tau$，纵轴（log scale）为单核 estimator 方差的 median；每条线一个 exact-softmax rank band，固定 $m=2048$。 | 哪些 token-rank 区域的单核近似对温度最敏感。 |
 | `s3_refiner_state_forest.pdf` | 题目级点图；横轴（log scale）为该题所选 state 的平均 $\hat F$ variance，纵轴为 item ID；固定 $m=2048,\tau=1$。 | seed 方差是否被少数题目主导。 |
-| `s4_shared_pca.pdf` | 三面板共享 PC1/PC2 坐标；面板为 exact、linear、kernel；每点为一个 mapped embedding，颜色是 exact entropy。PCA 仅在三类 embedding 拼接后拟合一次。 | linear/kernel 在 Judger input space 中相对 exact 的全局几何偏移。 |
+| `s4_{alignment}_{reference}_joint_reduction.pdf` | alignment 为 linear/kernel，reference 为 exact/text；每张图对 hidden、reference、aligned 三类原始向量独立联合拟合 PCA，并可附 t-SNE。TextMAS 与 latent 按题和数量平衡，但不建立 token-step 语义配对。 | linear/kernel 相对 exact soft embedding 或真实 TextMAS receiver-side token embedding 的几何偏移。 |
 | `c0_entropy_vs_step.pdf` | 单面板曲线；横轴 latent step $t=0\ldots49$，纵轴为 $H_t$（nats）；实线为题目 mean，阴影为题目 cluster bootstrap 95% CI；可选虚线为 median。 | 同模型 latent recurrence 的 $W_{out}$-decoded token distribution 尖锐程度如何随 step 演化。 |
 | `m0_accuracy.pdf` | 两面板：左为 no-message、random-pair、mismatched-pair、matched-message 四条件的 accuracy 与题目 bootstrap 95% CI；右为后三条件减 no-message 的 paired accuracy difference 与 CI，0 处画参考线。 | B 在不见题目时，正确配对 A latent message 是否比无消息或错误消息更能提高答题准确率。 |
 
@@ -153,13 +153,13 @@ $$
 
 **意义。** 隔离“同一真实 latent state，仅换 ORF 矩阵”带来的随机不确定性，区分低方差与低偏差；不能外推为闭环 latent CoT 的稳定性。
 
-### S4. Refiner-to-Judger embedding 空间的共享 PCA
+### S4. Refiner-to-Judger embedding 空间的 Exact/TextMAS 双参考降维
 
-**运行。** 对各 Refiner source state 生成 exact、linear、kernel 三种 Judger embedding。三类 embedding 合并后中心化并只拟合一次 PCA，最多选取 2,000 个完整三元组；三面板共享坐标系，以 exact entropy 着色。可选 `--s4_tsne` 在同一拼接矩阵上运行固定参数 t-SNE（`init=pca`、`perplexity=50`、`learning_rate=auto`、`max_iter=1500`、seed 101）。此外逐 state 比较 exact--linear、exact--kernel、linear--kernel 的 absolute/relative $L_2$ 与 cosine。
+**运行。** 对各 Refiner source state 生成 hidden、exact、linear、kernel 向量；默认另跑同题 sequential TextMAS 至 Refiner，并在真实渲染后的 Judger prompt 中用 offset mapping 定位 Refiner 回复 token，取 Judger input embedding table 的对应行作为 text reference。对每种 alignment 分别独立拟合 `exact-hidden-aligned` 与 `text-hidden-aligned`，形成 linear/exact、linear/text、kernel/exact、kernel/text 四组 PCA/t-SNE。Text token 与 latent state 按题和数量平衡，最多 2,000 个，但不解释为逐 step 语义配对。可用 `--no_s4_text_mas` 关闭默认 TextMAS 对照；可选 t-SNE 参数仍固定为 `init=pca`、`perplexity=50`、`learning_rate=auto`、`max_iter=1500`、seed 101。latent 方法继续逐 state 比较 absolute/relative $L_2$ 与 cosine，TextMAS 使用题目级 centroid 等非配对分布几何。
 
-**现有产物。** `metrics/s4_embeddings.parquet`、`metrics/s4_pca_coordinates.parquet`、可选 t-SNE coordinates、`summaries/s4_summary.json`、`figures/s4_shared_pca.pdf`。
+**现有产物。** `metrics/s4_embeddings.parquet`、`metrics/s4_joint_pca_coordinates.parquet`、可选 t-SNE coordinates、`summaries/s4_summary.json`、四张 alignment × reference reduction PDF，以及独立的 `exp/cache/text_trajectories` 缓存与 run-local manifest。
 
-**意义。** 展示三种算子输出在同一 Judger input space 的相对几何偏移；它不是 CoT trajectory 图，也不能表明 hidden state 有可读的语言语义。
+**意义。** 展示算子输出相对 exact soft embedding 和真实 TextMAS receiver-side token embedding 的几何偏移；不同 reference 的降维独立拟合，坐标不可跨图直接比较。它不是 CoT trajectory 图，也不能表明 hidden state 有可读的语言语义。
 
 ## 4. 同模型 Latent CoT：C0
 

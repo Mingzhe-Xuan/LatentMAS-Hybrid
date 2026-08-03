@@ -8,6 +8,7 @@ from types import SimpleNamespace
 SOURCE = Path(__file__).parents[1] / "exp" / "approximator" / "run.py"
 FUNCTIONS = {
     "generation_config",
+    "text_generation_config",
     "alignment_config",
     "normalized_question_records",
     "expected_manifest",
@@ -48,6 +49,8 @@ def args():
         temperature=0.6,
         top_p=0.95,
         max_new_tokens=512,
+        s4_text_max_new_tokens=256,
+        text_mas_context_length=-1,
         kernel_features=2048,
         kernel_temperature=1.0,
         kernel_seed=101,
@@ -122,6 +125,13 @@ class TrajectoryCacheIdentityTests(unittest.TestCase):
                 for row in differences
             )
         )
+
+    def test_text_generation_config_retains_full_context_by_default(self):
+        config = CACHE["text_generation_config"](args())
+        self.assertEqual(config["method"], "text_mas")
+        self.assertEqual(config["max_new_tokens_each"], 256)
+        self.assertEqual(config["text_mas_context_length"], -1)
+        self.assertEqual(config["collected_through_role"], "refiner")
 
 
 if __name__ == "__main__":

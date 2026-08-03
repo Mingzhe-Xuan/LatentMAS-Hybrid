@@ -34,13 +34,27 @@ class S4PlotTests(unittest.TestCase):
                         "embedding": values[item_id],
                     }
                 )
+            rows.append(
+                {
+                    "item_id": item_id,
+                    "position": 0,
+                    "turn_id": 0,
+                    "agent_id": 2,
+                    "role": "refiner",
+                    "state_kind": "text_mas_token_embedding",
+                    "method": "text",
+                    "entropy": None,
+                    "embedding": [0.8, 0.1 * item_id, 0.2],
+                }
+            )
         return rows
 
-    def test_pca_uses_separate_joint_fit_for_linear_and_kernel(self):
+    def test_pca_uses_separate_joint_fit_for_alignment_and_reference(self):
         args = SimpleNamespace(
             probe_seed=42,
             bootstrap_replicates=0,
             s4_tsne=False,
+            s4_text_mas=True,
         )
         saved_figures = {}
         written = {}
@@ -60,31 +74,49 @@ class S4PlotTests(unittest.TestCase):
             summary = s4.plot_s4(self._rows(), args)
 
         self.assertEqual(summary["selected_state_count"], 3)
-        self.assertEqual(summary["joint_point_count_per_alignment"], 9)
+        self.assertEqual(summary["joint_point_count_per_reduction"], 9)
         self.assertEqual(
-            summary["pca"]["fit"], "separate joint fit for each alignment"
+            summary["pca"]["fit"],
+            "independent joint fit for every alignment x reference",
         )
         self.assertEqual(
-            set(summary["pca"]["by_alignment"]), {"linear", "kernel"}
+            set(summary["pca"]["by_alignment_and_reference"]),
+            {"linear", "kernel"},
         )
+        for alignment in ("linear", "kernel"):
+            self.assertEqual(
+                set(summary["pca"]["by_alignment_and_reference"][alignment]),
+                {"exact", "text"},
+            )
         self.assertEqual(
             set(saved_figures),
-            {"s4_linear_joint_reduction", "s4_kernel_joint_reduction"},
+            {
+                "s4_linear_exact_joint_reduction",
+                "s4_linear_text_joint_reduction",
+                "s4_kernel_exact_joint_reduction",
+                "s4_kernel_text_joint_reduction",
+            },
         )
         for details in saved_figures.values():
             self.assertEqual(details["axis_count"], 1)
             self.assertEqual(details["collection_count"], 3)
 
         coordinates = written["s4_joint_pca_coordinates"]
-        self.assertEqual(len(coordinates), 18)
+        self.assertEqual(len(coordinates), 36)
         for alignment in ("linear", "kernel"):
-            subset = [row for row in coordinates if row["alignment"] == alignment]
-            self.assertEqual(len(subset), 9)
-            self.assertEqual(
-                {row["space"] for row in subset},
-                {"hidden", "embedding", "aligned"},
-            )
-            self.assertTrue(all(row["reducer"] == "pca" for row in subset))
+            for reference in ("exact", "text"):
+                subset = [
+                    row
+                    for row in coordinates
+                    if row["alignment"] == alignment
+                    and row["reference"] == reference
+                ]
+                self.assertEqual(len(subset), 9)
+                self.assertEqual(
+                    {row["space"] for row in subset},
+                    {"hidden", "reference", "aligned"},
+                )
+                self.assertTrue(all(row["reducer"] == "pca" for row in subset))
 
     def test_incomplete_state_is_excluded_from_joint_fit(self):
         rows = self._rows()
@@ -97,6 +129,7 @@ class S4PlotTests(unittest.TestCase):
             probe_seed=42,
             bootstrap_replicates=0,
             s4_tsne=False,
+            s4_text_mas=True,
         )
         with patch.object(s4, "save_figure"), patch.object(s4, "write_rows"):
             summary = s4.plot_s4(rows, args)
@@ -105,6 +138,29 @@ class S4PlotTests(unittest.TestCase):
         self.assertEqual(summary["valid_state_count"], 2)
         self.assertEqual(summary["invalid_state_count"], 1)
         self.assertEqual(summary["selected_state_count"], 2)
+
+    def test_text_comparison_can_be_disabled(self):
+        args = SimpleNamespace(
+            probe_seed=42,
+            bootstrap_replicates=0,
+            s4_tsne=False,
+            s4_text_mas=False,
+        )
+        saved_figures = []
+        with patch.object(
+            s4, "save_figure", side_effect=lambda figure, stem: saved_figures.append(stem)
+        ), patch.object(s4, "write_rows"):
+            summary = s4.plot_s4(self._rows(), args)
+
+        self.assertFalse(summary["text_mas_enabled"])
+        self.assertEqual(summary["selected_text_token_count"], 0)
+        self.assertEqual(
+            set(saved_figures),
+            {
+                "s4_linear_exact_joint_reduction",
+                "s4_kernel_exact_joint_reduction",
+            },
+        )
 
 
 if __name__ == "__main__":

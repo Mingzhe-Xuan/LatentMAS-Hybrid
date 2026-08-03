@@ -36,12 +36,14 @@ from data import (
 )
 from stages import common, s0, s1, s2, s3, s4
 from stages.mapping import mapping_rows
+from text_trajectory import collect_text_mas
 from trajectory import collect, load_hybrid
 from utils import auto_device
 
 OUTPUT_ROOT = ROOT / "exp_result" / "approximator"
 EXP_CACHE_ROOT = ROOT / "exp" / "cache"
 TRAJECTORY_DIR = EXP_CACHE_ROOT / "trajectories"
+TEXT_TRAJECTORY_DIR = EXP_CACHE_ROOT / "text_trajectories"
 MAPPING_CACHE_DIR = EXP_CACHE_ROOT / "mappings"
 RUNS_DIR = OUTPUT_ROOT / "runs"
 RESULT = OUTPUT_ROOT
@@ -164,6 +166,7 @@ def run_implementation_fingerprint():
             ROOT / "prompts.py",
             ROOT / "methods" / "latent_mas_hybrid.py",
             ROOT / "exp" / "approximator" / "trajectory.py",
+            ROOT / "exp" / "approximator" / "text_trajectory.py",
             ROOT / "exp" / "approximator" / "run.py",
             ROOT / "exp" / "approximator" / "stages" / "common.py",
             ROOT / "exp" / "approximator" / "stages" / "mapping.py",
@@ -265,6 +268,37 @@ def parse_args(argv=None):
     parser.add_argument("--bootstrap_replicates", type=int, default=1000)
     parser.add_argument("--run_s2_calibration", action="store_true")
     parser.add_argument("--run_s1_performance", action="store_true")
+    parser.add_argument(
+        "--text_mas_context_length",
+        type=int,
+        default=-1,
+        help="TextMAS character context limit; negative retains the full context.",
+    )
+    parser.add_argument(
+        "--s4_text_max_new_tokens",
+        type=int,
+        default=256,
+        help="Maximum generated tokens for each TextMAS Planner/Critic/Refiner.",
+    )
+    s4_text_mas = parser.add_mutually_exclusive_group()
+    s4_text_mas.add_argument(
+        "--s4_text_mas",
+        dest="s4_text_mas",
+        action="store_true",
+        help="Include the real TextMAS Refiner-token comparison in S4 (default).",
+    )
+    s4_text_mas.add_argument(
+        "--no_s4_text_mas",
+        dest="s4_text_mas",
+        action="store_false",
+        help="Disable the TextMAS comparison in S4.",
+    )
+    parser.add_argument(
+        "--reuse_text_trajectory",
+        action="store_true",
+        help="Require a matching S4 TextMAS cache.",
+    )
+    parser.add_argument("--force_recollect_text", action="store_true")
     s4_tsne = parser.add_mutually_exclusive_group()
     s4_tsne.add_argument(
         "--s4_tsne",
@@ -278,7 +312,7 @@ def parse_args(argv=None):
         action="store_false",
         help="Disable S4 t-SNE and generate PCA-only joint figures.",
     )
-    parser.set_defaults(s4_tsne=True)
+    parser.set_defaults(s4_tsne=True, s4_text_mas=True)
     args = parser.parse_args(argv)
     if len(args.agent_models) == 1:
         args.agent_models *= 4
@@ -286,9 +320,17 @@ def parse_args(argv=None):
         parser.error("--agent_models must contain exactly one or four model names")
     if args.reuse_trajectory and args.force_recollect:
         parser.error("--reuse_trajectory and --force_recollect are mutually exclusive")
+    if args.reuse_text_trajectory and args.force_recollect_text:
+        parser.error(
+            "--reuse_text_trajectory and --force_recollect_text are mutually exclusive"
+        )
     if args.max_questions < 1 or args.max_states_per_question < 1:
         parser.error("question/state limits must be positive")
-    if args.latent_steps < 0 or args.max_new_tokens < 1:
+    if (
+        args.latent_steps < 0
+        or args.max_new_tokens < 1
+        or args.s4_text_max_new_tokens < 1
+    ):
         parser.error("generation lengths are invalid")
     if args.temperature <= 0 or not 0 < args.top_p <= 1:
         parser.error("--temperature must be > 0 and --top_p must be in (0, 1]")
@@ -643,6 +685,199 @@ def load_or_collect_trajectory(args, indexed_items, logger):
         )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     validate_trajectory(trajectory, manifest)
+    return trajectory_path, trajectory, method, cache_hit
+
+
+def text_trajectory_cache_stem(args):
+    if len(set(args.agent_models)) == 1:
+        model_fields = (f"m={cache_component(args.agent_models[0])}",)
+    else:
+        model_fields = tuple(
+            f"{role[0].upper()}={cache_component(model_name)}"
+            for role, model_name in zip(ROLES, args.agent_models)
+        )
+    return "__".join(
+        (
+            "text-traj",
+            f"ds={cache_component(args.dataset)}",
+            f"sp={cache_component(args.split)}",
+            *model_fields,
+            f"p={cache_component(args.prompt)}",
+            f"q={args.max_questions}",
+            f"ps={args.probe_seed}",
+            f"t={repr(args.temperature)}",
+            f"tp={repr(args.top_p)}",
+            f"tok={args.s4_text_max_new_tokens}",
+            f"ctx={args.text_mas_context_length}",
+            f"rc={int(args.trust_remote_code)}",
+        )
+    )
+
+
+def text_trajectory_paths(args):
+    stem = text_trajectory_cache_stem(args)
+    return (
+        cache_file(TEXT_TRAJECTORY_DIR, stem, ".pt"),
+        cache_file(TEXT_TRAJECTORY_DIR, stem, ".manifest.json"),
+    )
+
+
+def text_generation_config(args):
+    return {
+        "method": "text_mas",
+        "prompt": "sequential",
+        "temperature": args.temperature,
+        "top_p": args.top_p,
+        "max_new_tokens_each": args.s4_text_max_new_tokens,
+        "text_mas_context_length": args.text_mas_context_length,
+        "do_sample": True,
+        "collected_through_role": "refiner",
+        "receiver_space": "judger_input_embedding",
+    }
+
+
+def expected_text_manifest(args, indexed_items):
+    return {
+        "cache_identity": {
+            "questions": normalized_question_records(indexed_items),
+            "role_mapping": dict(zip(ROLES, args.agent_models)),
+            "generation_config": text_generation_config(args),
+            "generation_and_question_seed": args.probe_seed,
+            "implementation_sha256": files_fingerprint(
+                (
+                    ROOT / "models.py",
+                    ROOT / "prompts.py",
+                    ROOT / "exp" / "approximator" / "text_trajectory.py",
+                )
+            ),
+        }
+    }
+
+
+def validate_text_trajectory(trajectory, manifest):
+    required = {"tokens", "questions", "agent_models", "generation_config"}
+    missing = sorted(required - set(trajectory))
+    if missing:
+        raise RuntimeError(f"Text trajectory is missing required fields: {missing}")
+    if trajectory.get("trajectory_is_complete") is not True:
+        raise RuntimeError("Text trajectory is not marked complete.")
+    if len(trajectory["tokens"]) != manifest.get("token_count"):
+        raise RuntimeError("Text trajectory token count does not match its manifest.")
+    if len(trajectory["questions"]) != manifest.get("question_count"):
+        raise RuntimeError("Text trajectory question count does not match its manifest.")
+    required_token_fields = {
+        "item_id",
+        "role",
+        "agent_id",
+        "turn_id",
+        "state_kind",
+        "position",
+        "token_id",
+        "token",
+        "vector",
+        "model_name",
+    }
+    for index, row in enumerate(trajectory["tokens"]):
+        if not required_token_fields.issubset(row):
+            raise RuntimeError(f"Text trajectory token {index} has an incomplete schema.")
+        vector = row["vector"]
+        if not (
+            isinstance(vector, torch.Tensor)
+            and vector.device.type == "cpu"
+            and vector.dtype == torch.float32
+            and vector.ndim == 1
+            and torch.isfinite(vector).all()
+        ):
+            raise RuntimeError(f"Text trajectory token {index} has an invalid vector.")
+
+
+def text_trajectory_cache_differences(expected, actual, trajectory):
+    differences = manifest_differences(
+        expected.get("cache_identity", {}),
+        actual.get("cache_identity", {}),
+        "cache_identity",
+    )
+    available_questions = cached_question_records(trajectory)
+    for item_id, expected_record in expected["cache_identity"]["questions"].items():
+        actual_record = available_questions.get(item_id)
+        if actual_record != expected_record:
+            differences.append(
+                {
+                    "field": f"cache_identity.questions.{item_id}",
+                    "expected": expected_record,
+                    "actual": actual_record,
+                }
+            )
+    return differences
+
+
+def load_or_collect_text_trajectory(args, indexed_items, method, logger):
+    expected = expected_text_manifest(args, indexed_items)
+    trajectory_path, manifest_path = text_trajectory_paths(args)
+    have_trajectory = trajectory_path.exists()
+    have_manifest = manifest_path.exists()
+    if have_trajectory != have_manifest and not args.force_recollect_text:
+        raise RuntimeError(
+            "Incomplete TextMAS trajectory cache; pass --force_recollect_text "
+            f"to replace it: {trajectory_path}"
+        )
+    cache_hit = have_trajectory and have_manifest and not args.force_recollect_text
+    if cache_hit:
+        actual = json.loads(manifest_path.read_text(encoding="utf-8"))
+        trajectory = torch.load(trajectory_path, map_location="cpu", weights_only=True)
+        validate_text_trajectory(trajectory, actual)
+        differences = text_trajectory_cache_differences(
+            expected, actual, trajectory
+        )
+        if differences:
+            raise RuntimeError(
+                "Refusing to reuse incompatible TextMAS trajectory. Differences:\n"
+                + json.dumps(differences, indent=2, ensure_ascii=False, default=str)
+            )
+        logger.info("S4 TextMAS: reusing %s", trajectory_path)
+    else:
+        if args.reuse_text_trajectory:
+            raise FileNotFoundError(
+                "--reuse_text_trajectory requested but cache is absent: "
+                f"{trajectory_path}"
+            )
+        if method is None:
+            method = load_hybrid(args)
+        tokens, questions = collect_text_mas(method, indexed_items, args, logger)
+        trajectory_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = trajectory_path.with_name(trajectory_path.name + ".tmp")
+        torch.save(
+            {
+                "tokens": tokens,
+                "questions": questions,
+                "agent_models": list(args.agent_models),
+                "generation_config": text_generation_config(args),
+                "trajectory_is_complete": True,
+            },
+            temporary_path,
+        )
+        temporary_path.replace(trajectory_path)
+        write_json(
+            manifest_path,
+            {
+                **expected,
+                "generated_at": datetime.now().isoformat(timespec="seconds"),
+                "token_count": len(tokens),
+                "question_count": len(questions),
+                "empty_refiner_question_count": sum(
+                    not question.get("refiner_text") for question in questions
+                ),
+                "invisible_refiner_question_count": sum(
+                    not question.get("visible_refiner_text")
+                    for question in questions
+                ),
+                "trajectory_is_complete": True,
+            },
+        )
+        trajectory = torch.load(trajectory_path, map_location="cpu", weights_only=True)
+        logger.info("S4 TextMAS: saved %d tokens to %s", len(tokens), trajectory_path)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    validate_text_trajectory(trajectory, manifest)
     return trajectory_path, trajectory, method, cache_hit
 
 
@@ -1093,7 +1328,15 @@ def s3_tail_summaries(question_rows, seed_rows, args, metadata):
     )
 
 
-def run_phase_b(path, trajectory, method, args, logger):
+def run_phase_b(
+    path,
+    trajectory,
+    method,
+    args,
+    logger,
+    text_trajectory=None,
+    text_trajectory_info=None,
+):
     complete_states = [State(**record) for record in trajectory["states"]]
     all_states = sample_analysis_states(complete_states, args)
     analysis_states = [
@@ -1121,6 +1364,12 @@ def run_phase_b(path, trajectory, method, args, logger):
     )
     metadata = {
         **mapping_metadata(path, args),
+        "s4_text_mas_enabled": bool(args.s4_text_mas),
+        "s4_text_trajectory": (
+            None
+            if text_trajectory_info is None
+            else text_trajectory_info["trajectory_file"]
+        ),
         "mapping_cache_id": cache_id,
         **{
             key: cache_payload[key]
@@ -1273,8 +1522,18 @@ def run_phase_b(path, trajectory, method, args, logger):
             s3.plot_tail_by_seed(tail_seed_rows)
             s3.plot_forest(rows)
         else:
+            text_rows = (
+                [] if text_trajectory is None else text_trajectory["tokens"]
+            )
             rows, summary = s4.run(
-                analysis_states, wo, wi, bias, kernel, args, logger
+                analysis_states,
+                text_rows,
+                wo,
+                wi,
+                bias,
+                kernel,
+                args,
+                logger,
             )
             common.write_rows(rows, "s4_embeddings")
             common.write_summary(
@@ -1287,6 +1546,7 @@ def run_phase_b(path, trajectory, method, args, logger):
         logger.info("Phase B %s completed.", study.upper())
     return {
         "mapping_cache": mapping_cache_info,
+        "text_trajectory_cache": text_trajectory_info,
         "analysis_state_count": len(analysis_states),
         "sampled_trajectory_state_count": len(all_states),
         "complete_trajectory_state_count": len(complete_states),
@@ -1337,7 +1597,38 @@ def main(argv=None):
                 ).hexdigest(),
             },
         )
-        phase_b = run_phase_b(path, trajectory, method, args, logger)
+        text_trajectory = None
+        text_trajectory_info = None
+        s4_requested = args.study in ("s4", "all")
+        if s4_requested and args.s4_text_mas:
+            (
+                text_path,
+                text_trajectory,
+                method,
+                text_cache_hit,
+            ) = load_or_collect_text_trajectory(args, items, method, logger)
+            text_manifest = text_path.with_suffix(".manifest.json")
+            text_trajectory_info = {
+                "cache_hit": text_cache_hit,
+                "trajectory_file": str(text_path),
+                "manifest_file": str(text_manifest),
+                "manifest_sha256": hashlib.sha256(
+                    text_manifest.read_bytes()
+                ).hexdigest(),
+            }
+            write_json(
+                run_dir / "manifests" / "text_trajectory.json",
+                text_trajectory_info,
+            )
+        phase_b = run_phase_b(
+            path,
+            trajectory,
+            method,
+            args,
+            logger,
+            text_trajectory=text_trajectory,
+            text_trajectory_info=text_trajectory_info,
+        )
         elapsed = time.time() - started
         run_manifest.update(
             status="completed",
