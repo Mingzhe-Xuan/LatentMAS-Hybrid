@@ -153,6 +153,30 @@ except (OSError, json.JSONDecodeError):
 PY
 }
 SEED=42               # Random seed for reproducibility.
+# Empty means use params_dict.json[TASK].times; fallback: 1. Each repetition
+# uses SEED, SEED+1, ... and is included in a per-configuration average JSON.
+TIMES="${TIMES:-}"
+resolve_times() {
+    if [ -n "${TIMES}" ]; then
+        printf '%s\n' "${TIMES}"
+        return
+    fi
+
+    python3 - "$1" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+fallback = 1
+try:
+    params = json.loads(Path("params_dict.json").read_text(encoding="utf-8"))
+    task_params = params.get(sys.argv[1], {})
+    value = task_params.get("times", fallback) if isinstance(task_params, dict) else fallback
+    print(value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else fallback)
+except (OSError, json.JSONDecodeError):
+    print(fallback)
+PY
+}
 
 ## --- TextMAS / LatentMAS settings ---
 TEXT_MAS_CONTEXT_LENGTH=-1  # TextMAS context limit; -1 means unlimited.
@@ -198,6 +222,7 @@ GPU_MEMORY_UTILIZATION=0.9  # Fraction of each GPU vLLM may reserve.
 
 build_common_args() {
 local prompt="$1"
+local run_seed="${2:-${SEED}}"
 RESOLVED_LATENT_STEPS="$(resolve_latent_steps "${TASK}" "${prompt}")"
 COMMON=(
     # Core dataset / model settings
@@ -212,7 +237,7 @@ COMMON=(
     --temperature "${TEMPERATURE}"           # run.py default: 0.6
     --top_p "${TOP_P}"                       # run.py default: 0.95
     --generate_bs "${RESOLVED_GENERATE_BS}"  # Task default from params_dict.json; fallback: 10
-    --seed "${SEED}"                         # run.py default: 42
+    --seed "${run_seed}"                     # Base seed plus repetition index
 
     # TextMAS / LatentMAS settings
     --text_mas_context_length "${TEXT_MAS_CONTEXT_LENGTH}" # run.py default: -1 (unlimited)
@@ -263,8 +288,50 @@ fi
 ## The current suite runs all three methods explicitly below.
 
 ## ========================== Run Experiment Suite =============================
-## All experiment output is recorded in state.txt. The commands are chained so
-## a failed run stops the suite and causes the PBS job to fail.
+## Store each repetition separately and write one average summary per config.
+run_repeated() {
+    local method="$1"
+    local prompt="$2"
+    local align_method="$3"
+    local method_slug="${method}"
+    local config_name result_dir log_dir
+    local repeat_index run_seed result_path log_path
+    local -a result_paths command
+
+    # Alignment is part of the effective LatentMAS method. Without it, the
+    # identical/linear/kernel suites would overwrite one another.
+    if [ "${method}" = "latent_mas" ]; then
+        method_slug="${method}_${align_method}"
+    fi
+    config_name="${TASK}_${method_slug}_${prompt}_${MODEL_SLUG}_${RUN_TIME}"
+    result_dir="result/${config_name}"
+    log_dir="logging/${config_name}"
+    mkdir -p "${result_dir}" "${log_dir}"
+
+    result_paths=()
+    for ((repeat_index = 1; repeat_index <= RESOLVED_TIMES; repeat_index++)); do
+        run_seed=$((SEED + repeat_index - 1))
+        result_path="${result_dir}/repeat_${repeat_index}.json"
+        log_path="${log_dir}/repeat_${repeat_index}.txt"
+        result_paths+=("${result_path}")
+        build_common_args "${prompt}" "${run_seed}"
+        : > "${log_path}"
+
+        echo "Running ${method}/${prompt}/${align_method}, repeat ${repeat_index}/${RESOLVED_TIMES}, seed=${run_seed}"
+        command=(python3 run.py --method "${method}" --prompt "${prompt}" \
+            --result_path "${result_path}" --log_path "${log_path}" "${COMMON[@]}")
+        if [ "${method}" = "latent_mas" ]; then
+            command+=(--align_method "${align_method}" "${LATENT_CACHE_ARGS[@]}")
+        fi
+        "${command[@]}" || return $?
+    done
+
+    python3 aggregate_results.py --output "${result_dir}/summary.json" \
+        --expected-repetitions "${RESOLVED_TIMES}" "${result_paths[@]}"
+}
+
+## All experiment output is recorded in the task state file. A failed repeat
+## stops the suite and causes the PBS job to fail.
 run_suite() {
     local suite_model="$1"
     local suite_task="$2"
@@ -274,6 +341,8 @@ run_suite() {
     RESOLVED_GENERATE_BS="$(resolve_generate_bs "${TASK}")"
     RESOLVED_SEQUENTIAL_LATENT_STEPS="$(resolve_latent_steps "${TASK}" "${PROMPT_SEQUENTIAL}")"
     RESOLVED_HIERARCHICAL_LATENT_STEPS="$(resolve_latent_steps "${TASK}" "${PROMPT_HIERARCHICAL}")"
+    RESOLVED_TIMES="$(resolve_times "${TASK}")"
+    MODEL_SLUG="$(printf '%s' "${MODEL_NAME}" | tr -c 'A-Za-z0-9._-' '_')"
 
     echo "========================================================================"
     echo "  Job ID       : ${PBS_JOBID:-local}"
@@ -283,6 +352,7 @@ run_suite() {
     echo "  Latent prompts: ${PROMPT_SEQUENTIAL}, ${PROMPT_HIERARCHICAL}"
     echo "  Generate BS  : ${RESOLVED_GENERATE_BS}"
     echo "  Max samples  : ${MAX_SAMPLES}"
+    echo "  Repetitions  : ${RESOLVED_TIMES} (seeds ${SEED}..$((SEED + RESOLVED_TIMES - 1)))"
     echo "  Max tokens   : ${RESOLVED_MAX_NEW_TOKENS}"
     echo "  Latent steps : ${PROMPT_SEQUENTIAL}=${RESOLVED_SEQUENTIAL_LATENT_STEPS}, ${PROMPT_HIERARCHICAL}=${RESOLVED_HIERARCHICAL_LATENT_STEPS}"
     echo "  vLLM         : ${USE_VLLM}"
@@ -292,26 +362,17 @@ run_suite() {
     echo "  Think token  : ${THINK}"
     echo "========================================================================"
 
-    # Baseline and TextMAS use the sequential architecture.
-    build_common_args "${PROMPT_SEQUENTIAL}"
-    python3 run.py --method baseline --prompt "${PROMPT_SEQUENTIAL}" "${COMMON[@]}" &&
-    build_common_args "${PROMPT_HIERARCHICAL}"
-    python3 run.py --method baseline --prompt "${PROMPT_HIERARCHICAL}" "${COMMON[@]}" &&
-    build_common_args "${PROMPT_SEQUENTIAL}"
-    python3 run.py --method text_mas --prompt "${PROMPT_SEQUENTIAL}" "${COMMON[@]}" &&
-    build_common_args "${PROMPT_HIERARCHICAL}"
-    python3 run.py --method text_mas --prompt "${PROMPT_HIERARCHICAL}" "${COMMON[@]}" &&
-    # Run all LatentMAS alignment methods sequentially before hierarchical.
-    build_common_args "${PROMPT_SEQUENTIAL}"
-    python3 run.py --method latent_mas --prompt "${PROMPT_SEQUENTIAL}" --align_method identical "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" && # very weak
-    python3 run.py --method latent_mas --prompt "${PROMPT_SEQUENTIAL}" --align_method linear "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" && # Easy to explode
-    python3 run.py --method latent_mas --prompt "${PROMPT_SEQUENTIAL}" --align_method kernel "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" &&
-    build_common_args "${PROMPT_HIERARCHICAL}"
-    python3 run.py --method latent_mas --prompt "${PROMPT_HIERARCHICAL}" --align_method identical "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" &&
-    python3 run.py --method latent_mas --prompt "${PROMPT_HIERARCHICAL}" --align_method linear "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}" &&
-    python3 run.py --method latent_mas --prompt "${PROMPT_HIERARCHICAL}" --align_method kernel "${COMMON[@]}" "${LATENT_CACHE_ARGS[@]}"
+    run_repeated baseline "${PROMPT_SEQUENTIAL}" identical &&
+    run_repeated baseline "${PROMPT_HIERARCHICAL}" identical &&
+    run_repeated text_mas "${PROMPT_SEQUENTIAL}" identical &&
+    run_repeated text_mas "${PROMPT_HIERARCHICAL}" identical &&
+    run_repeated latent_mas "${PROMPT_SEQUENTIAL}" identical &&
+    run_repeated latent_mas "${PROMPT_SEQUENTIAL}" linear &&
+    run_repeated latent_mas "${PROMPT_SEQUENTIAL}" kernel &&
+    run_repeated latent_mas "${PROMPT_HIERARCHICAL}" identical &&
+    run_repeated latent_mas "${PROMPT_HIERARCHICAL}" linear &&
+    run_repeated latent_mas "${PROMPT_HIERARCHICAL}" kernel
 }
-
 if [ "${FULL_EXP}" = true ]; then
     MODELS=("Qwen/Qwen3-4B" "Qwen/Qwen3-8B" "Qwen/Qwen3-14B")
     if [ "${TASK_ONLY}" = true ]; then
@@ -332,6 +393,8 @@ else
     TASKS=("${TASK}")
 fi
 
+RUN_TIME="${RUN_TIME:-$(date +%Y%m%d_%H%M%S)}"
+RUN_TIME="$(printf '%s' "${RUN_TIME}" | tr -c 'A-Za-z0-9._-' '_')"
 {
     STATUS=0
     for CURRENT_MODEL in "${MODELS[@]}"; do

@@ -179,12 +179,24 @@ def configure_run_files(args: argparse.Namespace) -> Tuple[logging.Logger, Path]
     logger.handlers.clear()
     logger.propagate = False
 
-    file_handler = logging.FileHandler(log_dir / f"{run_name}.log", encoding="utf-8")
+    if args.log_path:
+        log_path = Path(args.log_path)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        log_path = log_dir / f"{run_name}.log"
+
+    file_handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
     file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
     logger.addHandler(file_handler)
     logger.info("Run configuration:\n%s", json.dumps(vars(args), ensure_ascii=False, indent=2))
 
-    return logger, result_dir / f"{run_name}.json"
+    if args.result_path:
+        result_path = Path(args.result_path)
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        result_path = result_dir / f"{run_name}.json"
+
+    return logger, result_path
 
 
 def log_problem_detail(logger: logging.Logger, problem_idx: int, result: Dict) -> None:
@@ -310,6 +322,19 @@ def main():
     parser.add_argument("--kernel_chunk_size", dest="kernel_chunk_size", type=int, default=4096,
                         help="Vocabulary chunk size used to precompute kernel statistics.")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--result_path",
+        type=str,
+        default=None,
+        help="Optional exact path for the standalone JSON summary.",
+    )
+    parser.add_argument(
+        "--log_path",
+        type=str,
+        default=None,
+        help="Optional exact path for the detail log.",
+    )
+
 
     # vLLM support
     parser.add_argument("--use_vllm", action="store_true", help="Use vLLM backend for generation")
@@ -488,8 +513,9 @@ def main():
             "model_phases": phase_timing,
         },
     }
-    result_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    logger.info("Final summary written to %s:\n%s", result_path, json.dumps(summary, ensure_ascii=False, indent=2))
+    summary_json = json.dumps(summary, ensure_ascii=False, indent=2)
+    result_path.write_text(summary_json + "\n", encoding="utf-8")
+    logger.info("Final summary written to %s:\n%s", result_path, summary_json)
 
 
 if __name__ == "__main__":
