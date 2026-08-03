@@ -16,7 +16,7 @@ from alignment import (
     build_linear_state,
 )
 
-ALIGNMENTS = ("identical", "linear", "kernel")
+ALIGNMENTS = ("identical", "linear", "kernel", "text")
 
 SYSTEM_PROMPT = (
     "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
@@ -183,7 +183,7 @@ def collect_item(
     latent_steps: int,
     dataset: str,
     alignment: str,
-    alignment_state: AlignmentState,
+    alignment_state: AlignmentState | None,
 ) -> Dict[str, Any]:
     messages = prompt_messages(item["question"], dataset)
     rendered_prompt = wrapper.render_chat(messages, add_generation_prompt=True)
@@ -196,6 +196,7 @@ def collect_item(
     attention_mask = encoded["attention_mask"].to(wrapper.device)
     hidden_size = int(wrapper.model.config.hidden_size)
     hidden_states: List[torch.Tensor] = []
+    generated_token_ids: List[int] = []
     final_hidden = _empty_hidden(hidden_size)
     failure_step = None
     failure_reason = None
@@ -220,10 +221,25 @@ def collect_item(
                 last_hidden[0].detach().to(device="cpu", dtype=torch.float32)
             )
 
-            latent_vec = apply_alignment(last_hidden, alignment_state)
-            latent_embed = latent_vec.to(last_hidden.dtype).unsqueeze(1)
+            model_inputs = {}
+            if alignment == "text":
+                output_head = wrapper.model.get_output_embeddings()
+                if output_head is None:
+                    raise RuntimeError("C0 text recurrence requires an output head.")
+                next_token = output_head(last_hidden).argmax(dim=-1)
+                generated_token_ids.append(int(next_token.item()))
+                model_inputs["input_ids"] = next_token.unsqueeze(1)
+            else:
+                if alignment_state is None:
+                    raise RuntimeError(
+                        f"Missing C0 alignment state for {alignment}."
+                    )
+                latent_vec = apply_alignment(last_hidden, alignment_state)
+                model_inputs["inputs_embeds"] = latent_vec.to(
+                    last_hidden.dtype
+                ).unsqueeze(1)
             outputs = wrapper.model(
-                inputs_embeds=latent_embed,
+                **model_inputs,
                 attention_mask=torch.ones(
                     (1, _past_length(past) + 1),
                     dtype=torch.long,
@@ -261,6 +277,7 @@ def collect_item(
         "prompt_token_ids": input_ids[0].detach().cpu().tolist(),
         "prompt_attention_mask": attention_mask[0].detach().cpu().tolist(),
         "prompt_token_count": int(attention_mask.sum().item()),
+        "generated_token_ids": generated_token_ids,
         "model_name": wrapper.model_name,
         "dataset": dataset,
         "alignment": alignment,
@@ -298,7 +315,7 @@ def collect(
                 args.latent_steps,
                 args.dataset,
                 alignment,
-                alignment_states[alignment],
+                alignment_states.get(alignment),
             )
             records.append(record)
             logger.info(

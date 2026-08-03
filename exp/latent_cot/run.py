@@ -38,7 +38,7 @@ from trajectory import (
 from utils import auto_device, set_seed
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 OUTPUT_ROOT = ROOT / "exp_result" / "latent_cot"
 RUNS_DIR = OUTPUT_ROOT / "runs"
 TRAJECTORY_DIR = ROOT / "exp" / "cache" / "trajectories"
@@ -272,7 +272,7 @@ def expected_manifest(args, indexed_items, wrapper):
             "latent_steps": args.latent_steps,
             "question_selection_seed": args.probe_seed,
             "alignments": list(ALIGNMENTS),
-            "recurrence": "aligned_feedback_comparison_v1",
+            "recurrence": "latent_and_greedy_text_feedback_comparison_v2",
             "alignment_config": {
                 "linear_ridge": args.align_ridge,
                 "kernel_features": args.kernel_features,
@@ -286,7 +286,8 @@ def expected_manifest(args, indexed_items, wrapper):
             "generation": {
                 "do_sample": False,
                 "decoding": "greedy",
-                "text_generation_performed": False,
+                "text_generation_performed": True,
+                "text_decoding": "greedy_fixed_step_count",
             },
             "trust_remote_code": bool(args.trust_remote_code),
 
@@ -576,6 +577,7 @@ def plot_summary(summaries, path, context):
         "identical": "#4c78a8",
         "linear": "#f58518",
         "kernel": "#54a24b",
+        "text": "#e45756",
     }
     for axis, dataset in zip(axes[0], datasets):
         for alignment in ALIGNMENTS:
@@ -613,9 +615,9 @@ def plot_summary(summaries, path, context):
         axis.set_xlabel("Latent step")
         axis.set_title(display_names.get(dataset, dataset))
         axis.grid(alpha=0.25)
-        axis.legend(title="Alignment")
+        axis.legend(title="Recurrence")
     axes[0][0].set_ylabel("Output entropy (nats)")
-    figure.suptitle("C0: entropy by latent alignment recurrence")
+    figure.suptitle("C0: entropy by latent and text recurrence")
     figure.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(path)
@@ -789,7 +791,8 @@ def main(argv=None):
                 "generation": {
                     "do_sample": False,
                     "decoding": "greedy",
-                    "text_generation_performed": False,
+                    "text_generation_performed": True,
+                    "text_decoding": "greedy_fixed_step_count",
                 },
                 "output_embedding_has_bias": first_summary[
                     "output_embedding_has_bias"

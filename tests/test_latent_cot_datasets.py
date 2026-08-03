@@ -7,6 +7,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, List
 
+try:
+    import torch
+except ModuleNotFoundError:
+    torch = None
+
 
 ROOT = Path(__file__).parents[1]
 TRAJECTORY_SOURCE = ROOT / "exp" / "latent_cot" / "trajectory.py"
@@ -81,6 +86,41 @@ def load_cache_difference_functions():
         namespace,
     )
     return namespace
+
+
+def load_collect_item():
+    tree = ast.parse(TRAJECTORY_SOURCE.read_text(encoding="utf-8"))
+    selected = []
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name in {
+            "_past_length",
+            "_empty_hidden",
+            "collect_item",
+        }:
+            node.decorator_list = []
+            selected.append(node)
+    namespace = {
+        "torch": torch,
+        "Any": object,
+        "Dict": Dict,
+        "List": List,
+        "C0Model": object,
+        "AlignmentState": object,
+        "prompt_messages": lambda question, dataset: [
+            {"role": "user", "content": question}
+        ],
+        "prompt_template_version": lambda dataset: "test-prompt-v1",
+        "apply_alignment": lambda hidden, state: hidden,
+    }
+    exec(
+        compile(
+            ast.Module(body=selected, type_ignores=[]),
+            str(TRAJECTORY_SOURCE),
+            "exec",
+        ),
+        namespace,
+    )
+    return namespace["collect_item"]
 
 
 class FakeAxis:
@@ -248,13 +288,13 @@ class LatentCotPlotTests(unittest.TestCase):
             self.assertEqual(
                 [line["label"] for line in axis.lines], list(alignments)
             )
-            self.assertEqual(len({line["color"] for line in axis.lines}), 3)
+            self.assertEqual(len({line["color"] for line in axis.lines}), 4)
 
 
 class LatentCotAlignmentTests(unittest.TestCase):
     def test_alignment_order_is_fixed(self):
         self.assertEqual(
-            PROMPTS["ALIGNMENTS"], ("identical", "linear", "kernel")
+            PROMPTS["ALIGNMENTS"], ("identical", "linear", "kernel", "text")
         )
 
     def test_recurrence_applies_alignment_before_feedback(self):
@@ -263,6 +303,96 @@ class LatentCotAlignmentTests(unittest.TestCase):
             "latent_vec = apply_alignment(last_hidden, alignment_state)", source
         )
         self.assertIn('"alignment": alignment', source)
+
+    def test_text_recurrence_greedily_feeds_back_token_ids(self):
+        source = TRAJECTORY_SOURCE.read_text(encoding="utf-8")
+        self.assertIn('if alignment == "text":', source)
+        self.assertIn("output_head(last_hidden).argmax(dim=-1)", source)
+        self.assertIn(
+            'model_inputs["input_ids"] = next_token.unsqueeze(1)', source
+        )
+
+    @unittest.skipIf(torch is None, "PyTorch is not installed")
+    def test_mock_model_uses_expected_feedback_for_all_recurrences(self):
+        collect_item = load_collect_item()
+
+        class FakeTokenizer:
+            def __call__(self, *args, **kwargs):
+                return {
+                    "input_ids": torch.tensor([[11, 12]]),
+                    "attention_mask": torch.ones((1, 2), dtype=torch.long),
+                }
+
+        class FakeOutputHead:
+            def __call__(self, hidden):
+                return torch.tensor([[0.0, 1.0, 5.0, 2.0]])
+
+        class FakeModel:
+            def __init__(self):
+                self.config = SimpleNamespace(hidden_size=2)
+                self.calls = []
+                self.output_head = FakeOutputHead()
+
+            def get_output_embeddings(self):
+                return self.output_head
+
+            def __call__(self, **kwargs):
+                self.calls.append(kwargs)
+                sequence_length = 1 + len(self.calls)
+                past = ((
+                    torch.zeros((1, 1, sequence_length, 1)),
+                    torch.zeros((1, 1, sequence_length, 1)),
+                ),)
+                hidden = torch.tensor([[[1.0, 2.0]]])
+                return SimpleNamespace(
+                    past_key_values=past, hidden_states=(hidden,)
+                )
+
+        def make_wrapper():
+            model = FakeModel()
+            return SimpleNamespace(
+                model=model,
+                tokenizer=FakeTokenizer(),
+                device="cpu",
+                model_name="fake-model",
+                render_chat=lambda messages, add_generation_prompt: "prompt",
+            )
+
+        for alignment in PROMPTS["ALIGNMENTS"]:
+            fake_wrapper = make_wrapper()
+            state = None if alignment == "text" else object()
+            record = collect_item(
+                fake_wrapper,
+                7,
+                {"question": "question"},
+                3,
+                "gsm8k",
+                alignment,
+                state,
+            )
+            self.assertTrue(record["rollout_complete"])
+            self.assertEqual(record["hidden_states"].shape[0], 3)
+            recurrence_calls = fake_wrapper.model.calls[1:]
+            self.assertEqual(len(recurrence_calls), 3)
+            if alignment == "text":
+                self.assertEqual(record["generated_token_ids"], [2, 2, 2])
+                self.assertTrue(
+                    all("input_ids" in call for call in recurrence_calls)
+                )
+                self.assertTrue(
+                    all("inputs_embeds" not in call for call in recurrence_calls)
+                )
+                self.assertTrue(
+                    all(call["input_ids"].item() == 2 for call in recurrence_calls)
+                )
+            else:
+                self.assertEqual(record["generated_token_ids"], [])
+                self.assertTrue(
+                    all("inputs_embeds" in call for call in recurrence_calls)
+                )
+                self.assertTrue(
+                    all("input_ids" not in call for call in recurrence_calls)
+                )
 
 
 class LatentCotTrajectoryCacheTests(unittest.TestCase):
