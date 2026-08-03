@@ -34,6 +34,20 @@ qsub run_all.sh
 
 `run_all.sh` 使用 `#PBS -J 1-9%3`。不要再对它额外添加 `-J`，否则会覆盖脚本中的数组范围或并发设置。
 
+默认情况下，每个数组子任务会先检查提交目录中的 `state_<dataset>.txt`。文件存在时，该数据集会被标记为 skipped，且不会覆盖已有结果。例如，`state_aime2024.txt` 存在时会跳过 AIME 2024。
+
+若需要忽略已有 state 文件并强制运行全部数据集，本地入口使用：
+
+```bash
+bash run_all.sh --force_all
+```
+
+直接通过 PBS 提交时使用环境变量：
+
+```bash
+qsub -v "FORCE_ALL=true" run_all.sh
+```
+
 当前数据集脚本为：
 
 ```text
