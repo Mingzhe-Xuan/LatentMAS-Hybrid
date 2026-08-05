@@ -4,7 +4,15 @@ import unittest
 
 import torch
 
-from alignment import AlignmentState, apply_alignment, build_kernel_state, build_linear_state, build_orf, positive_features
+from alignment import (
+    AlignmentState,
+    apply_alignment,
+    build_exact_state,
+    build_kernel_state,
+    build_linear_state,
+    build_orf,
+    positive_features,
+)
 
 
 class KernelAlgorithmTests(unittest.TestCase):
@@ -67,6 +75,24 @@ class KernelAlgorithmTests(unittest.TestCase):
         aligned = apply_alignment(hidden, state)
         self.assertEqual(aligned.shape, (2, 3, 3))  # [B, L, d_B]
         torch.testing.assert_close(aligned.reshape(-1, 3), apply_alignment(hidden.reshape(-1, 2), state))
+
+    def test_exact_matches_full_softmax_embedding_expectation(self) -> None:
+        state = build_exact_state(
+            self.w_out,
+            self.w_in,
+            self.bias,
+            temperature=0.8,
+            chunk_size=2,
+        )
+        hidden = torch.tensor(
+            [[0.15, -0.4], [-0.2, 0.1]], dtype=torch.float32
+        )
+        expected_probabilities = torch.softmax(
+            (hidden @ self.w_out.T) / 0.8 + self.bias, dim=-1
+        )
+        expected = expected_probabilities @ self.w_in
+        torch.testing.assert_close(apply_alignment(hidden, state), expected)
+
     def test_linear_uses_row_vector_equivalent_of_document_map(self) -> None:
         state = build_linear_state(self.w_out, self.w_in, ridge=1e-5)
         hidden = torch.tensor([[0.1, -0.2]], dtype=torch.float32)
@@ -78,4 +104,3 @@ class KernelAlgorithmTests(unittest.TestCase):
         hidden = torch.tensor([[3.0, 4.0]], dtype=torch.float32)
         state = AlignmentState("identical", torch.tensor(2.0))
         torch.testing.assert_close(apply_alignment(hidden, state), torch.tensor([[1.2, 1.6]]))
-

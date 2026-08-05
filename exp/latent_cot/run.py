@@ -272,7 +272,7 @@ def expected_manifest(args, indexed_items, wrapper):
             "latent_steps": args.latent_steps,
             "question_selection_seed": args.probe_seed,
             "alignments": list(ALIGNMENTS),
-            "recurrence": "latent_and_greedy_text_feedback_comparison_v2",
+            "recurrence": "exact_kernel_and_greedy_text_feedback_comparison_v3",
             "alignment_config": {
                 "linear_ridge": args.align_ridge,
                 "kernel_features": args.kernel_features,
@@ -576,6 +576,7 @@ def plot_summary(summaries, path, context):
     colors = {
         "identical": "#4c78a8",
         "linear": "#f58518",
+        "exact": "#b279a2",
         "kernel": "#54a24b",
         "text": "#e45756",
     }
@@ -617,7 +618,10 @@ def plot_summary(summaries, path, context):
         axis.grid(alpha=0.25)
         axis.legend(title="Recurrence")
     axes[0][0].set_ylabel("Output entropy (nats)")
-    figure.suptitle("C0: entropy by latent and text recurrence")
+    figure.suptitle(
+        "C0: entropy by latent and text recurrence\n"
+        "Solid lines: mean across questions; shaded bands: 95% bootstrap CI"
+    )
     figure.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(path)

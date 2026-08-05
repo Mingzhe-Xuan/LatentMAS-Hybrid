@@ -71,7 +71,7 @@ python exp/approximator/run.py \
 | S2 | 同 S1 | 同一份 S1 mapping cache | 主分析不重算映射；可选 calibration：ORF/iid、$m=256/512/1024/2048/4096$、$\tau=0.7/1.0/1.3$、seed 101/202/303/404/505 | `s2_mapping.parquet`：每 state 的 KL/JS/TV/$L_1$/top-k；`s2_single_kernel.parquet`：rank 分层核误差；启用时 `s2_calibration.parquet`：family/$m$/$\tau$/seed/误差 | `run_manifest.json`；`s2_summary.json`；启用时 `s2_calibration_summary.json` | `s2_f_rel_l2.pdf`；`s2_error_propagation.pdf` |
 | S3 | 同 S1 | 同一 Refiner state pool；seed 42 shuffle 后至多 50 题、每题至多 16 state | $m=512/1024/2048$；$\tau=0.5,0.6,\ldots,2.0$；ORF seed 1001--1032（32 个） | `s3_variance.parquet`：每 state × $m$ × $\tau$ 的 kernel/$\hat F$ variance、std、bias$^2$、MSE 与 rank band | `run_manifest.json`；`s3_summary.json`（headline）；`s3_grid_summary.json`（$m$ × $\tau$ grid） | `s3_variance_tau.pdf`；`s3_single_kernel_variance_tau.pdf`；`s3_refiner_state_forest.pdf` |
 | S4 | 同 S1；另拟合 linear baseline；默认增加真实 TextMAS 对照 | 同题 Refiner latent states 与 TextMAS Refiner 文本在 Judger prompt 中的 token embeddings；按题平衡后最多 2,000 个 | 主 ORF 设置同 S1；linear ridge $10^{-5}$；TextMAS 每角色默认最多 256 token；可选 t-SNE：seed 101 | `s4_embeddings.parquet`；`s4_joint_pca_coordinates.parquet`；启用时 `s4_joint_tsne_coordinates.parquet` | `run_manifest.json`；`s4_summary.json`：四组降维、空间汇总、latent 配对几何及 TextMAS 分布几何 | 四张 `s4_{linear,kernel}_{exact,text}_joint_reduction.pdf` |
-| C0 | 单模型 A=`Qwen/Qwen3-4B`，A 同时承担 latent recurrence 与 $W_{out}$ readout | GSM8K `test`；seed 42 shuffle 后取 512 题 | question prompt；greedy；$K=100$；每题保存 100 个 pre-unembedding hidden | `c0_entropy_by_step.parquet`：item ID、step、$H_t$、finite 标记、失败原因；恰为一题一步一行 | `run_manifest.json`；`c0_summary.json`：每个 step 的题数、mean、median、95% CI | `c0_entropy_vs_step.pdf`：横轴 step，纵轴 entropy，含 95% CI |
+| C0 | 单模型 A=`Qwen/Qwen3-4B`，A 同时承担 latent recurrence 与 $W_{out}$ readout | GSM8K `test`；seed 42 shuffle 后取 512 题 | question prompt；$K=100$；identical、linear、exact、kernel、text 五条独立 recurrence；exact 为完整 softmax 期望且不采样，kernel 近似 exact，text 使用 greedy argmax；每题每 recurrence 保存 100 个 pre-unembedding hidden | `c0_entropy_by_step.parquet`：item ID、step、$H_t$、finite 标记、失败原因；恰为一题一步一行 | `run_manifest.json`；`c0_summary.json`：每个 step 的题数、mean、median、95% CI | `c0_entropy_vs_step.pdf`：横轴 step，纵轴 entropy，含 95% CI |
 | M0 | A=`Qwen/Qwen3-4B`，B=`Qwen/Qwen3-4B`；角色为 sender/answerer | ARC-Easy `test`；seed 42 shuffle 后取 512 题 | A 看完整题目并做 $K=50$ latent steps；B 永不接收题目/选项/A 文本；B greedy、最多 32 token；真实 `transfer_via_realignment` 注入 A 最终 hidden | `m0_per_question.parquet`：item ID、condition、配对 source ID、prediction、parsed、correct、message position、生成长度、失败原因；四条件各一行 | `run_manifest.json`；`m0_summary.json`：四条件 accuracy、相对 no-message 的 paired difference 与 95% CI | `m0_accuracy.pdf`：四条件 accuracy 与 paired-difference CI |
 
 所有 JSON、Parquet、PDF 均写入同一 run 目录的 `summaries/`、`metrics/`、`figures/` 子目录；`run_manifest.json` 位于该 run 根目录。Parquet 只存原始可重算记录，JSON 不含 hidden/embedding 大向量而只存参数、计数和聚合统计，PDF 只呈现对应 JSON/Parquet 的可复现可视化。
@@ -163,7 +163,7 @@ $$
 
 ## 4. 同模型 Latent CoT：C0
 
-**目标。** 只绘制 latent CoT 中 hidden state 经该同模型 $W_{\mathrm{out}}$ 解码后 entropy 随 latent time step 的变化曲线；C0 的其他分析留空。
+**目标。** 对 identical、linear、exact、kernel 和 greedy text 五种同模型 recurrence，绘制 hidden state 经该同模型 $W_{\mathrm{out}}$ 解码后 entropy 随 time step 的变化曲线；其中 exact 是 kernel 所近似的完整 softmax 基准。
 
 **运行定义。** 使用同一个模型完成 question prompt 的 latent rollout。设第 $t$ 个 latent recurrence 进入下一步前的末层 hidden 为 $h_t$，则仅计算
 
@@ -175,7 +175,7 @@ $$
 
 对每题保存 $t\in\{0,\ldots,K-1\}$ 的 entropy；横轴为 latent time step，纵轴为 $H_t$（nats）。每个 step 先在题目层面保留一条值，再报告题间 mean/median 与 95% cluster bootstrap CI；同时保存原始逐题数据。若某 rollout 提前停止或某 step 非有限，则明确记录有效题目数和失败原因，不能用后续步填补。
 
-**对照与固定项。** 使用 greedy 或固定 seed 的生成配置，并将 model revision、prompt template、数据集 split、$K$、tokenizer、$W_{\mathrm{out}}$ 是否含 bias 写入 manifest。该图不需要 $W_{\mathrm{in}}$、不使用 exact/kernel/linear 映射，也不将 argmax token 当成完整 CoT 文本。
+**对照与固定项。** 五条 recurrence 使用相同 prompt 和初始 KV cache。Exact 反馈为 $\operatorname{softmax}(W_{\mathrm{out}}h_t/\tau+b)W_{\mathrm{in}}$，不进行 sampling 或 argmax；kernel 使用相同的 $\tau$ 和 bias 约定近似该期望 embedding；只有 text 对照使用 greedy argmax token feedback。将 model revision、prompt template、数据集 split、$K$、tokenizer、$\tau$、kernel 配置及 $W_{\mathrm{out}}$ 是否含 bias 写入 manifest。
 
 **解释边界。** entropy 下降、上升或震荡只描述 token distribution 的尖锐程度随 recurrence 的变化，不能单独说明推理更正确、更有信息量，或存在唯一可读的 latent thought。
 

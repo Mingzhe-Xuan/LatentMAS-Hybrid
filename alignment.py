@@ -13,7 +13,7 @@ from typing import Literal, Optional, Tuple
 import torch
 
 
-AlignMethod = Literal["identical", "linear", "kernel"]
+AlignMethod = Literal["identical", "linear", "exact", "kernel"]
 
 
 @dataclass
@@ -24,7 +24,11 @@ class AlignmentState:
     omega: Optional[torch.Tensor] = None  # [m, d_a]
     numerator: Optional[torch.Tensor] = None  # S, [d_b, m]
     denominator: Optional[torch.Tensor] = None  # z, [m]
+    output_weight: Optional[torch.Tensor] = None  # [vocab, d_a]
+    input_weight: Optional[torch.Tensor] = None  # [vocab, d_b]
+    output_bias: Optional[torch.Tensor] = None  # [vocab]
     temperature: float = 1.0
+    chunk_size: int = 4096
 
 
 def build_orf(feature_count: int, dimension: int, *, seed: int, device: torch.device) -> torch.Tensor:
@@ -108,6 +112,34 @@ def build_kernel_state(
     )
 
 
+def build_exact_state(
+    output_weight: torch.Tensor,
+    input_weight: torch.Tensor,
+    output_bias: Optional[torch.Tensor],
+    *,
+    temperature: float,
+    chunk_size: int,
+) -> AlignmentState:
+    """Build the full-vocabulary softmax expectation that kernel approximates."""
+    if output_weight.ndim != 2 or input_weight.ndim != 2:
+        raise ValueError("Embedding weights must be rank-2 tensors")
+    if output_weight.shape[0] != input_weight.shape[0]:
+        raise ValueError("Exact alignment requires equal vocabulary sizes")
+    if output_bias is not None and output_bias.shape != (output_weight.shape[0],):
+        raise ValueError("Output bias must have one value per vocabulary item")
+    if temperature <= 0 or chunk_size <= 0:
+        raise ValueError("temperature and chunk_size must be positive")
+    return AlignmentState(
+        method="exact",
+        target_norm=input_weight.detach().float().norm(dim=1).mean(),
+        output_weight=output_weight.detach(),
+        input_weight=input_weight.detach(),
+        output_bias=None if output_bias is None else output_bias.detach(),
+        temperature=temperature,
+        chunk_size=chunk_size,
+    )
+
+
 def build_linear_state(output_weight: torch.Tensor, input_weight: torch.Tensor, *, ridge: float) -> AlignmentState:
     """Build the row-vector equivalent of the documented least-squares map."""
     if output_weight.shape[0] != input_weight.shape[0]:
@@ -131,6 +163,33 @@ def apply_alignment(hidden: torch.Tensor, state: AlignmentState) -> torch.Tensor
         assert state.matrix is not None
         aligned = flat_hidden @ state.matrix
         aligned = aligned * (state.target_norm / aligned.norm(dim=-1, keepdim=True).clamp_min(1e-6))
+    elif state.method == "exact":
+        assert state.output_weight is not None and state.input_weight is not None
+        vocab = state.output_weight.shape[0]
+        logits = []
+        for start in range(0, vocab, state.chunk_size):
+            stop = min(start + state.chunk_size, vocab)
+            keys = state.output_weight[start:stop].to(
+                device=flat_hidden.device, dtype=torch.float32
+            )
+            chunk_logits = (flat_hidden @ keys.T) / state.temperature
+            if state.output_bias is not None:
+                chunk_logits = chunk_logits + state.output_bias[start:stop].to(
+                    device=flat_hidden.device, dtype=torch.float32
+                )
+            logits.append(chunk_logits)
+        probabilities = torch.softmax(torch.cat(logits, dim=-1), dim=-1)
+        aligned = torch.zeros(
+            (flat_hidden.shape[0], state.input_weight.shape[1]),
+            device=flat_hidden.device,
+            dtype=torch.float32,
+        )
+        for start in range(0, vocab, state.chunk_size):
+            stop = min(start + state.chunk_size, vocab)
+            values = state.input_weight[start:stop].to(
+                device=flat_hidden.device, dtype=torch.float32
+            )
+            aligned += probabilities[:, start:stop] @ values
     elif state.method == "kernel":
         assert state.omega is not None and state.numerator is not None and state.denominator is not None
         u = positive_features(flat_hidden / state.temperature, state.omega, stabilize=True)

@@ -151,8 +151,11 @@ class FakeAxis:
 
 
 class FakeFigure:
+    def __init__(self):
+        self.title = None
+
     def suptitle(self, *args, **kwargs):
-        pass
+        self.title = args[0]
 
     def tight_layout(self):
         pass
@@ -164,11 +167,12 @@ class FakeFigure:
 class FakePlot:
     def __init__(self):
         self.axes = [FakeAxis(), FakeAxis()]
+        self.figure = FakeFigure()
         self.subplots_args = None
 
     def subplots(self, rows, columns, **kwargs):
         self.subplots_args = (rows, columns, kwargs)
-        return FakeFigure(), [self.axes]
+        return self.figure, [self.axes]
 
     def close(self, figure):
         pass
@@ -281,6 +285,8 @@ class LatentCotPlotTests(unittest.TestCase):
         )
         self.assertEqual(fake_plot.subplots_args[0:2], (1, 2))
         self.assertTrue(fake_plot.subplots_args[2]["sharey"])
+        self.assertIn("Solid lines: mean across questions", fake_plot.figure.title)
+        self.assertIn("shaded bands: 95% bootstrap CI", fake_plot.figure.title)
         self.assertEqual(
             [axis.title for axis in fake_plot.axes], ["GSM8K", "MBPP+"]
         )
@@ -288,13 +294,14 @@ class LatentCotPlotTests(unittest.TestCase):
             self.assertEqual(
                 [line["label"] for line in axis.lines], list(alignments)
             )
-            self.assertEqual(len({line["color"] for line in axis.lines}), 4)
+            self.assertEqual(len({line["color"] for line in axis.lines}), 5)
 
 
 class LatentCotAlignmentTests(unittest.TestCase):
     def test_alignment_order_is_fixed(self):
         self.assertEqual(
-            PROMPTS["ALIGNMENTS"], ("identical", "linear", "kernel", "text")
+            PROMPTS["ALIGNMENTS"],
+            ("identical", "linear", "exact", "kernel", "text"),
         )
 
     def test_recurrence_applies_alignment_before_feedback(self):

@@ -12,11 +12,12 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from alignment import (
     AlignmentState,
     apply_alignment,
+    build_exact_state,
     build_kernel_state,
     build_linear_state,
 )
 
-ALIGNMENTS = ("identical", "linear", "kernel", "text")
+ALIGNMENTS = ("identical", "linear", "exact", "kernel", "text")
 
 SYSTEM_PROMPT = (
     "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
@@ -160,6 +161,13 @@ def build_alignment_states(wrapper: C0Model, args) -> Dict[str, AlignmentState]:
             output_weight,
             input_weight,
             ridge=args.align_ridge,
+        ),
+        "exact": build_exact_state(
+            output_weight,
+            input_weight,
+            output_bias,
+            temperature=args.kernel_temperature,
+            chunk_size=args.kernel_chunk_size,
         ),
         "kernel": build_kernel_state(
             output_weight,

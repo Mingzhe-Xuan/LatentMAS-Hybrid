@@ -201,7 +201,7 @@ qsub -v "EXP_TARGET=approximator,STUDY=all,DATASET=arc_easy,SPLIT=test,AGENT_MOD
 qsub -v "EXP_TARGET=approximator" exp.sh
 ```
 
-C0：自动运行 GSM8K 和 MBPP+，每个数据集均比较 identical、linear、kernel：
+C0：自动运行 GSM8K 和 MBPP+，每个数据集均比较 identical、linear、exact、kernel、text：
 
 ```bash
 qsub -v "EXP_TARGET=latent_cot,DATASET=all,SPLIT=test,MODEL_NAME=Qwen/Qwen3-4B,MAX_QUESTIONS=50,LATENT_STEPS=100,M=2048,TAU=1.0,ORF_SEED=101,PROBE_SEED=42" exp.sh
@@ -215,13 +215,13 @@ qsub -v "EXP_TARGET=latent_cot" exp.sh
 
 ### 2.2 method 消融
 
-C0 的一个作业会自动运行 identical、linear、kernel 三条独立 recurrence；当前没有单 method 参数：
+C0 的一个作业会自动运行 identical、linear、exact、kernel、text 五条独立 recurrence；当前没有单 method 参数：
 
 ```bash
 qsub -v "EXP_TARGET=latent_cot,DATASET=all,MAX_QUESTIONS=50,M=2048,TAU=1.0,ORF_SEED=101,PROBE_SEED=42" exp.sh
 ```
 
-结果表中的 `alignment` 列区分三种方法，两幅数据集子图也会分别绘制三条曲线。
+结果表中的 `alignment` 列区分五种方法，两幅数据集子图也会分别绘制五条曲线。其中 `exact` 是完整 softmax 期望 embedding，不进行 token sampling 或 argmax；`kernel` 近似的正是该映射。
 
 Approximator 没有 `--method` 参数；method 相关分析由 study 决定。S4 对比 linear 与 kernel，并使用 hidden/exact 作为参照：
 
