@@ -10,18 +10,18 @@
 
 - `baseline`：sequential、hierarchical；
 - `text_mas`：sequential、hierarchical；
-- `latent_mas`：sequential/hierarchical × identical/linear/kernel。
+- `latent_mas`：sequential/hierarchical × identical/linear/kernel/soft。
 
 ### 1.1 全量实验
 
-`run_all.sh` 是完整矩阵的推荐入口。Qwen3-8B 和 Qwen3-14B 各运行全部 9 个 dataset；Qwen3-4B 只运行 6 个 dataset，跳过 `aime2024`、`aime2025`、`gpqa`。因此共有 `(9 + 9 + 6) × 10 = 240` 个数组子任务。每个子任务只运行一个配置，并由 `#PBS -J 1-240%3` 将全局并发上限设为 3。
+`run_all.sh` 是完整矩阵的推荐入口。Qwen3-8B 和 Qwen3-14B 各运行全部 9 个 dataset；Qwen3-4B 只运行 6 个 dataset，跳过 `aime2024`、`aime2025`、`gpqa`。因此共有 `(9 + 9 + 6) × 12 = 288` 个数组子任务。每个子任务只运行一个配置，并由 `#PBS -J 1-288%3` 将全局并发上限设为 3。
 
 数组按模型分段，顺序为：
 
 ```text
-1–90:    Qwen3-8B，全部 9 个 dataset
-91–180:  Qwen3-14B，全部 9 个 dataset
-181–240: Qwen3-4B，仅 arc_challenge、arc_easy、gsm8k、humanevalplus、mbppplus、medqa
+1–108:   Qwen3-8B，全部 9 个 dataset
+109–216: Qwen3-14B，全部 9 个 dataset
+217–288: Qwen3-4B，仅 arc_challenge、arc_easy、gsm8k、humanevalplus、mbppplus、medqa
 ```
 
 提交方式：
@@ -40,22 +40,22 @@ bash run_all_fast.sh
 qsub run_all_fast.sh
 ```
 
-`run_all_fast.sh` 对 8B、14B、4B 都只运行 `arc_challenge`、`arc_easy`、`gsm8k`、`humanevalplus`、`mbppplus`、`medqa`，因此数组为 `6 × 3 × 10 = 180` 个子任务，PBS 指令是 `#PBS -J 1-180%3`。它复用同一套 `state/` 配置日志和根目录 `state.txt` 进度账本，也支持：
+`run_all_fast.sh` 对 8B、14B、4B 都只运行 `arc_challenge`、`arc_easy`、`gsm8k`、`humanevalplus`、`mbppplus`、`medqa`，因此数组为 `6 × 3 × 12 = 216` 个子任务，PBS 指令是 `#PBS -J 1-216%3`。它复用同一套 `state/` 配置日志和根目录 `state.txt` 进度账本，也支持：
 
 ```bash
 bash run_all_fast.sh --force_all
 qsub -v "FORCE_ALL=true" run_all_fast.sh
 ```
 
-10 个配置固定为：
+12 个配置固定为：
 
 ```text
 baseline   × sequential/hierarchical × identical
 text_mas   × sequential/hierarchical × identical
-latent_mas × sequential/hierarchical × identical/linear/kernel
+latent_mas × sequential/hierarchical × identical/linear/kernel/soft
 ```
 
-不要额外传 `-J`，否则会覆盖脚本内的数组范围或并发限制。也可以让单个 `run.sh` 作业串行执行相同的过滤后矩阵，但它不是 240-task 独立排队方式：
+不要额外传 `-J`，否则会覆盖脚本内的数组范围或并发限制。也可以让单个 `run.sh` 作业串行执行相同的过滤后矩阵，但它不是 288-task 独立排队方式：
 
 ```bash
 qsub -v "FULL_EXP=true" run.sh
@@ -91,7 +91,7 @@ tail -n 30 state.txt
 awk -F '\t' 'NR > 1 { count[$9]++ } END { for (s in count) print s, count[s] }' state.txt
 ```
 
-method、prompt 或 alignment 非法时会在创建配置状态文件前退出；`baseline` 和 `text_mas` 只允许 `identical`，`latent_mas` 允许 `identical`、`linear`、`kernel`。
+method、prompt 或 alignment 非法时会在创建配置状态文件前退出；`baseline` 和 `text_mas` 只允许 `identical`，`latent_mas` 允许 `identical`、`linear`、`kernel`、`soft`。
 
 ### 1.3 单任务与单配置入口
 
@@ -121,7 +121,7 @@ qsub run.sh
 
 ### 1.4 method 消融
 
-一个标准 `run.sh` suite 已经自动包含 identical、linear、kernel，并同时包含 baseline 与 TextMAS，因此完整 method 消融无需分别提交：
+一个标准 `run.sh` suite 已经自动包含 identical、linear、kernel、soft，并同时包含 baseline 与 TextMAS，因此完整 method 消融无需分别提交：
 
 ```bash
 qsub -v "TASK=arc_easy,MODEL_NAME=Qwen/Qwen3-8B" run.sh
@@ -130,8 +130,8 @@ qsub -v "TASK=arc_easy,MODEL_NAME=Qwen/Qwen3-8B" run.sh
 若需要把每个 alignment 作为独立命令运行，可直接调用 `run.py`：
 
 ```bash
-for method in identical linear kernel; do
-  python3 run.py --method latent_mas --align_method "${method}" --model_name Qwen/Qwen3-8B --task arc_easy --prompt sequential --max_samples 30 --split test --latent_steps 10 --kernel_features 1024 --kernel_temperature 1.0 --kernel_seed 42 --kernel_chunk_size 4096 --seed 42 --trust_remote_code
+for method in identical linear kernel soft; do
+  python3 run.py --method latent_mas --align_method "${method}" --model_name Qwen/Qwen3-8B --task arc_easy --prompt sequential --max_samples 30 --split test --latent_steps 10 --kernel_features 1024 --kernel_temperature 1.0 --kernel_seed 42 --kernel_chunk_size 4096 --soft_temperature 1.0 --soft_chunk_size 32 --seed 42 --trust_remote_code
 done
 ```
 
@@ -201,7 +201,7 @@ qsub -v "EXP_TARGET=approximator,STUDY=all,DATASET=arc_easy,SPLIT=test,AGENT_MOD
 qsub -v "EXP_TARGET=approximator" exp.sh
 ```
 
-C0：自动运行 GSM8K 和 MBPP+，每个数据集均比较 identical、linear、exact、kernel、text：
+C0：自动运行 GSM8K 和 MBPP+，每个数据集均比较 identical、linear、soft、kernel、text：
 
 ```bash
 qsub -v "EXP_TARGET=latent_cot,DATASET=all,SPLIT=test,MODEL_NAME=Qwen/Qwen3-4B,MAX_QUESTIONS=50,LATENT_STEPS=100,M=2048,TAU=1.0,ORF_SEED=101,PROBE_SEED=42" exp.sh
@@ -215,13 +215,13 @@ qsub -v "EXP_TARGET=latent_cot" exp.sh
 
 ### 2.2 method 消融
 
-C0 的一个作业会自动运行 identical、linear、exact、kernel、text 五条独立 recurrence；当前没有单 method 参数：
+C0 的一个作业会自动运行 identical、linear、soft、kernel、text 五条独立 recurrence；当前没有单 method 参数：
 
 ```bash
 qsub -v "EXP_TARGET=latent_cot,DATASET=all,MAX_QUESTIONS=50,M=2048,TAU=1.0,ORF_SEED=101,PROBE_SEED=42" exp.sh
 ```
 
-结果表中的 `alignment` 列区分五种方法，两幅数据集子图也会分别绘制五条曲线。其中 `exact` 是完整 softmax 期望 embedding，不进行 token sampling 或 argmax；`kernel` 近似的正是该映射。
+结果表中的 `alignment` 列区分五种方法，两幅数据集子图也会分别绘制五条曲线。其中 `soft` 是完整 softmax 期望 embedding，不进行 token sampling 或 argmax；`kernel` 近似的正是该映射。
 
 Approximator 没有 `--method` 参数；method 相关分析由 study 决定。S4 对比 linear 与 kernel，并使用 hidden/exact 作为参照：
 

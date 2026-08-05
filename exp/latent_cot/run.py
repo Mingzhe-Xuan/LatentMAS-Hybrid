@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Plan-v3 C0: entropy across a single-model latent recurrence."""
+"""Plan-v4 C0: entropy across a single-model latent recurrence."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ from trajectory import (
 from utils import auto_device, set_seed
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 OUTPUT_ROOT = ROOT / "exp_result" / "latent_cot"
 RUNS_DIR = OUTPUT_ROOT / "runs"
 TRAJECTORY_DIR = ROOT / "exp" / "cache" / "trajectories"
@@ -61,6 +61,7 @@ def parse_args(argv=None):
     parser.add_argument("--kernel_temperature", type=float, default=1.0)
     parser.add_argument("--kernel_seed", type=int, default=101)
     parser.add_argument("--kernel_chunk_size", type=int, default=4096)
+    parser.add_argument("--soft_chunk_size", type=int, default=32)
     parser.add_argument("--align_ridge", type=float, default=1e-5)
     parser.add_argument(
         "--reuse_trajectory",
@@ -79,6 +80,8 @@ def parse_args(argv=None):
         parser.error("bootstrap/chunk sizes must be positive")
     if args.kernel_features < 1 or args.kernel_chunk_size < 1:
         parser.error("kernel feature/chunk sizes must be positive")
+    if args.soft_chunk_size < 1:
+        parser.error("soft chunk size must be positive")
     if args.kernel_temperature <= 0 or args.align_ridge < 0:
         parser.error("kernel temperature must be positive and ridge non-negative")
     args.device = auto_device(args.device)
@@ -272,13 +275,14 @@ def expected_manifest(args, indexed_items, wrapper):
             "latent_steps": args.latent_steps,
             "question_selection_seed": args.probe_seed,
             "alignments": list(ALIGNMENTS),
-            "recurrence": "exact_kernel_and_greedy_text_feedback_comparison_v3",
+            "recurrence": "soft_kernel_and_greedy_text_feedback_comparison_v4",
             "alignment_config": {
                 "linear_ridge": args.align_ridge,
                 "kernel_features": args.kernel_features,
                 "kernel_temperature": args.kernel_temperature,
                 "kernel_seed": args.kernel_seed,
                 "kernel_chunk_size": args.kernel_chunk_size,
+                "soft_chunk_size": args.soft_chunk_size,
             },
             "recurrence_target_embedding_mean_norm": float(
                 wrapper.target_embedding_mean_norm.detach().cpu()
@@ -576,7 +580,7 @@ def plot_summary(summaries, path, context):
     colors = {
         "identical": "#4c78a8",
         "linear": "#f58518",
-        "exact": "#b279a2",
+        "soft": "#b279a2",
         "kernel": "#54a24b",
         "text": "#e45756",
     }

@@ -183,10 +183,10 @@ def rate_summary(rows, metric):
 
 
 def exact(q, wo, wi, bias, tau):
-    logits = wo @ (q.to(wo.device, dtype=wo.dtype) / tau)
+    logits = wo @ q.to(wo.device, dtype=wo.dtype)
     if bias is not None:
         logits = logits + bias
-    probabilities = torch.softmax(logits, 0)
+    probabilities = torch.softmax(logits / tau, 0)
     return probabilities @ wi, probabilities
 
 
@@ -224,7 +224,7 @@ def iid_kernel(wo, wi, bias, m, tau, seed, chunk):
     for start in range(0, len(wo), chunk):
         stop = min(start + chunk, len(wo))
         features = positive_features(wo[start:stop], omega)
-        alpha = torch.exp(b[start:stop] - shift)[:, None]
+        alpha = torch.exp((b[start:stop] - shift) / tau)[:, None]
         numerator += wi[start:stop].T @ (alpha * features)
         denominator += (alpha * features).sum(0)
     return type(

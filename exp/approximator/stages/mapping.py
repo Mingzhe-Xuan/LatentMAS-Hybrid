@@ -47,7 +47,7 @@ def mapping_rows(states, wo, wi, bias, kernel, args, include_s2, logger=None):
             alpha = (
                 torch.ones_like(raw)
                 if bias is None
-                else torch.exp(bias - bias.max())
+                else torch.exp((bias - bias.max()) / args.kernel_temperature)
             )
             approximate_probabilities = raw * alpha
             approximate_probabilities /= approximate_probabilities.sum().clamp_min(

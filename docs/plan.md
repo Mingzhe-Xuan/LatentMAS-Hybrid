@@ -1,4 +1,4 @@
-﻿# 核对齐的分析性实验计划（暂设 $T_{A\to B}=I$）
+# 核对齐的分析性实验计划（暂设 $T_{A\to B}=I$）
 
 ## 1. 目标与问题拆分
 
@@ -15,7 +15,7 @@ $$
 1. **soft-token 对齐目标是否合理**：
    $$
    F(q)=W_{\mathrm{in}}^B\operatorname{softmax}
-   (W_{\mathrm{out}}^Aq/\tau+b^A)
+   ((W_{\mathrm{out}}^Aq+b^A)/\tau)
    $$
    是否能把 A 的 hidden state 表达为 B 可接收的连续输入 embedding；
 2. **核近似是否准确且值得**：ORF 预聚合得到的
@@ -235,7 +235,7 @@ PCA 是唯一主图。如果需要补充 t-SNE，仅在 M1 的 ARC-Easy `test` �
 
 $$
 \hat p_i(q)=
-\frac{e^{b_i^A}\,\phi(w_i)^\top\phi(q/\tau)}
+\frac{e^{b_i^A/\tau}\,\phi(w_i)^\top\phi(q/\tau)}
 {z^\top\phi(q/\tau)}.
 $$
 

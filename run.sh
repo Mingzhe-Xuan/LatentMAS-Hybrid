@@ -57,7 +57,7 @@ if [ "${SINGLE_CONFIG}" = true ]; then
             ;;
         latent_mas)
             case "${CONFIG_ALIGNMENT}" in
-                identical|linear|kernel) ;;
+                identical|linear|kernel|soft) ;;
                 *) echo "ERROR: invalid CONFIG_ALIGNMENT=${CONFIG_ALIGNMENT}"; exit 2 ;;
             esac
             ;;
@@ -252,6 +252,8 @@ ALIGN_RIDGE="${ALIGN_RIDGE:-1e-5}"                 # Linear ridge.
 KERNEL_FEATURES="${KERNEL_FEATURES:-1024}"         # Random-feature count.
 KERNEL_TEMPERATURE="${KERNEL_TEMPERATURE:-1.0}"   # Kernel temperature.
 KERNEL_CHUNK_SIZE="${KERNEL_CHUNK_SIZE:-4096}"    # Kernel chunk size.
+SOFT_TEMPERATURE="${SOFT_TEMPERATURE:-1.0}"       # Exact softmax temperature.
+SOFT_CHUNK_SIZE="${SOFT_CHUNK_SIZE:-32}"          # Hidden queries per softmax chunk.
 
 ## --- vLLM backend settings ---
 USE_VLLM=false              # Whether to enable the optional vLLM backend.
@@ -286,6 +288,8 @@ COMMON=(
     --kernel_features "${KERNEL_FEATURES}"   # run.py default: 1024; used by kernel
     --kernel_temperature "${KERNEL_TEMPERATURE}" # run.py default: 1.0; used by kernel
     --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" # run.py default: 4096; used by kernel
+    --soft_temperature "${SOFT_TEMPERATURE}" # run.py default: 1.0; used by soft
+    --soft_chunk_size "${SOFT_CHUNK_SIZE}" # run.py default: 32; used by soft
 
     # vLLM numeric settings; ignored unless --use_vllm is enabled below.
     --tensor_parallel_size "${TENSOR_PARALLEL_SIZE}" # run.py default: 1
@@ -322,8 +326,8 @@ fi
 ##   --device2 DEVICE         default: None, then run.py uses --device.
 ##   --agent_models MODEL...  default: None; only used by latent_mas_hybrid.
 ##
-## --align_method choices/default: identical (default), linear, kernel.
-## The current suite runs all three methods explicitly below.
+## --align_method choices/default: identical (default), linear, kernel, soft.
+## The current suite runs all four methods explicitly below.
 
 ## ========================== Run Experiment Suite =============================
 ## Store each repetition separately and write one average summary per config.
@@ -337,7 +341,7 @@ run_repeated() {
     local -a result_paths command
 
     # Alignment is part of the effective LatentMAS method. Without it, the
-    # identical/linear/kernel suites would overwrite one another.
+    # identical/linear/kernel/soft suites would overwrite one another.
     if [ "${method}" = "latent_mas" ]; then
         method_slug="${method}_${align_method}"
     fi
@@ -413,9 +417,11 @@ run_suite() {
     run_repeated latent_mas "${PROMPT_SEQUENTIAL}" identical &&
     run_repeated latent_mas "${PROMPT_SEQUENTIAL}" linear &&
     run_repeated latent_mas "${PROMPT_SEQUENTIAL}" kernel &&
+    run_repeated latent_mas "${PROMPT_SEQUENTIAL}" soft &&
     run_repeated latent_mas "${PROMPT_HIERARCHICAL}" identical &&
     run_repeated latent_mas "${PROMPT_HIERARCHICAL}" linear &&
-    run_repeated latent_mas "${PROMPT_HIERARCHICAL}" kernel
+    run_repeated latent_mas "${PROMPT_HIERARCHICAL}" kernel &&
+    run_repeated latent_mas "${PROMPT_HIERARCHICAL}" soft
 }
 if [ "${FULL_EXP}" = true ]; then
     MODELS=("Qwen/Qwen3-8B" "Qwen/Qwen3-14B" "Qwen/Qwen3-4B")

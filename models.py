@@ -5,7 +5,13 @@ import torch
 import matplotlib.pyplot as plt
 from typing import Dict, List, Optional, Tuple
 from transformers import AutoModelForCausalLM, AutoTokenizer, LogitsProcessorList
-from alignment import AlignmentState, apply_alignment, build_kernel_state, build_linear_state
+from alignment import (
+    AlignmentState,
+    apply_alignment,
+    build_kernel_state,
+    build_linear_state,
+    build_soft_state,
+)
 
 try:
     from vllm import LLM, SamplingParams
@@ -296,6 +302,14 @@ class ModelWrapper:
                 seed=int(getattr(self.args, "kernel_seed", getattr(self.args, "seed", 42))),
                 chunk_size=int(getattr(self.args, "kernel_chunk_size", 4096)),
             )
+        if self.align_method == "soft":
+            return build_soft_state(
+                output_weight,
+                input_weight,
+                output_bias,
+                temperature=float(getattr(self.args, "soft_temperature", 1.0)),
+                query_chunk_size=int(getattr(self.args, "soft_chunk_size", 32)),
+            )
         raise ValueError(f"Unsupported align method: {self.align_method}")
 
     def _ensure_alignment_state(self, source_model, target_model) -> AlignmentState:
@@ -317,7 +331,11 @@ class ModelWrapper:
             raise ValueError("Alignment currently requires identical token-to-ID vocabularies.")
         source_model = self.HF_model if hasattr(self, "HF_model") else self.model
         target_model = target.HF_model if hasattr(target, "HF_model") else target.model
-        return apply_alignment(hidden, self._ensure_alignment_state(source_model, target_model))
+        aligned = apply_alignment(
+            hidden, self._ensure_alignment_state(source_model, target_model)
+        )
+        target_device = target_model.get_input_embeddings().weight.device
+        return aligned.to(target_device)
     @torch.no_grad()
     def generate_text_batch(
         self,

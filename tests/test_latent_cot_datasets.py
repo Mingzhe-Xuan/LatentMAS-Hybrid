@@ -301,7 +301,7 @@ class LatentCotAlignmentTests(unittest.TestCase):
     def test_alignment_order_is_fixed(self):
         self.assertEqual(
             PROMPTS["ALIGNMENTS"],
-            ("identical", "linear", "exact", "kernel", "text"),
+            ("identical", "linear", "soft", "kernel", "text"),
         )
 
     def test_recurrence_applies_alignment_before_feedback(self):

@@ -4,7 +4,7 @@
 #PBS -q gpu_ded
 #PBS -l walltime=72:00:00
 #PBS -l select=1:ncpus=12:ngpus=1
-#PBS -J 1-240%3
+#PBS -J 1-288%3
 #PBS -j oe
 
 set -euo pipefail
@@ -18,6 +18,8 @@ KERNEL_FEATURES="${KERNEL_FEATURES:-1024}"
 KERNEL_TEMPERATURE="${KERNEL_TEMPERATURE:-1.0}"
 KERNEL_CHUNK_SIZE="${KERNEL_CHUNK_SIZE:-4096}"
 ALIGN_RIDGE="${ALIGN_RIDGE:-1e-5}"
+SOFT_TEMPERATURE="${SOFT_TEMPERATURE:-1.0}"
+SOFT_CHUNK_SIZE="${SOFT_CHUNK_SIZE:-32}"
 PROGRESS_FILE="${SUBMIT_DIR}/state.txt"
 
 for ARG in "$@"; do
@@ -41,15 +43,17 @@ FOUR_B_DATASETS=(
 )
 METHODS=(
     baseline baseline text_mas text_mas
-    latent_mas latent_mas latent_mas latent_mas latent_mas latent_mas
+    latent_mas latent_mas latent_mas latent_mas
+    latent_mas latent_mas latent_mas latent_mas
 )
 PROMPTS=(
     sequential hierarchical sequential hierarchical
-    sequential sequential sequential hierarchical hierarchical hierarchical
+    sequential sequential sequential sequential
+    hierarchical hierarchical hierarchical hierarchical
 )
 ALIGNMENTS=(
     identical identical identical identical
-    identical linear kernel identical linear kernel
+    identical linear kernel soft identical linear kernel soft
 )
 
 DATASET_COUNT=${#DATASETS[@]}
@@ -72,7 +76,7 @@ if [[ -z "${PBS_ARRAY_INDEX:-}" ]]; then
         echo "ERROR: qsub was not found in PATH."
         exit 127
     fi
-    VARIABLES="FORCE_ALL=${FORCE_ALL},FAST_ONLY=${FAST_ONLY},MAX_SAMPLES=${MAX_SAMPLES},KERNEL_FEATURES=${KERNEL_FEATURES},KERNEL_TEMPERATURE=${KERNEL_TEMPERATURE},KERNEL_CHUNK_SIZE=${KERNEL_CHUNK_SIZE},ALIGN_RIDGE=${ALIGN_RIDGE}"
+    VARIABLES="FORCE_ALL=${FORCE_ALL},FAST_ONLY=${FAST_ONLY},MAX_SAMPLES=${MAX_SAMPLES},KERNEL_FEATURES=${KERNEL_FEATURES},KERNEL_TEMPERATURE=${KERNEL_TEMPERATURE},KERNEL_CHUNK_SIZE=${KERNEL_CHUNK_SIZE},ALIGN_RIDGE=${ALIGN_RIDGE},SOFT_TEMPERATURE=${SOFT_TEMPERATURE},SOFT_CHUNK_SIZE=${SOFT_CHUNK_SIZE}"
     JOB_ID="$(cd "${SCRIPT_DIR}" && qsub -v "${VARIABLES}" "${BASH_SOURCE[0]}")"
     echo "Submitted ${JOB_ID}: ${TOTAL_COUNT} independently queued configs, maximum concurrency 3, force_all=${FORCE_ALL}."
     exit 0
@@ -119,7 +123,7 @@ case "${CONFIG_METHOD}" in
         ;;
     latent_mas)
         case "${CONFIG_ALIGNMENT}" in
-            identical|linear|kernel) ;;
+            identical|linear|kernel|soft) ;;
             *) echo "ERROR: invalid alignment: ${CONFIG_ALIGNMENT}"; exit 2 ;;
         esac
         ;;
@@ -173,6 +177,7 @@ append_progress STARTED "state file: ${STATE_PATH}"
 export FULL_EXP=false TASK_ONLY=true SINGLE_CONFIG=true CAPTURE_ALL_OUTPUT=true
 export TASK MODEL_NAME CONFIG_METHOD CONFIG_PROMPT CONFIG_ALIGNMENT STATE_FILE="${STATE_PATH}"
 export MAX_SAMPLES KERNEL_FEATURES KERNEL_TEMPERATURE KERNEL_CHUNK_SIZE ALIGN_RIDGE
+export SOFT_TEMPERATURE SOFT_CHUNK_SIZE
 if bash "${RUN_SCRIPT}"; then
     append_progress COMPLETED "state file: ${STATE_PATH}"
 else

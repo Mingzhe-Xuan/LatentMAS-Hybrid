@@ -7,10 +7,10 @@ import torch
 from alignment import (
     AlignmentState,
     apply_alignment,
-    build_exact_state,
     build_kernel_state,
     build_linear_state,
     build_orf,
+    build_soft_state,
     positive_features,
 )
 
@@ -42,7 +42,7 @@ class KernelAlgorithmTests(unittest.TestCase):
         )
         assert state.omega is not None and state.numerator is not None and state.denominator is not None
         keys = positive_features(self.w_out, state.omega)
-        alpha = torch.exp(self.bias - self.bias.max()).unsqueeze(1)
+        alpha = torch.exp((self.bias - self.bias.max()) / state.temperature).unsqueeze(1)
         # Column-vector document formula: S=sum_i c_i alpha_i k_i^T.
         # Row-vector storage: S=W_in.T @ (alpha * K).
         expected_s = self.w_in.T @ (alpha * keys)
@@ -51,8 +51,8 @@ class KernelAlgorithmTests(unittest.TestCase):
         torch.testing.assert_close(state.denominator, expected_z)
         # docs use exp(b_i); the common -max(b) shift is applied to both
         # statistics and cancels from the final normalized output.
-        raw_alpha = torch.exp(self.bias).unsqueeze(1)
-        scale = torch.exp(-self.bias.max())
+        raw_alpha = torch.exp(self.bias / state.temperature).unsqueeze(1)
+        scale = torch.exp(-self.bias.max() / state.temperature)
         torch.testing.assert_close(state.numerator, self.w_in.T @ (raw_alpha * keys) * scale)
         torch.testing.assert_close(state.denominator, (raw_alpha * keys).sum(dim=0) * scale)
 
@@ -76,22 +76,70 @@ class KernelAlgorithmTests(unittest.TestCase):
         self.assertEqual(aligned.shape, (2, 3, 3))  # [B, L, d_B]
         torch.testing.assert_close(aligned.reshape(-1, 3), apply_alignment(hidden.reshape(-1, 2), state))
 
-    def test_exact_matches_full_softmax_embedding_expectation(self) -> None:
-        state = build_exact_state(
+    def test_soft_matches_full_softmax_with_temperature_on_bias(self) -> None:
+        hidden = torch.tensor(
+            [[[0.15, -0.4], [-0.2, 0.1]], [[0.3, 0.2], [0.0, -0.1]]],
+            dtype=torch.float32,
+        )
+        state = build_soft_state(
             self.w_out,
             self.w_in,
             self.bias,
             temperature=0.8,
-            chunk_size=2,
-        )
-        hidden = torch.tensor(
-            [[0.15, -0.4], [-0.2, 0.1]], dtype=torch.float32
+            query_chunk_size=1,
         )
         expected_probabilities = torch.softmax(
-            (hidden @ self.w_out.T) / 0.8 + self.bias, dim=-1
+            (hidden @ self.w_out.T + self.bias) / 0.8, dim=-1
         )
         expected = expected_probabilities @ self.w_in
-        torch.testing.assert_close(apply_alignment(hidden, state), expected)
+        actual = apply_alignment(hidden, state)
+        self.assertEqual(actual.shape, (2, 2, 3))
+        torch.testing.assert_close(actual, expected)
+
+    def test_soft_query_chunking_preserves_full_vocabulary_result(self) -> None:
+        hidden = torch.tensor(
+            [[0.15, -0.4], [-0.2, 0.1], [0.3, 0.2]], dtype=torch.float32
+        )
+        chunked = build_soft_state(
+            self.w_out, self.w_in, self.bias,
+            temperature=1.7, query_chunk_size=1,
+        )
+        unchunked = build_soft_state(
+            self.w_out, self.w_in, self.bias,
+            temperature=1.7, query_chunk_size=32,
+        )
+        expected = torch.softmax(
+            (hidden @ self.w_out.T + self.bias) / 1.7, dim=-1
+        ) @ self.w_in
+        chunked_result = apply_alignment(hidden, chunked)
+        torch.testing.assert_close(chunked_result, expected)
+        torch.testing.assert_close(
+            chunked_result, apply_alignment(hidden, unchunked)
+        )
+        self.assertFalse(
+            torch.allclose(
+                chunked_result.norm(dim=-1),
+                chunked.target_norm.expand(hidden.shape[0]),
+            )
+        )
+
+    def test_soft_validates_parameters_and_non_finite_hidden(self) -> None:
+        with self.assertRaisesRegex(ValueError, "temperature"):
+            build_soft_state(
+                self.w_out, self.w_in, self.bias,
+                temperature=0.0, query_chunk_size=1,
+            )
+        with self.assertRaisesRegex(ValueError, "chunk"):
+            build_soft_state(
+                self.w_out, self.w_in, self.bias,
+                temperature=1.0, query_chunk_size=0,
+            )
+        state = build_soft_state(
+            self.w_out, self.w_in, self.bias,
+            temperature=1.0, query_chunk_size=1,
+        )
+        with self.assertRaisesRegex(FloatingPointError, "non-finite"):
+            apply_alignment(torch.tensor([[float("nan"), 0.0]]), state)
 
     def test_linear_uses_row_vector_equivalent_of_document_map(self) -> None:
         state = build_linear_state(self.w_out, self.w_in, ridge=1e-5)

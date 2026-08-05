@@ -1,7 +1,7 @@
 # C0: alignment-aware latent CoT entropy
 
 C0 compares five independent same-model recurrences on GSM8K and MBPP+:
-`identical`, `linear`, `exact`, `kernel`, and `text`. For the four latent recurrences,
+`identical`, `linear`, `soft`, `kernel`, and `text`. For the four latent recurrences,
 the current pre-unembedding hidden state is transformed by the selected
 alignment and fed back through `inputs_embeds`. The `text` recurrence performs
 greedy argmax decoding followed by ordinary token-embedding feedback, and runs
@@ -14,10 +14,10 @@ The mappings use the repository implementations in `alignment.py`:
 - `identical`: identity feedback with target embedding mean-norm scaling;
 - `linear`: ridge least-squares mapping from `W_out` to `W_in`, followed by
   target-norm scaling;
-- `exact`: full-vocabulary `softmax(W_out h / tau + b) @ W_in`, with no
+- `soft`: full-vocabulary `softmax((W_out h + b) / tau) @ W_in`, with no
   token sampling or argmax;
 - `kernel`: ORF positive-feature approximation using the configured feature
-  count, temperature and seed; this approximates the `exact` recurrence;
+  count, temperature and seed; this approximates the `soft` recurrence;
 - `text`: greedy argmax decoding followed by ordinary token-embedding feedback.
 
 By default, one invocation runs both datasets in the fixed order `gsm8k`,
@@ -34,7 +34,7 @@ python exp/latent_cot/run.py \
   --split test \
   --max_questions 50 --latent_steps 100 --probe_seed 42 \
   --kernel_features 2048 --kernel_temperature 1.0 \
-  --kernel_seed 101 --kernel_chunk_size 4096 --align_ridge 1e-5
+  --kernel_seed 101 --kernel_chunk_size 4096 --soft_chunk_size 32 --align_ridge 1e-5
 ```
 
 PBS submission needs no dataset or alignment argument:
@@ -44,7 +44,7 @@ qsub -v "EXP_TARGET=latent_cot" exp.sh
 ```
 
 `--dataset gsm8k` or `--dataset mbppplus` remains available for debugging.
-Because the recurrence schema includes exact and text feedback alongside the
+Because the recurrence schema includes soft and text feedback alongside the
 other latent alignments, old C0 trajectory caches are not compatible; the new cache
 filename contains the recurrence and kernel configuration, so no manual
 deletion is required.

@@ -309,8 +309,8 @@ def main():
         default=True,
         help="Manually add think token in the prompt for LatentMAS",
     )
-    parser.add_argument("--align_method", dest="align_method", choices=["identical", "linear", "kernel"], default="identical",
-                        help="Latent-to-input alignment: identity with norm scaling, linear least-squares, or ORF kernel approximation.")
+    parser.add_argument("--align_method", dest="align_method", choices=["identical", "linear", "kernel", "soft"], default="identical",
+                        help="Latent-to-input alignment: identity with norm scaling, linear least-squares, ORF kernel approximation, or exact soft-token expectation.")
     parser.add_argument("--align_ridge", dest="align_ridge", type=float, default=1e-5,
                         help="Ridge regularization for --align_method linear.")
     parser.add_argument("--kernel_features", dest="kernel_features", type=int, default=1024,
@@ -321,6 +321,10 @@ def main():
                         help="ORF seed; defaults to --seed when omitted.")
     parser.add_argument("--kernel_chunk_size", dest="kernel_chunk_size", type=int, default=4096,
                         help="Vocabulary chunk size used to precompute kernel statistics.")
+    parser.add_argument("--soft_temperature", dest="soft_temperature", type=float, default=1.0,
+                        help="Exact soft-token temperature; distinct from generation and kernel temperatures.")
+    parser.add_argument("--soft_chunk_size", dest="soft_chunk_size", type=int, default=32,
+                        help="Number of hidden queries per exact softmax chunk.")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--result_path",
@@ -351,6 +355,11 @@ def main():
                         help="List of models for each agent in hybrid mode (e.g., 'Qwen/Qwen2.5-0.5B-Instruct Qwen/Qwen3-8B Qwen/Qwen2.5-0.5B-Instruct')")
 
     args = parser.parse_args()
+
+    if args.soft_temperature <= 0:
+        parser.error("--soft_temperature must be positive")
+    if args.soft_chunk_size <= 0:
+        parser.error("--soft_chunk_size must be positive")
 
     # An explicit --max_new_tokens value takes precedence over the task default.
     if args.max_new_tokens is None:
@@ -494,6 +503,8 @@ def main():
             "method": args.method,
             "prompt": args.prompt,
             "align_method": args.align_method,
+            "soft_temperature": args.soft_temperature,
+            "soft_chunk_size": args.soft_chunk_size,
             "model": args.model_name,
             "task": args.task,
             "split": args.split,

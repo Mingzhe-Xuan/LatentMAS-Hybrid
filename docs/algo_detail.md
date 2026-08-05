@@ -3,7 +3,7 @@
 本文展开 \`algo.md\` 中的“核化的快速近似”。目标是近似精确映射
 
 $$
-F(h_L^A)=C\,\operatorname{softmax}\!\left(W_{\mathrm{out}}^Aq/\tau+b^A\right),
+F(h_L^A)=C\,\operatorname{softmax}\!\left((W_{\mathrm{out}}^Aq+b^A)/\tau\right),
 \qquad
 q=\operatorname{Norm}_A(h_L^A),
 $$
@@ -25,10 +25,10 @@ $$
 第 $i$ 个 A token 的 logit 和未归一化权重为
 
 $$
-\ell_i(q)=\frac{w_i^\top q}{\tau}+b_i^A,
+\ell_i(q)=\frac{w_i^\top q+b_i^A}{\tau},
 \qquad
 a_i(q)=e^{\ell_i(q)}
-=e^{b_i^A}\exp\!\left(w_i^\top\frac q\tau\right).
+=e^{b_i^A/\tau}\exp\!\left(w_i^\top\frac q\tau\right).
 $$
 
 定义 softmax 的配分函数
@@ -53,10 +53,10 @@ F(q)
 {\sum_{i=1}^{V_A}a_i(q)}\\
 &=
 \frac{
-\sum_{i=1}^{V_A}c_i e^{b_i^A}
+\sum_{i=1}^{V_A}c_i e^{b_i^A/\tau}
 \exp\!\left(w_i^\top q/\tau\right)}
 {
-\sum_{i=1}^{V_A}e^{b_i^A}
+\sum_{i=1}^{V_A}e^{b_i^A/\tau}
 \exp\!\left(w_i^\top q/\tau\right)}.
 \end{aligned}
 $$
@@ -306,14 +306,14 @@ $$
 $$
 S=
 \sum_{i=1}^{V_A}
- c_i e^{b_i^A}
+ c_i e^{b_i^A/\tau}
 \phi_{\mathrm{orth}}(w_i)^\top,
 $$
 
 $$
 z=
 \sum_{i=1}^{V_A}
- e^{b_i^A}
+ e^{b_i^A/\tau}
 \phi_{\mathrm{orth}}(w_i).
 $$
 
@@ -359,15 +359,15 @@ $$
 
 $$
 a_i(q)\approx
-\hat a_i(q)=e^{b_i^A}k_i^\top u.
+\hat a_i(q)=e^{b_i^A/\tau}k_i^\top u.
 $$
 
 直接代入精确式，得到
 
 $$
 \hat F(q)=
-\frac{\sum_{i=1}^{V_A}c_i e^{b_i^A}k_i^\top u}
-{\sum_{i=1}^{V_A}e^{b_i^A}k_i^\top u}.
+\frac{\sum_{i=1}^{V_A}c_i e^{b_i^A/\tau}k_i^\top u}
+{\sum_{i=1}^{V_A}e^{b_i^A/\tau}k_i^\top u}.
 $$
 
 这一步只完成了核替换；若仍按 $i$ 求和，在线仍需扫描全词表。关键在于 $w_i,c_i,b_i^A$ 都是固定的，只有 $u$ 随 query 变化。
@@ -377,13 +377,13 @@ $$
 令近似分子为
 
 $$
-N(q)=\sum_{i=1}^{V_A}c_i e^{b_i^A}k_i^\top u.
+N(q)=\sum_{i=1}^{V_A}c_i e^{b_i^A/\tau}k_i^\top u.
 $$
 
 因为
 
 $$
-c_i e^{b_i^A}k_i^\top\in\mathbb R^{d_B\times m},
+c_i e^{b_i^A/\tau}k_i^\top\in\mathbb R^{d_B\times m},
 $$
 
 可利用矩阵乘法的分配律：
@@ -392,9 +392,9 @@ $$
 \begin{aligned}
 N(q)
 &=\sum_{i=1}^{V_A}
-\left(c_i e^{b_i^A}k_i^\top\right)u\\
+\left(c_i e^{b_i^A/\tau}k_i^\top\right)u\\
 &=\left(
-\sum_{i=1}^{V_A}c_i e^{b_i^A}k_i^\top
+\sum_{i=1}^{V_A}c_i e^{b_i^A/\tau}k_i^\top
 \right)u.
 \end{aligned}
 $$
@@ -404,7 +404,7 @@ $$
 $$
 \boxed{
 S=\sum_{i=1}^{V_A}
-c_i e^{b_i^A}\phi_{\mathrm{orth}}(w_i)^\top
+c_i e^{b_i^A/\tau}\phi_{\mathrm{orth}}(w_i)^\top
 \in\mathbb R^{d_B\times m}.
 }
 $$
@@ -423,7 +423,7 @@ $S$ 汇总了全部 A 词表 key、输出 bias 和映射到 B embedding 空间�
 
 $$
 \hat Z(q)=
-\sum_{i=1}^{V_A}e^{b_i^A}k_i^\top u.
+\sum_{i=1}^{V_A}e^{b_i^A/\tau}k_i^\top u.
 $$
 
 同样地，
@@ -433,7 +433,7 @@ $$
 \hat Z(q)
 &=
 \left(
-\sum_{i=1}^{V_A}e^{b_i^A}k_i
+\sum_{i=1}^{V_A}e^{b_i^A/\tau}k_i
 \right)^\top u.
 \end{aligned}
 $$
@@ -442,7 +442,7 @@ $$
 
 $$
 \boxed{
-z=\sum_{i=1}^{V_A}e^{b_i^A}\phi_{\mathrm{orth}}(w_i)
+z=\sum_{i=1}^{V_A}e^{b_i^A/\tau}\phi_{\mathrm{orth}}(w_i)
 \in\mathbb R^m.
 }
 $$
@@ -453,7 +453,7 @@ $$
 \hat Z(q)=z^\top u.
 $$
 
-由于 $e^{b_i^A}>0$、$\phi_{\mathrm{orth}}(w_i)\ge0$ 与 $u\ge0$，理论上
+由于 $e^{b_i^A/\tau}>0$、$\phi_{\mathrm{orth}}(w_i)\ge0$ 与 $u\ge0$，理论上
 
 $$
 z^\top u>0.
@@ -498,7 +498,7 @@ $$
 固定模型参数、词表迁移矩阵、随机特征参数和温度后：
 
 1. 对每个 A token 取得 $w_i$、$b_i^A$ 与 $c_i=C_{:,i}$；
-2. 计算 $k_i=\phi_{\mathrm{orth}}(w_i)$、$\alpha_i=e^{b_i^A}$；
+2. 计算 $k_i=\phi_{\mathrm{orth}}(w_i)$、$\alpha_i=e^{b_i^A/\tau}$；
 3. 累加
 
 $$
@@ -598,10 +598,10 @@ $$
 \ne\gamma(\tau)\exp(w_i^\top q).
 $$
 
-bias 是每个 token 的独立权重
+bias 是每个 token 的独立权重，并与 output-head 的其余 logits 一同接受温度缩放。
 
 $$
-\alpha_i=e^{b_i^A},
+\alpha_i=e^{b_i^A/\tau},
 $$
 
 必须同时进入 $S$ 和 $z$。漏掉它会近似另一个目标：
@@ -613,13 +613,13 @@ $$
 而不是原来的
 
 $$
-\operatorname{softmax}(W_{\mathrm{out}}^Aq/\tau+b^A).
+\operatorname{softmax}((W_{\mathrm{out}}^Aq+b^A)/\tau).
 $$
 
-若对所有 logits 同时加常数 $\beta$，则 $S,z$ 同时乘以 $e^\beta$，最终输出不变：
+若对所有 logits 同时加常数 $\beta$，则 $S,z$ 同时乘以 $e^{\beta/\tau}$，最终输出不变：
 
 $$
-\frac{(e^\beta S)u}{(e^\beta z)^\top u}
+\frac{(e^{\beta/\tau} S)u}{(e^{\beta/\tau} z)^\top u}
 =\frac{Su}{z^\top u}.
 $$
 
@@ -868,7 +868,7 @@ $$
 
 $$
 \boxed{
-C\,\operatorname{softmax}\!\left(W_{\mathrm{out}}^Aq/\tau+b^A\right)
+C\,\operatorname{softmax}\!\left((W_{\mathrm{out}}^Aq+b^A)/\tau\right)
 \approx
 \frac{S\phi_{\mathrm{orth}}(q/\tau)}{z^\top\phi_{\mathrm{orth}}(q/\tau)}.
 }

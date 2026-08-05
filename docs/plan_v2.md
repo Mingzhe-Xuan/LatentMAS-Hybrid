@@ -20,7 +20,7 @@ $$
 
 $$
 F_{A\to B}(q)=W_{\mathrm{in}}^B\operatorname{softmax}
-\left(W_{\mathrm{out}}^Aq/\tau+b^A\right).
+\left((W_{\mathrm{out}}^Aq+b^A)/\tau\right).
 $$
 
 记 $w_i^\top$ 为 $W_{\mathrm{out}}^A$ 的第 $i$ 行，$c_i=(W_{\mathrm{in}}^B)_{:,i}$，并令
@@ -36,9 +36,9 @@ $$
 其中 $\Omega=[\omega_1^\top;\ldots;\omega_m^\top]$ 由 block ORF 构造。离线预聚合
 
 $$
-S=\sum_{i=1}^{V_A}c_i e^{b_i^A}\phi_{\Omega}(w_i)^\top,
+S=\sum_{i=1}^{V_A}c_i e^{b_i^A/\tau}\phi_{\Omega}(w_i)^\top,
 \qquad
-z=\sum_{i=1}^{V_A}e^{b_i^A}\phi_{\Omega}(w_i).
+z=\sum_{i=1}^{V_A}e^{b_i^A/\tau}\phi_{\Omega}(w_i).
 $$
 
 于是 kernel 映射的在线形式为
