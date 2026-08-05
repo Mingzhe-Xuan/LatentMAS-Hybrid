@@ -4,7 +4,7 @@
   "dataset": "all",
   "split": "test",
   "max_questions": 512,
-  "latent_steps": 100,
+  "latent_steps": 150,
   "probe_seed": 42,
   "bootstrap_replicates": 1000,
   "entropy_chunk_size": 8,

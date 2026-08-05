@@ -120,7 +120,7 @@ case "${EXP_TARGET}" in
         STUDY="${STUDY:-c0}"; MODEL_PAIR="${MODEL_PAIR:-c0}"
         DATASET="${DATASET:-all}"; SPLIT="${SPLIT:-test}"
         MAX_QUESTIONS="${MAX_QUESTIONS:-50}"; MODEL_NAME="${MODEL_NAME:-Qwen/Qwen3-4B}"
-        LATENT_STEPS="${LATENT_STEPS:-100}"; ENTRY="exp/latent_cot/run.py"
+        LATENT_STEPS="${LATENT_STEPS:-150}"; ENTRY="exp/latent_cot/run.py"
         ARGS=(--study "${STUDY}" --model_name "${MODEL_NAME}" --dataset "${DATASET}" --split "${SPLIT}" --probe_seed "${PROBE_SEED}" --max_questions "${MAX_QUESTIONS}" --latent_steps "${LATENT_STEPS}" --kernel_features "${M}" --kernel_temperature "${TAU}" --kernel_seed "${ORF_SEED}" --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" --align_ridge "${ALIGN_RIDGE}" --device "${DEVICE}")
         ;;
     latent_comm)

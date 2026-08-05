@@ -28,14 +28,14 @@ The model and alignment states are constructed once, while each
 dataset keeps a separate trajectory cache. Each dataset contributes one panel
 to a 2x2 output figure; each panel contains differently colored mean
 entropy-versus-step curves for all five recurrences with 95% bootstrap bands.
-The default trajectory length is 100 steps (indexed 0 through 99).
+The default trajectory length is 150 steps (indexed 0 through 149).
 
 ```bash
 python exp/latent_cot/run.py \
   --study c0 \
   --model_name Qwen/Qwen3-4B \
   --split test \
-  --max_questions 50 --latent_steps 100 --probe_seed 42 \
+  --max_questions 50 --latent_steps 150 --probe_seed 42 \
   --kernel_features 2048 --kernel_temperature 1.0 \
   --kernel_seed 101 --kernel_chunk_size 4096 --soft_chunk_size 32 --align_ridge 1e-5
 ```

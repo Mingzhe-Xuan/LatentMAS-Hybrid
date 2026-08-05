@@ -204,7 +204,7 @@ qsub -v "EXP_TARGET=approximator" exp.sh
 C0：自动运行 GSM8K、MBPP+、ARC-Challenge 和 AIME 2025，每个数据集均比较 identical、linear、soft、kernel、text。前三个数据集使用 `test` split；AIME 2025 自动使用其 `train` split：
 
 ```bash
-qsub -v "EXP_TARGET=latent_cot,DATASET=all,SPLIT=test,MODEL_NAME=Qwen/Qwen3-4B,MAX_QUESTIONS=50,LATENT_STEPS=100,M=2048,TAU=1.0,ORF_SEED=101,PROBE_SEED=42" exp.sh
+qsub -v "EXP_TARGET=latent_cot,DATASET=all,SPLIT=test,MODEL_NAME=Qwen/Qwen3-4B,MAX_QUESTIONS=50,LATENT_STEPS=150,M=2048,TAU=1.0,ORF_SEED=101,PROBE_SEED=42" exp.sh
 ```
 
 默认配置可简写为：

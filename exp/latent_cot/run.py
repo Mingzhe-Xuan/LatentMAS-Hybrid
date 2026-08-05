@@ -55,7 +55,7 @@ def parse_args(argv=None):
     )
     parser.add_argument("--split", default="test")
     parser.add_argument("--max_questions", type=int, default=512)
-    parser.add_argument("--latent_steps", type=int, default=100)
+    parser.add_argument("--latent_steps", type=int, default=150)
     parser.add_argument("--probe_seed", type=int, default=42)
     parser.add_argument("--bootstrap_replicates", type=int, default=1000)
     parser.add_argument("--entropy_chunk_size", type=int, default=8)

@@ -157,7 +157,7 @@ def build_command(
         split = resolve("split", "SPLIT", "test")
         method = resolve("method", "METHOD")
         max_questions = resolve("max_questions", "MAX_QUESTIONS", "50")
-        latent_steps = resolve("latent_steps", "LATENT_STEPS", "100")
+        latent_steps = resolve("latent_steps", "LATENT_STEPS", "150")
         entry = "exp/latent_cot/run.py"
         args = [
             "--study", study,
