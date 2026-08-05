@@ -28,6 +28,7 @@ from methods.baseline import BaselineMethod
 from methods.latent_mas import LatentMASMethod
 from methods.latent_mas_hybrid import LatentMASMethod as LatentMASHybridMethod
 from methods.text_mas import TextMASMethod
+from reasoning_models import resolve_manual_think
 from models import ModelWrapper
 from utils import auto_device, set_seed
 import time
@@ -306,8 +307,12 @@ def main():
     parser.add_argument(
         "--think",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Manually add think token in the prompt for LatentMAS",
+        default=None,
+        help=(
+            "Whether LatentMAS manually adds <think>. By default this is disabled "
+            "for registered reasoning models whose chat template adds it, and "
+            "enabled for all other models."
+        ),
     )
     parser.add_argument("--align_method", dest="align_method", choices=["identical", "linear", "kernel", "soft"], default="identical",
                         help="Latent-to-input alignment: identity with norm scaling, linear least-squares, ORF kernel approximation, or exact soft-token expectation.")
@@ -355,6 +360,8 @@ def main():
                         help="List of models for each agent in hybrid mode (e.g., 'Qwen/Qwen2.5-0.5B-Instruct Qwen/Qwen3-8B Qwen/Qwen2.5-0.5B-Instruct')")
 
     args = parser.parse_args()
+
+    args.think = resolve_manual_think(args.model_name, args.think)
 
     if args.soft_temperature <= 0:
         parser.error("--soft_temperature must be positive")

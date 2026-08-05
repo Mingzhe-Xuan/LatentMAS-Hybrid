@@ -245,7 +245,7 @@ PY
 TRUST_REMOTE_CODE=true      # Pass --trust_remote_code when the model requires it.
 SEQUENTIAL_INFO_ONLY=false   # Retain only each agent's own prompt + latent KV before the next agent.
 LATENT_ONLY=false            # Retain only latent KV before the next agent (implies SEQUENTIAL_INFO_ONLY).
-THINK=true                  # Insert <think> before latent rollout starts.
+THINK="${THINK:-auto}"      # auto uses the reasoning-model registry in run.py.
 
 ## --- Alignment settings ---
 ALIGN_RIDGE="${ALIGN_RIDGE:-1e-5}"                 # Linear ridge.
@@ -307,16 +307,22 @@ fi
 # SEQUENTIAL_INFO_ONLY in the Python implementation, so both flags may safely
 # be passed when both variables are true.
 LATENT_CACHE_ARGS=()
-if [ "${THINK}" = true ]; then
-    LATENT_CACHE_ARGS+=(--think)
-fi
+case "${THINK}" in
+    auto) ;;
+    true) LATENT_CACHE_ARGS+=(--think) ;;
+    false) LATENT_CACHE_ARGS+=(--no-think) ;;
+    *)
+        echo "ERROR: THINK must be auto, true, or false, got: ${THINK}" >&2
+        exit 2
+        ;;
+esac
 if [ "${SEQUENTIAL_INFO_ONLY}" = true ]; then
     LATENT_CACHE_ARGS+=(--sequential_info_only)
 fi
 if [ "${LATENT_ONLY}" = true ]; then
     LATENT_CACHE_ARGS+=(--latent_only)
 fi
-##   --think                  default: true; adds <think> before latent rollout.
+##   --think/--no-think       default: auto; reasoning models rely on their chat template.
 ##   --kernel_seed SEED       default: None; omitted uses --seed.
 ##   --use_vllm               default: false; enables vLLM backend.
 ##   --sequential_info_only   default: false; preserve only the current agent's prompt + latent KV cache.

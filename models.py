@@ -19,6 +19,11 @@ try:
 except ImportError:
     _HAS_VLLM = False
 
+try:
+    from transformers.cache_utils import Cache
+except ImportError:
+    Cache = None
+
 
 def _ensure_pad_token(tokenizer: AutoTokenizer) -> None:
     if tokenizer.pad_token_id is None:
@@ -31,7 +36,11 @@ def _ensure_pad_token(tokenizer: AutoTokenizer) -> None:
     tokenizer.padding_side = "left"
 
 
-def _past_length(past_key_values: Optional[Tuple]) -> int:
+def _past_length(past_key_values: Optional[object]) -> int:
+    if past_key_values is None:
+        return 0
+    if Cache is not None and isinstance(past_key_values, Cache):
+        return int(past_key_values.get_seq_length())
     if not past_key_values:
         return 0
     k = past_key_values[0][0]
