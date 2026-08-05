@@ -201,7 +201,7 @@ $$
 x_{t+1}^A=F_{A\rightarrow A}(h_t^A).
 $$
 
-强调它研究的是 recurrent reasoning，而不是 agent 间通信。即使 source 和 target 属于同一模型，$h_t^A$ 也未必是模型训练时见过的 token embedding；因此问题是 output-state-to-input compatibility、闭环稳定性以及任务效用。对应实验是 C0--C4，正文主要由 RQ2/RQ3 回答。
+强调它研究的是 recurrent reasoning，而不是 agent 间通信。即使 source 和 target 属于同一模型，$h_t^A$ 也未必是模型训练时见过的 token embedding；因此问题是 output-state-to-input compatibility、闭环稳定性以及任务效用。对应实验是 C0--C4，正文主要由 RQ2 回答。
 
 #### 4.2.2 Latent Communication as inter-agent transfer
 
@@ -212,7 +212,7 @@ m_{A\rightarrow B}=F_{A\rightarrow B}(h_A),\qquad
 x_B'=\operatorname{Inject}(x_B,m_{A\rightarrow B}).
 $$
 
-强调它研究的是 sender 信息能否被 receiver 恢复和利用。$A$ 与 $B$ 可以是同架构的不同 agent，也可以是不同模型；后者额外要求维度、geometry 和 vocabulary compatibility。对应实验是 M0--M3，正文主要由 RQ4 回答。
+强调它研究的是 sender 信息能否被 receiver 恢复和利用。$A$ 与 $B$ 可以是同架构的不同 agent，也可以是不同模型；后者额外要求维度、geometry 和 vocabulary compatibility。对应实验是 M0--M3，正文主要由 RQ3 回答。
 
 #### 4.2.3 Unified alignment interface
 
@@ -288,19 +288,18 @@ $$
 
 ### 4.4 Experimental Setup
 
-约 0.75 页。不要按内部代码的 S/C/M 编号介绍，而应提出五个 research questions：
+约 0.75 页。不要按内部代码的 S/C/M 编号介绍，而应提出四个 research questions，直接对应 Results 的四个主体部分：
 
 - **RQ0:** Does LatentMAS work end to end across model scales, task families, topologies, and alignment methods?
-- **RQ1:** Does kernel approximate soft accurately and efficiently?
-- **RQ2:** Does one-step fidelity persist under closed-loop recurrence?
-- **RQ3:** Do soft/kernel latent recurrences support useful task behavior?
-- **RQ4:** Do latent messages transfer information and improve receiver behavior?
+- **RQ1:** Does kernel approximate soft accurately and efficiently, both statically and under closed-loop use?
+- **RQ2:** When does Latent CoT improve reasoning, and when does recurrent feedback become unstable?
+- **RQ3:** Do latent messages transfer usable information and improve receiver behavior?
 
 集中说明模型、数据集、split、seed、paired evaluation、bootstrap、失败计数、硬件和 temperature 约定。`run_all.sh` 提供 RQ0 的端到端主表：Qwen3-8B/14B 覆盖 9 个数据集，Qwen3-4B 覆盖其中 6 个数据集；每个 model--dataset 组合比较 12 个配置，即 baseline/TextMAS 的 sequential/hierarchical，以及 LatentMAS 的 identical/linear/kernel/soft × sequential/hierarchical，共 288 个数组任务。内部的 S0/C2/M1 编号可以放括号或附录索引，不应支配正文叙事。
 
 ## 5. Results 的叙事顺序
 
-结果部分必须按照 claim 排列，而不是按照实验脚本编号排列。
+结果部分必须按照 claim 排列，而不是按照实验脚本编号排列。正文使用四个主体 block：**end-to-end effectiveness → kernel approximation → Latent CoT → Latent Communication**。Generalization 作为最后的 cross-cutting robustness section，不另起一条中心故事。
 
 ### 5.1 Overall end-to-end benchmark: does LatentMAS work?
 
@@ -319,7 +318,11 @@ $$
 
 Table 1 证明的是 **broad end-to-end effectiveness**，不单独证明 kernel 忠实逼近 soft，也不单独证明 latent message 导致了协作收益。因此后续小节分别解释：结果是否来自近似保真、闭环是否稳定、消息是否真正携带可用信息，以及成本是否更低。output tokens 与 seconds/sample 更适合放在紧邻主表的 compact companion table 或 Pareto 图中，不要把 accuracy、latency、memory 和 tokens 全塞入 Table 1。
 
-### 5.2 Kernel approximates soft with a favorable cost--fidelity trade-off
+### 5.2 Kernel approximation: is it faithful and efficient?
+
+这一部分只回答 kernel 是否是 soft 的可靠且更便宜的近似，不在这里讨论 Latent CoT 或 communication 本身是否优于 baseline。证据分为 static fidelity 和 closed-loop fidelity 两层。
+
+#### 5.2.1 Static cost--fidelity trade-off
 
 对应 S1、S2、E0，以及 S3 的核心结果。
 
@@ -339,7 +342,7 @@ Table 1 证明的是 **broad end-to-end effectiveness**，不单独证明 kernel
 
 S3 的完整 seed--temperature grid 放附录，正文只保留一句最重要的 bias--variance 结论。
 
-### 5.3 Static fidelity persists—or fails to persist—under recurrence
+#### 5.2.2 Does static fidelity persist under closed-loop use?
 
 对应 C2、C4。
 
@@ -355,7 +358,11 @@ S3 的完整 seed--temperature grid 放附录，正文只保留一句最重要�
 
 主图是 soft--kernel divergence vs. step，辅图是 answer agreement vs. $m$。这是整篇论文最重要的桥梁：它把静态 approximation method 与实际 recurrent computation 连接起来。
 
-### 5.4 Latent interfaces exhibit distinct task behavior
+### 5.3 Latent CoT: when does recurrent latent reasoning help?
+
+这一部分把 $F_{A\rightarrow A}$ 作为推理机制单独评价。核心不是证明 latent trajectory “看起来连续”，而是确定它在哪些任务、step budget 和 interface 下提高 accuracy，以及何时发生累积退化。
+
+#### 5.3.1 Task effectiveness across latent-step budgets
 
 对应 C1，C0/C3 作为解释。
 
@@ -373,9 +380,15 @@ $$
 - soft/kernel 相对 text 的 paired difference；
 - compute/position-matched text baseline。
 
-Entropy、hidden norm、相邻 cosine、special-token mass 用来解释“为什么”，不能代替 accuracy。四数据集 entropy 图通常放附录；正文只在其揭示关键退化模式时选一个紧凑面板。
+#### 5.3.2 Where and why does Latent CoT help or fail?
 
-### 5.5 Latent messages carry recoverable information
+Entropy、hidden norm、相邻 cosine、special-token mass 用来解释“为什么”，不能代替 accuracy。将这些诊断与 accuracy--$K$ 和 failure--$K$ 对齐，重点区分有效区间、收益饱和区间和退化区间。四数据集 entropy 图通常放附录；正文只在其揭示关键退化模式时选一个紧凑面板。
+
+### 5.4 Latent Communication: do messages help receivers?
+
+这一部分把 $F_{A\rightarrow B}$ 作为通信机制单独评价，证据按“message 是否携带信息”到“receiver 是否在真实任务中利用信息”递进。不能只凭主表中的协作 accuracy 推断因果通信收益。
+
+#### 5.4.1 Do latent messages carry recoverable information?
 
 对应 M1，是最干净的通信证据。
 
@@ -390,7 +403,7 @@ A 看到 `entity / attribute / value`，B 只看到 entity/attribute query。比
 
 正文报告 private-information accuracy、kernel vs. soft paired difference、NLL 和 ECE。Confusion matrix 可放附录。只有 matched message 显著优于 no-message/random/mismatch，才支持 message 携带信息。
 
-### 5.6 Latent communication improves—or does not improve—collaboration
+#### 5.4.2 Do latent messages improve real-task collaboration?
 
 对应 M2。A、B 都看到真实任务问题，评价 message 是否给 B 带来增量收益。
 
@@ -402,7 +415,7 @@ A 看到 `entity / attribute / value`，B 只看到 entity/attribute query。比
 
 这是可信的边界结论，不应被隐藏在附录。
 
-### 5.7 Generalization
+### 5.5 Generalization and boundary conditions
 
 对应 G0，用一个紧凑 forest plot 或表格复现：
 
@@ -411,7 +424,7 @@ A 看到 `entity / attribute / value`，B 只看到 entity/attribute query。比
 - Refiner→Judger 与 Planner→Critic；
 - ARC-Challenge 与 GSM8K。
 
-不需要重复所有诊断图；复用 RQ1 的 mapping error、RQ3 的 task metric、RQ4 的 private-information accuracy 即可。
+不需要重复所有诊断图；复用 RQ1 的 mapping error、RQ2 的 Latent CoT task metric、RQ3 的 private-information accuracy 即可。
 
 ## 6. 主文与附录取舍
 
@@ -464,7 +477,7 @@ S4/PCA 不应占据正文主结果位置，否则容易给 reviewer 留下“以
 
 ### 7.3 Conclusion
 
-控制在半页以内，按 RQ1--RQ4 逐句回答，不重复摘要和实验清单。
+控制在半页以内，按 RQ0--RQ3 逐句回答，不重复摘要和实验清单。
 
 ## 8. 结果出来后的叙事分支
 
