@@ -1,6 +1,6 @@
 # Qwen3-8B 实验结果对比
 
-本文档汇总指定实验目录中 `summary.json` 的平均结果。所有实验模型均为 `Qwen/Qwen3-8B`，split 均为 `test`，聚合重复次数为 1（seed 42）。
+本文档汇总指定实验目录中 `summary.json` 的平均结果。所有实验模型均为 `Qwen/Qwen3-8B`，split 均为 `test`。ARC 与 GSM8K 结果来自 1 次运行（seed 42）；HumanEval+ 结果为 4 次运行（seeds 42、43、44、45）的平均值。
 
 指标定义：
 
@@ -59,5 +59,22 @@
 | Latent MAS | linear | sequential | **5179.9020** | 91.1296% (0.911296) | **794,843** |
 | Text MAS | identical | hierarchical | 29302.2938 | 93.4799% (0.934799) | 4,164,489 |
 | Text MAS | identical | sequential | 20874.6561 | **93.5557% (0.935557)** | 3,117,053 |
+
+## HumanEval+
+
+样本数：164；表中数据为 4 次运行的平均值。
+
+| Method | Align method | Topology | Timing (total, s) ↓ | Accuracy ↑ | Text output tokens ↓ |
+|---|---|---|---:|---:|---:|
+| Baseline | identical | hierarchical | 3148.1668 | 77.2866% (0.772866) | 361,720.75 |
+| Baseline | identical | sequential | 3200.1302 | 76.9817% (0.769817) | 366,481.50 |
+| Latent MAS | identical | hierarchical | 3314.5298 | 82.6219% (0.826219) | 276,880.75 |
+| Latent MAS | identical | sequential | **3104.6432** | 84.1463% (0.841463) | 273,600.75 |
+| Latent MAS | kernel | hierarchical | 3345.2881 | 84.2988% (0.842988) | 277,720.75 |
+| Latent MAS | kernel | sequential | 3109.7878 | 85.2134% (0.852134) | 270,003.00 |
+| Latent MAS | linear | hierarchical | 3698.6554 | 22.8659% (0.228659) | 281,938.75 |
+| Latent MAS | linear | sequential | 3492.6929 | 18.2927% (0.182927) | **261,758.00** |
+| Text MAS | identical | hierarchical | 13921.3377 | 85.5183% (0.855183) | 1,259,946.75 |
+| Text MAS | identical | sequential | 8666.9324 | **89.6342% (0.896342)** | 669,085.25 |
 
 表格中的粗体表示各数据集的单项最优值。
