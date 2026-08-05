@@ -361,6 +361,7 @@ def main():
 
     args = parser.parse_args()
 
+    args.think_requested = args.think
     args.think = resolve_manual_think(args.model_name, args.think)
 
     if args.soft_temperature <= 0:

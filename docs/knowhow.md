@@ -274,35 +274,93 @@ K/V cache:      [B, kv_heads, cached_length, head_dim]
 
 增大 `generate_bs` 能提高吞吐，但会增加显存占用。对于 LatentMAS，显存还会随 prompt 长度、Agent 数量和 `latent_steps` 增加。
 
-## 9. Hybrid：模型切换时如何处理 cache
+## 9. Hybrid：递归 hidden context 与模型切换
 
-KV cache 不能跨模型直接复用：模型 A 与模型 B 的层数、hidden size、注意力头或权重可能不同。
+Hybrid 不会把模型 A 的 KV cache 直接交给模型 B。不同模型的层数、hidden size、注意力头和权重可能不同，因此 KV cache 不具备跨模型兼容性。Agent 之间传递的是完整的最后一层 hidden context；接收模型对它完成对齐后，从头执行一次完整 prefill，建立属于自己的 KV cache。
 
-Hybrid 模式维护两类状态：
+### 9.1 A 生成 `context_A`
 
-```text
-cumulative_prompts          = 所有前序 Agent 的 prompt 文本
-cumulative_latent_hiddens   = 前序 Agent 产生的原始 latent hidden states
-```
-
-切换模型时，[`methods/latent_mas_hybrid.py`](../methods/latent_mas_hybrid.py) 会：
+设 A 的 prompt 为 $P_A$，A 的输入 embedding 函数为 $E_A$：
 
 ```text
-1. 用新模型重新编码此前 prompt 文本；
-2. 将旧模型的 raw latent hidden states 映射为新模型的输入 embeddings；
-3. 拼接「新模型 prompt embeddings + 迁移后的 latent embeddings」；
-4. 在新模型上做一次前向，重新建立新模型专属的 KV cache；
-5. 用该 cache 继续新 Agent 的 latent steps 或 Judger 解码。
+P_A
+  -> E_A(P_A)
+  -> A 完整 prefill
+  -> prefill_hidden_A
+  -> K 步 Latent CoT
+  -> output_hidden_A = [h_A^1, ..., h_A^K]
+  -> context_A = [prefill_hidden_A, output_hidden_A]
 ```
 
-跨模型迁移的不是 `past_kv` 本身，而是 hidden state。使用的映射为：
+`prefill_hidden_A` 包含 A 对整个 `prompt_A` prefill 后的最后一层 hidden states，而不只是最后一个 token。`output_hidden_A` 是每次 latent forward 后新产生的 hidden state；prefill 最后一个位置的 $h_A^0$ 已存在于 `prefill_hidden_A` 中，不会在 latent 部分重复保存。
+
+### 9.2 A → B
+
+设 $T_{A\rightarrow B}$ 是从 A hidden space 到 B input-embedding space 的对齐映射，B 的 prompt 为 $P_B$：
 
 ```text
-W_cross = (W_out,A^T W_out,A + lambda I)^-1 W_out,A^T W_in,B
-embedding_B = hidden_A @ W_cross
+context_A
+  -> T_A→B(context_A)
+  -> 与 B 的原生 prompt embedding 拼接
+  -> X_B = [aligned_context_A, E_B(P_B)]
+  -> B 完整 prefill（past_key_values=None）
+  -> prefill_hidden_B
+  -> K 步 Latent CoT
+  -> output_hidden_B
+  -> context_B = [prefill_hidden_B, output_hidden_B]
 ```
 
-对应函数为 `transfer_via_realignment()`。
+公式为：
+
+$$
+X_B = [T_{A\rightarrow B}(context_A); E_B(P_B)]
+$$
+
+$$
+prefill\_hidden_B = B_{prefill}(X_B,\ past\_key\_values=None)
+$$
+
+$$
+context_B = [prefill\_hidden_B; output\_hidden_B]
+$$
+
+B 不接收 A 的 `past_key_values`，也不重新接收 `prompt_A` 的 token IDs。A 的 prompt 信息已经包含在 `context_A` 中，并随整个 `context_A` 一起对齐到 B 的输入空间。
+
+### 9.3 A → B → C
+
+该过程递归执行：
+
+$$
+X_C = [T_{B\rightarrow C}(context_B); E_C(P_C)]
+$$
+
+$$
+prefill\_hidden_C = C_{prefill}(X_C,\ past\_key\_values=None)
+$$
+
+$$
+context_C = [prefill\_hidden_C; output\_hidden_C]
+$$
+
+其中 `prefill_hidden_B` 已经是 B 对 `[aligned_context_A, prompt_B]` 的完整重表达，所以 C 只需接收 `context_B` 和 `prompt_C`，不再额外拼接 `context_A`、`prompt_A` 或 `prompt_B`。
+
+### 9.4 位置编码与 attention mask
+
+每个接收模型都以 `past_key_values=None` 对组合输入做完整 prefill。因此 B 会为 `[aligned_context_A, native_prompt_embedding_B]` 统一建立自己的位置编码和 KV cache；C 同理。不会沿用发送模型 cache 中的位置。
+
+batch padding 位置仍保留在张量中，但对应的 `context_mask` 或 `prompt_mask` 为 0；真实 context、prompt 和 latent 位置为 1。context 与 prompt 拼接时，attention mask 也按相同顺序拼接。
+
+### 9.5 配置例外与后端限制
+
+上述完整递归流程要求 `--latent_only` 和 `--sequential_info_only` 均为关闭状态，即默认状态：
+
+- `--latent_only`：下一 Agent 只接收本轮 `output_hidden`。
+- `--sequential_info_only`：下一 Agent 只接收本轮 prompt 对应的 prefill hidden 与本轮 `output_hidden`。
+- 默认：下一 Agent 接收完整的 `[prefill_hidden, output_hidden]`。
+
+当前完整 Hybrid hidden-context 流程只支持 Hugging Face backend，不支持 vLLM backend。Judger 不再执行 Latent CoT，而是对 `[aligned_context, native_judger_prompt_embedding]` 做统一 prefill 并继续生成最终文本。
+
+核心实现位于 [`methods/latent_mas_hybrid.py`](../methods/latent_mas_hybrid.py) 的 `_combine_context_and_prompt()`、`_prefill_and_latent()` 与 `run_batch()`。
 
 ## 10. 推荐的源码阅读路径
 

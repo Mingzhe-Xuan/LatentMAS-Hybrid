@@ -414,6 +414,62 @@ class ModelWrapper:
         }
         return generations, outputs.past_key_values
 
+    @torch.no_grad()
+    def generate_text_from_embeds_batch(
+        self,
+        inputs_embeds: torch.Tensor,
+        attention_mask: torch.Tensor,
+        *,
+        max_new_tokens: int = 256,
+        temperature: float = 0.7,
+        top_p: float = 0.95,
+    ) -> Tuple[List[str], Optional[Tuple]]:
+        """Generate after prefilling a decoder-only model from input embeddings."""
+        if inputs_embeds.dim() != 3:
+            raise ValueError("inputs_embeds must be 3D with shape [batch, seq_len, hidden_dim]")
+        if attention_mask.shape != inputs_embeds.shape[:2]:
+            raise ValueError("attention_mask must match the first two inputs_embeds dimensions")
+
+        inputs_embeds = inputs_embeds.to(self.device)
+        attention_mask = attention_mask.to(self.device)
+        _sync_cuda(self.device)
+        started_at = time.perf_counter()
+        phase_timer = _FirstTokenTimer(self.device, started_at)
+        outputs = self.model.generate(
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            do_sample=True,
+            pad_token_id=self.tokenizer.pad_token_id,
+            return_dict_in_generate=True,
+            output_scores=False,
+            logits_processor=LogitsProcessorList([phase_timer]),
+        )
+        _sync_cuda(self.device)
+        finished_at = time.perf_counter()
+
+        # Decoder-only generation from inputs_embeds returns generated token IDs
+        # without synthetic IDs for the embedding-only prefix.
+        completion_ids = _completion_token_ids(
+            outputs.sequences,
+            0,
+            self.model.generation_config.eos_token_id,
+        )
+        generations = [
+            self.tokenizer.decode(ids, skip_special_tokens=True).strip()
+            for ids in completion_ids
+        ]
+        first_token_at = phase_timer.first_token_at or finished_at
+        self.last_generation_metrics = {
+            "prefill_seconds": max(0.0, first_token_at - started_at),
+            "text_decode_seconds": max(0.0, finished_at - first_token_at),
+            "output_token_counts": [len(ids) for ids in completion_ids],
+            "timing_source": "transformers_first_token_boundary",
+        }
+        return generations, getattr(outputs, "past_key_values", None)
+
     def tokenize_text(self, text: str) -> torch.Tensor:
         return self.tokenizer(
             text,
