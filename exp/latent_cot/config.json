@@ -12,5 +12,6 @@
   "kernel_temperature": 1.0,
   "kernel_seed": 101,
   "kernel_chunk_size": 4096,
+  "soft_chunk_size": 32,
   "align_ridge": 1e-5
 }

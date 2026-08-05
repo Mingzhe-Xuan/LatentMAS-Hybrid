@@ -1,6 +1,7 @@
 # C0: alignment-aware latent CoT entropy
 
-C0 compares five independent same-model recurrences on GSM8K and MBPP+:
+C0 compares five independent same-model recurrences on GSM8K, MBPP+,
+ARC-Challenge, and AIME 2025:
 `identical`, `linear`, `soft`, `kernel`, and `text`. For the four latent recurrences,
 the current pre-unembedding hidden state is transformed by the selected
 alignment and fed back through `inputs_embeds`. The `text` recurrence performs
@@ -20,10 +21,12 @@ The mappings use the repository implementations in `alignment.py`:
   count, temperature and seed; this approximates the `soft` recurrence;
 - `text`: greedy argmax decoding followed by ordinary token-embedding feedback.
 
-By default, one invocation runs both datasets in the fixed order `gsm8k`,
-`mbppplus`. The model and alignment states are constructed once, while each
+By default, one invocation runs all four datasets in the fixed order `gsm8k`,
+`mbppplus`, `arc_challenge`, `aime2025`. The requested split is used for the
+first three datasets; AIME 2025 is resolved to its available `train` split.
+The model and alignment states are constructed once, while each
 dataset keeps a separate trajectory cache. Each dataset contributes one panel
-to the output figure; each panel contains differently colored mean
+to a 2x2 output figure; each panel contains differently colored mean
 entropy-versus-step curves for all five recurrences with 95% bootstrap bands.
 The default trajectory length is 100 steps (indexed 0 through 99).
 
@@ -43,7 +46,8 @@ PBS submission needs no dataset or alignment argument:
 qsub -v "EXP_TARGET=latent_cot" exp.sh
 ```
 
-`--dataset gsm8k` or `--dataset mbppplus` remains available for debugging.
+`--dataset gsm8k`, `--dataset mbppplus`, `--dataset arc_challenge`, or
+`--dataset aime2025` remains available for single-dataset debugging.
 Because the recurrence schema includes soft and text feedback alongside the
 other latent alignments, old C0 trajectory caches are not compatible; the new cache
 filename contains the recurrence and kernel configuration, so no manual
@@ -54,7 +58,7 @@ Each invocation writes under `exp_result/latent_cot/runs/`:
 - `metrics/c0_entropy_by_step.parquet`: one row per dataset, alignment,
   question and step;
 - `summaries/c0_summary.json`: per-dataset and per-alignment statistics;
-- `figures/c0_entropy_vs_step.pdf`: GSM8K/MBPP+ panels with five colored curves;
+- `figures/c0_entropy_vs_step.pdf`: four dataset panels with five colored curves;
 - `figures/c0_entropy_vs_step.json`: figure provenance and alignment settings;
 - `run_manifest.json`: parameters, cache provenance and failure counts.
 

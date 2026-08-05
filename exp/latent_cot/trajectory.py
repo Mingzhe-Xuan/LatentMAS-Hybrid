@@ -39,6 +39,23 @@ Task: {question}
 
 Work out a correct and self-contained solution carefully.""",
     },
+    "arc_challenge": {
+        "version": "c0_arc_challenge_question_v1",
+        "user_template": """Solve the following science multiple-choice problem. Reason step by step.
+
+Question and choices:
+{question}
+
+Work out the solution carefully and identify the correct option.""",
+    },
+    "aime2025": {
+        "version": "c0_aime2025_question_v1",
+        "user_template": """Solve the following AIME mathematics problem. Reason step by step.
+
+Problem: {question}
+
+Work out the solution carefully and give the final integer answer.""",
+    },
 }
 
 

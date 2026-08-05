@@ -71,7 +71,7 @@ python exp/approximator/run.py \
 | S2 | 同 S1 | 同一份 S1 mapping cache | 主分析不重算映射；可选 calibration：ORF/iid、$m=256/512/1024/2048/4096$、$\tau=0.7/1.0/1.3$、seed 101/202/303/404/505 | `s2_mapping.parquet`：每 state 的 KL/JS/TV/$L_1$/top-k；`s2_single_kernel.parquet`：rank 分层核误差；启用时 `s2_calibration.parquet`：family/$m$/$\tau$/seed/误差 | `run_manifest.json`；`s2_summary.json`；启用时 `s2_calibration_summary.json` | `s2_f_rel_l2.pdf`；`s2_error_propagation.pdf` |
 | S3 | 同 S1 | 同一 Refiner state pool；seed 42 shuffle 后至多 50 题、每题至多 16 state | $m=512/1024/2048$；$\tau=0.5,0.6,\ldots,2.0$；ORF seed 1001--1032（32 个） | `s3_variance.parquet`：每 state × $m$ × $\tau$ 的 kernel/$\hat F$ variance、std、bias$^2$、MSE 与 rank band | `run_manifest.json`；`s3_summary.json`（headline）；`s3_grid_summary.json`（$m$ × $\tau$ grid） | `s3_variance_tau.pdf`；`s3_single_kernel_variance_tau.pdf`；`s3_refiner_state_forest.pdf` |
 | S4 | 同 S1；另拟合 linear baseline；默认增加真实 TextMAS 对照 | 同题 Refiner latent states 与 TextMAS Refiner 文本在 Judger prompt 中的 token embeddings；按题平衡后最多 2,000 个 | 主 ORF 设置同 S1；linear ridge $10^{-5}$；TextMAS 每角色默认最多 256 token；可选 t-SNE：seed 101 | `s4_embeddings.parquet`；`s4_joint_pca_coordinates.parquet`；启用时 `s4_joint_tsne_coordinates.parquet` | `run_manifest.json`；`s4_summary.json`：四组降维、空间汇总、latent 配对几何及 TextMAS 分布几何 | 四张 `s4_{linear,kernel}_{exact,text}_joint_reduction.pdf` |
-| C0 | 单模型 A=`Qwen/Qwen3-4B`，A 同时承担 latent recurrence 与 $W_{out}$ readout | GSM8K `test`；seed 42 shuffle 后取 512 题 | question prompt；$K=100$；identical、linear、exact、kernel、text 五条独立 recurrence；exact 为完整 softmax 期望且不采样，kernel 近似 exact，text 使用 greedy argmax；每题每 recurrence 保存 100 个 pre-unembedding hidden | `c0_entropy_by_step.parquet`：item ID、step、$H_t$、finite 标记、失败原因；恰为一题一步一行 | `run_manifest.json`；`c0_summary.json`：每个 step 的题数、mean、median、95% CI | `c0_entropy_vs_step.pdf`：横轴 step，纵轴 entropy，含 95% CI |
+| C0 | 单模型 A=`Qwen/Qwen3-4B`，A 同时承担 latent recurrence 与 $W_{out}$ readout | GSM8K、MBPP+、ARC-Challenge 的 `test` split 与 AIME 2025 的 `train` split；seed 42 shuffle 后每数据集最多取 512 题 | question prompt；$K=100$；identical、linear、soft、kernel、text 五条独立 recurrence；soft 为完整 softmax 期望且不采样，kernel 近似 soft，text 使用 greedy argmax；每题每 recurrence 保存 100 个 pre-unembedding hidden | `c0_entropy_by_step.parquet`：dataset、split、alignment、item ID、step、$H_t$、finite 标记、失败原因；每个 dataset × alignment × question × step 一行 | `run_manifest.json`；`c0_summary.json`：每个 step 的题数、mean、median、95% CI | `c0_entropy_vs_step.pdf`：2×2 数据集面板；横轴 step，纵轴 entropy，含 95% CI |
 | M0 | A=`Qwen/Qwen3-4B`，B=`Qwen/Qwen3-4B`；角色为 sender/answerer | ARC-Easy `test`；seed 42 shuffle 后取 512 题 | A 看完整题目并做 $K=50$ latent steps；B 永不接收题目/选项/A 文本；B greedy、最多 32 token；真实 `transfer_via_realignment` 注入 A 最终 hidden | `m0_per_question.parquet`：item ID、condition、配对 source ID、prediction、parsed、correct、message position、生成长度、失败原因；四条件各一行 | `run_manifest.json`；`m0_summary.json`：四条件 accuracy、相对 no-message 的 paired difference 与 95% CI | `m0_accuracy.pdf`：四条件 accuracy 与 paired-difference CI |
 
 所有 JSON、Parquet、PDF 均写入同一 run 目录的 `summaries/`、`metrics/`、`figures/` 子目录；`run_manifest.json` 位于该 run 根目录。Parquet 只存原始可重算记录，JSON 不含 hidden/embedding 大向量而只存参数、计数和聚合统计，PDF 只呈现对应 JSON/Parquet 的可复现可视化。
@@ -92,7 +92,7 @@ python exp/approximator/run.py \
 | `s3_single_kernel_variance_tau.pdf` | 单面板折线；横轴 $\tau$，纵轴（log scale）为单核 estimator 方差的 median；每条线一个 exact-softmax rank band，固定 $m=2048$。 | 哪些 token-rank 区域的单核近似对温度最敏感。 |
 | `s3_refiner_state_forest.pdf` | 题目级点图；横轴（log scale）为该题所选 state 的平均 $\hat F$ variance，纵轴为 item ID；固定 $m=2048,\tau=1$。 | seed 方差是否被少数题目主导。 |
 | `s4_{alignment}_{reference}_joint_reduction.pdf` | alignment 为 linear/kernel，reference 为 exact/text；每张图对 hidden、reference、aligned 三类原始向量独立联合拟合 PCA，并可附 t-SNE。TextMAS 与 latent 按题和数量平衡，但不建立 token-step 语义配对。 | linear/kernel 相对 exact soft embedding 或真实 TextMAS receiver-side token embedding 的几何偏移。 |
-| `c0_entropy_vs_step.pdf` | 单面板曲线；横轴 latent step $t=0\ldots99$，纵轴为 $H_t$（nats）；实线为题目 mean，阴影为题目 cluster bootstrap 95% CI；可选虚线为 median。 | 同模型 latent recurrence 的 $W_{out}$-decoded token distribution 尖锐程度如何随 step 演化。 |
+| `c0_entropy_vs_step.pdf` | 2×2 数据集面板；横轴 latent step $t=0\ldots99$，纵轴为 $H_t$（nats）；每个面板五条实线表示题目 mean，阴影表示题目 bootstrap 95% CI。 | 四个数据集上同模型 recurrence 的 $W_{out}$-decoded token distribution 尖锐程度如何随 step 演化。 |
 | `m0_accuracy.pdf` | 两面板：左为 no-message、random-pair、mismatched-pair、matched-message 四条件的 accuracy 与题目 bootstrap 95% CI；右为后三条件减 no-message 的 paired accuracy difference 与 CI，0 处画参考线。 | B 在不见题目时，正确配对 A latent message 是否比无消息或错误消息更能提高答题准确率。 |
 
 所有图均在同名 `.pdf` 旁写入同名 `.json` artifact context，记录运行参数、模型、数据集、seed 与输入 cache；该 JSON 不是统计 summary，而是图的可追溯元数据。
@@ -163,7 +163,7 @@ $$
 
 ## 4. 同模型 Latent CoT：C0
 
-**目标。** 对 identical、linear、exact、kernel 和 greedy text 五种同模型 recurrence，绘制 hidden state 经该同模型 $W_{\mathrm{out}}$ 解码后 entropy 随 time step 的变化曲线；其中 exact 是 kernel 所近似的完整 softmax 基准。
+**目标。** 对 identical、linear、soft、kernel 和 greedy text 五种同模型 recurrence，绘制 hidden state 经该同模型 $W_{\mathrm{out}}$ 解码后 entropy 随 time step 的变化曲线；其中 soft 是 kernel 所近似的完整 softmax 基准。
 
 **运行定义。** 使用同一个模型完成 question prompt 的 latent rollout。设第 $t$ 个 latent recurrence 进入下一步前的末层 hidden 为 $h_t$，则仅计算
 
@@ -175,7 +175,7 @@ $$
 
 对每题保存 $t\in\{0,\ldots,K-1\}$ 的 entropy；横轴为 latent time step，纵轴为 $H_t$（nats）。每个 step 先在题目层面保留一条值，再报告题间 mean/median 与 95% cluster bootstrap CI；同时保存原始逐题数据。若某 rollout 提前停止或某 step 非有限，则明确记录有效题目数和失败原因，不能用后续步填补。
 
-**对照与固定项。** 五条 recurrence 使用相同 prompt 和初始 KV cache。Exact 反馈为 $\operatorname{softmax}(W_{\mathrm{out}}h_t/\tau+b)W_{\mathrm{in}}$，不进行 sampling 或 argmax；kernel 使用相同的 $\tau$ 和 bias 约定近似该期望 embedding；只有 text 对照使用 greedy argmax token feedback。将 model revision、prompt template、数据集 split、$K$、tokenizer、$\tau$、kernel 配置及 $W_{\mathrm{out}}$ 是否含 bias 写入 manifest。
+**对照与固定项。** 五条 recurrence 使用相同 prompt 和初始 KV cache。Soft 反馈为 $\operatorname{softmax}((W_{\mathrm{out}}h_t+b)/\tau)W_{\mathrm{in}}$，不进行 sampling 或 argmax；kernel 使用相同的 $\tau$ 配置近似该期望 embedding；只有 text 对照使用 greedy argmax token feedback。将 model revision、prompt template、数据集 split、$K$、tokenizer、$\tau$、kernel 配置及 $W_{\mathrm{out}}$ 是否含 bias 写入 manifest。
 
 **解释边界。** entropy 下降、上升或震荡只描述 token distribution 的尖锐程度随 recurrence 的变化，不能单独说明推理更正确、更有信息量，或存在唯一可读的 latent thought。
 

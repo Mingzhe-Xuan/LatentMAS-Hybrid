@@ -153,7 +153,7 @@ def build_command(
         study = resolve("study", "STUDY", "c0")
         model_pair = resolve("model_pair", "MODEL_PAIR", "c0")
         model_name = resolve("model_name", "MODEL_NAME", "Qwen/Qwen3-4B")
-        dataset = resolve("dataset", "DATASET", "gsm8k")
+        dataset = resolve("dataset", "DATASET", "all")
         split = resolve("split", "SPLIT", "test")
         method = resolve("method", "METHOD")
         max_questions = resolve("max_questions", "MAX_QUESTIONS", "50")

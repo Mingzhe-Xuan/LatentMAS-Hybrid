@@ -201,7 +201,7 @@ qsub -v "EXP_TARGET=approximator,STUDY=all,DATASET=arc_easy,SPLIT=test,AGENT_MOD
 qsub -v "EXP_TARGET=approximator" exp.sh
 ```
 
-C0：自动运行 GSM8K 和 MBPP+，每个数据集均比较 identical、linear、soft、kernel、text：
+C0：自动运行 GSM8K、MBPP+、ARC-Challenge 和 AIME 2025，每个数据集均比较 identical、linear、soft、kernel、text。前三个数据集使用 `test` split；AIME 2025 自动使用其 `train` split：
 
 ```bash
 qsub -v "EXP_TARGET=latent_cot,DATASET=all,SPLIT=test,MODEL_NAME=Qwen/Qwen3-4B,MAX_QUESTIONS=50,LATENT_STEPS=100,M=2048,TAU=1.0,ORF_SEED=101,PROBE_SEED=42" exp.sh
@@ -221,7 +221,7 @@ C0 的一个作业会自动运行 identical、linear、soft、kernel、text 五�
 qsub -v "EXP_TARGET=latent_cot,DATASET=all,MAX_QUESTIONS=50,M=2048,TAU=1.0,ORF_SEED=101,PROBE_SEED=42" exp.sh
 ```
 
-结果表中的 `alignment` 列区分五种方法，两幅数据集子图也会分别绘制五条曲线。其中 `soft` 是完整 softmax 期望 embedding，不进行 token sampling 或 argmax；`kernel` 近似的正是该映射。
+结果表中的 `alignment` 列区分五种方法，四幅数据集子图也会分别绘制五条曲线。其中 `soft` 是完整 softmax 期望 embedding，不进行 token sampling 或 argmax；`kernel` 近似的正是该映射。
 
 Approximator 没有 `--method` 参数；method 相关分析由 study 决定。S4 对比 linear 与 kernel，并使用 hidden/exact 作为参照：
 
@@ -249,10 +249,10 @@ for dataset in arc_easy arc_challenge gsm8k medqa mbppplus gpqa; do
 done
 ```
 
-C0 支持 `gsm8k`、`mbppplus`，也支持 `all` 联合双子图：
+C0 支持 `gsm8k`、`mbppplus`、`arc_challenge`、`aime2025`，也支持 `all` 联合 2×2 子图：
 
 ```bash
-for dataset in gsm8k mbppplus; do
+for dataset in gsm8k mbppplus arc_challenge aime2025; do
   qsub -v "EXP_TARGET=latent_cot,DATASET=${dataset},SPLIT=test,MAX_QUESTIONS=50,M=2048,TAU=1.0,ORF_SEED=101,PROBE_SEED=42" exp.sh
 done
 ```
@@ -273,7 +273,7 @@ for max_samples in 10 25 50 100; do
 done
 ```
 
-例如 `DATASET=all,MAX_QUESTIONS=50` 表示最多抽取 50 个 GSM8K 样本和 50 个 MBPP+ 样本。
+例如 `DATASET=all,MAX_QUESTIONS=50` 表示每个数据集最多抽取 50 个样本；AIME 2025 只有 30 题，因此会使用全部可用题目。
 
 ### 2.5 kernel_features 消融
 

@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from data import load_gsm8k, load_mbppplus
+from data import load_aime2025, load_arc_challenge, load_gsm8k, load_mbppplus
 from trajectory import (
     ALIGNMENTS,
     collect,
@@ -49,7 +49,9 @@ def parse_args(argv=None):
     parser.add_argument("--study", choices=["c0"], default="c0")
     parser.add_argument("--model_name", default="Qwen/Qwen3-4B")
     parser.add_argument(
-        "--dataset", choices=["all", "gsm8k", "mbppplus"], default="all"
+        "--dataset",
+        choices=["all", "gsm8k", "mbppplus", "arc_challenge", "aime2025"],
+        default="all",
     )
     parser.add_argument("--split", default="test")
     parser.add_argument("--max_questions", type=int, default=512)
@@ -204,14 +206,21 @@ def trajectory_paths(args):
 
 def selected_datasets(args):
     if args.dataset == "all":
-        return ("gsm8k", "mbppplus")
+        return ("gsm8k", "mbppplus", "arc_challenge", "aime2025")
     return (args.dataset,)
+
+
+def resolved_dataset_split(dataset, requested_split):
+    # The Hugging Face AIME 2025 dataset exposes its evaluation set as `train`.
+    return "train" if dataset == "aime2025" else requested_split
 
 
 def sampled_items(args):
     loaders = {
         "gsm8k": load_gsm8k,
         "mbppplus": load_mbppplus,
+        "arc_challenge": load_arc_challenge,
+        "aime2025": load_aime2025,
     }
     indexed = list(enumerate(loaders[args.dataset](split=args.split)))
     random.Random(args.probe_seed).shuffle(indexed)
@@ -499,6 +508,7 @@ def entropy_rows(trajectory, wrapper, args, logger):
             rows.append(
                 {
                     "dataset": args.dataset,
+                    "split": args.split,
                     "alignment": record["alignment"],
                     "item_id": int(record["item_id"]),
                     "step": int(step),
@@ -568,15 +578,23 @@ def summarize(rows, args):
 
 def plot_summary(summaries, path, context):
     datasets = list(summaries)
+    columns = min(2, len(datasets))
+    rows = (len(datasets) + columns - 1) // columns
     figure, axes = plt.subplots(
-        1,
-        len(datasets),
-        figsize=(7 * len(datasets), 5),
+        rows,
+        columns,
+        figsize=(7 * columns, 5 * rows),
         sharex=True,
         sharey=True,
         squeeze=False,
     )
-    display_names = {"gsm8k": "GSM8K", "mbppplus": "MBPP+"}
+    flat_axes = [axis for row in axes for axis in row]
+    display_names = {
+        "gsm8k": "GSM8K",
+        "mbppplus": "MBPP+",
+        "arc_challenge": "ARC-Challenge",
+        "aime2025": "AIME 2025",
+    }
     colors = {
         "identical": "#4c78a8",
         "linear": "#f58518",
@@ -584,7 +602,7 @@ def plot_summary(summaries, path, context):
         "kernel": "#54a24b",
         "text": "#e45756",
     }
-    for axis, dataset in zip(axes[0], datasets):
+    for axis, dataset in zip(flat_axes, datasets):
         for alignment in ALIGNMENTS:
             steps = summaries[dataset]["alignments"][alignment]["steps"]
             x = np.array([row["step"] for row in steps])
@@ -621,7 +639,9 @@ def plot_summary(summaries, path, context):
         axis.set_title(display_names.get(dataset, dataset))
         axis.grid(alpha=0.25)
         axis.legend(title="Recurrence")
-    axes[0][0].set_ylabel("Output entropy (nats)")
+    for axis in flat_axes[len(datasets):]:
+        axis.set_visible(False)
+    flat_axes[0].set_ylabel("Output entropy (nats)")
     figure.suptitle(
         "C0: entropy by latent and text recurrence\n"
         "Solid lines: mean across questions; shaded bands: 95% bootstrap CI"
@@ -686,8 +706,16 @@ def main(argv=None):
         summaries = {}
         dataset_contexts = {}
         for dataset in datasets:
-            dataset_args = argparse.Namespace(**{**vars(args), "dataset": dataset})
-            logger.info("C0 dataset %s started.", dataset)
+            dataset_args = argparse.Namespace(
+                **{
+                    **vars(args),
+                    "dataset": dataset,
+                    "split": resolved_dataset_split(dataset, args.split),
+                }
+            )
+            logger.info(
+                "C0 dataset %s split %s started.", dataset, dataset_args.split
+            )
             indexed_items = sampled_items(dataset_args)
             trajectory_path, manifest_path, trajectory, cache_manifest, cache_hit = (
                 load_or_collect(dataset_args, indexed_items, wrapper, logger)
@@ -708,6 +736,7 @@ def main(argv=None):
             }
             summary = {
                 "dataset": dataset,
+                "split": dataset_args.split,
                 "alignments": alignment_summaries,
             }
             summary.update(
@@ -744,6 +773,7 @@ def main(argv=None):
                 "trajectory_manifest": str(manifest_path),
                 "trajectory_manifest_sha256": file_sha256(manifest_path),
                 "trajectory_cache_hit": cache_hit,
+                "split": dataset_args.split,
                 "prompt_template_version": prompt_template_version(dataset),
                 "prompt_template_sha256": prompt_template_sha256(dataset),
             }

@@ -52,17 +52,25 @@ def load_prompt_functions():
     return namespace
 
 
-def load_run_functions(gsm8k_loader, mbppplus_loader):
+def load_run_functions(
+    gsm8k_loader,
+    mbppplus_loader,
+    arc_challenge_loader=lambda split: (),
+    aime2025_loader=lambda split: (),
+):
     tree = ast.parse(RUN_SOURCE.read_text(encoding="utf-8"))
     selected = [
         node
         for node in tree.body
         if isinstance(node, ast.FunctionDef)
-        and node.name in {"selected_datasets", "sampled_items"}
+        and node.name
+        in {"selected_datasets", "resolved_dataset_split", "sampled_items"}
     ]
     namespace = {
         "load_gsm8k": gsm8k_loader,
         "load_mbppplus": mbppplus_loader,
+        "load_arc_challenge": arc_challenge_loader,
+        "load_aime2025": aime2025_loader,
         "random": random,
     }
     exec(
@@ -143,6 +151,9 @@ class FakeAxis:
     def set_title(self, title):
         self.title = title
 
+    def set_visible(self, visible):
+        self.visible = visible
+
     def grid(self, *args, **kwargs):
         pass
 
@@ -166,13 +177,17 @@ class FakeFigure:
 
 class FakePlot:
     def __init__(self):
-        self.axes = [FakeAxis(), FakeAxis()]
+        self.axes = [FakeAxis() for _ in range(4)]
         self.figure = FakeFigure()
         self.subplots_args = None
 
     def subplots(self, rows, columns, **kwargs):
         self.subplots_args = (rows, columns, kwargs)
-        return self.figure, [self.axes]
+        grid = [
+            self.axes[row * columns : (row + 1) * columns]
+            for row in range(rows)
+        ]
+        return self.figure, grid
 
     def close(self, figure):
         pass
@@ -219,19 +234,42 @@ class LatentCotPromptTests(unittest.TestCase):
         self.assertIn("Task: Write add(a, b).", content)
         self.assertIn("self-contained solution", content)
 
+    def test_arc_challenge_prompt_preserves_multiple_choice_structure(self):
+        content = PROMPTS["prompt_messages"](
+            "Which is correct?\na: one\nb: two", "arc_challenge"
+        )[1]["content"]
+        self.assertIn("science multiple-choice problem", content)
+        self.assertIn("a: one\nb: two", content)
+        self.assertIn("identify the correct option", content)
+
+    def test_aime2025_prompt_requests_integer_answer(self):
+        content = PROMPTS["prompt_messages"]("Find n.", "aime2025")[1][
+            "content"
+        ]
+        self.assertIn("AIME mathematics problem", content)
+        self.assertIn("final integer answer", content)
+
     def test_dataset_prompts_have_distinct_versions_and_hashes(self):
         version = PROMPTS["prompt_template_version"]
         digest = PROMPTS["prompt_template_sha256"]
         self.assertEqual(version("gsm8k"), "c0_gsm8k_question_v1")
         self.assertEqual(version("mbppplus"), "c0_mbppplus_question_v1")
-        self.assertNotEqual(digest("gsm8k"), digest("mbppplus"))
+        self.assertEqual(
+            version("arc_challenge"), "c0_arc_challenge_question_v1"
+        )
+        self.assertEqual(version("aime2025"), "c0_aime2025_question_v1")
+        self.assertEqual(
+            len({digest(name) for name in PROMPTS["PROMPT_TEMPLATES"]}), 4
+        )
 
 
 class LatentCotDatasetDispatchTests(unittest.TestCase):
-    def test_default_all_selects_both_datasets_in_plot_order(self):
+    def test_default_all_selects_four_datasets_in_plot_order(self):
         functions = load_run_functions(lambda split: (), lambda split: ())
         selected = functions["selected_datasets"](SimpleNamespace(dataset="all"))
-        self.assertEqual(selected, ("gsm8k", "mbppplus"))
+        self.assertEqual(
+            selected, ("gsm8k", "mbppplus", "arc_challenge", "aime2025")
+        )
 
     def test_single_dataset_selection_remains_available(self):
         functions = load_run_functions(lambda split: (), lambda split: ())
@@ -261,9 +299,28 @@ class LatentCotDatasetDispatchTests(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertTrue(all(row[1]["question"].startswith("task-") for row in rows))
 
+    def test_aime2025_uses_train_split_when_test_is_requested(self):
+        calls = []
+
+        def aime2025_loader(split):
+            calls.append(split)
+            return ({"question": "aime-task"},)
+
+        functions = load_run_functions(
+            lambda split: (), lambda split: (), lambda split: (), aime2025_loader
+        )
+        split = functions["resolved_dataset_split"]("aime2025", "test")
+        args = SimpleNamespace(
+            dataset="aime2025", split=split, probe_seed=42, max_questions=1
+        )
+        rows = functions["sampled_items"](args)
+        self.assertEqual(split, "train")
+        self.assertEqual(calls, ["train"])
+        self.assertEqual(rows[0][1]["question"], "aime-task")
+
 
 class LatentCotPlotTests(unittest.TestCase):
-    def test_combined_result_uses_two_labeled_subplots(self):
+    def test_combined_result_uses_four_labeled_subplots(self):
         fake_plot = FakePlot()
         plot_summary = load_plot_summary(fake_plot)
         step = {
@@ -279,16 +336,19 @@ class LatentCotPlotTests(unittest.TestCase):
             {
                 "gsm8k": {"alignments": series},
                 "mbppplus": {"alignments": series},
+                "arc_challenge": {"alignments": series},
+                "aime2025": {"alignments": series},
             },
             ROOT / "unused.pdf",
             {},
         )
-        self.assertEqual(fake_plot.subplots_args[0:2], (1, 2))
+        self.assertEqual(fake_plot.subplots_args[0:2], (2, 2))
         self.assertTrue(fake_plot.subplots_args[2]["sharey"])
         self.assertIn("Solid lines: mean across questions", fake_plot.figure.title)
         self.assertIn("shaded bands: 95% bootstrap CI", fake_plot.figure.title)
         self.assertEqual(
-            [axis.title for axis in fake_plot.axes], ["GSM8K", "MBPP+"]
+            [axis.title for axis in fake_plot.axes],
+            ["GSM8K", "MBPP+", "ARC-Challenge", "AIME 2025"],
         )
         for axis in fake_plot.axes:
             self.assertEqual(
