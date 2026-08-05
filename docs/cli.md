@@ -204,7 +204,7 @@ qsub -v "EXP_TARGET=approximator" exp.sh
 C0：自动运行 GSM8K 和 MBPP+，每个数据集均比较 identical、linear、kernel：
 
 ```bash
-qsub -v "EXP_TARGET=latent_cot,DATASET=all,SPLIT=test,MODEL_NAME=Qwen/Qwen3-4B,MAX_QUESTIONS=50,LATENT_STEPS=50,M=2048,TAU=1.0,ORF_SEED=101,PROBE_SEED=42" exp.sh
+qsub -v "EXP_TARGET=latent_cot,DATASET=all,SPLIT=test,MODEL_NAME=Qwen/Qwen3-4B,MAX_QUESTIONS=50,LATENT_STEPS=100,M=2048,TAU=1.0,ORF_SEED=101,PROBE_SEED=42" exp.sh
 ```
 
 默认配置可简写为：
