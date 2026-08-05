@@ -231,7 +231,7 @@ expected = torch.softmax(
 - output bias 正确生效；
 - `soft_temperature` 正确生效；
 - batch hidden 输入；
--三维 `[batch, steps, hidden_dim]` 输入；
+- 三维 `[batch, steps, hidden_dim]` 输入；
 - chunked 和 non-chunked 结果一致；
 - 不发生额外范数缩放；
 - 输出形状和 dtype 正确；
