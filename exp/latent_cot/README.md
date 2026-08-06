@@ -69,10 +69,10 @@ Progress is appended to `exp_state.txt` in the invocation working directory.
 C1 reuses the active root `methods/latent_mas.py` sequential organization. A
 single Qwen3-8B instance serves as Planner, Critic, Refiner, and Judger. Planner,
 Critic, and Refiner each perform the same K latent steps while retaining the
-complete accumulated prompt and latent KV cache. C1 stops before Judger text
-generation and records the post-feedback hidden state entropy at every local
-step. The cumulative index is Planner `t`, Critic `K+t`, and Refiner
-`2K+t`.
+complete accumulated prompt and latent KV cache. The shared C1/C2 collector
+records post-feedback hidden-state entropy at every local step and then runs the
+Judger, so the same rollout also supplies C2 accuracy. The cumulative index is
+Planner `t`, Critic `K+t`, and Refiner `2K+t`.
 
 The MBPP+ subset is the dataset-order prefix of 30 questions (not a shuffled
 sample). Colors identify `identical / linear / soft / kernel`; line styles
@@ -112,6 +112,28 @@ python exp/latent_cot/run.py \
 C2 writes `c2_accuracy_by_question.parquet`, `c2_summary.json`, and
 `c2_accuracy_vs_steps.pdf`. Each point reports both accuracy and the raw
 `correct/30` count with a question-bootstrap 95% interval.
+
+### C1/C2 rollout cache
+
+Like C0, C1 and C2 keep validated rollout-derived data in a stable cache, under
+`exp/cache/latent_cot_mas/`. Each cache contains both a C1 entropy table and a
+C2 accuracy table produced by one complete Planner/Critic/Refiner/Judger
+rollout. Consequently, running C1 first makes the later C2 command a cache hit,
+and vice versa, provided their rollout arguments match. A cache miss from
+either study performs the complete flow, including Judger decoding.
+
+A normal rerun only regenerates the requested run-local summary and figure; it
+does not load the model or perform rollout again. The cache identity covers the
+exact MBPP+ question contents, model name, K grid, alignments, generation seed,
+`max_new_tokens`, and rollout/alignment settings. It intentionally does not
+include `--study`, because C1 and C2 are two views of the same cached rollout.
+
+Use `--reuse_trajectory` when a cache hit is mandatory (the command fails if no
+compatible cache exists), or `--force_recollect` to ignore and replace the
+cache. Plot-only settings such as `--bootstrap_replicates` and `--probe_seed`
+do not invalidate cached rollout data, so they can be changed when redrawing.
+The run manifest records the cache path, integrity hash, and whether it was a
+cache hit.
 
 PBS examples:
 

@@ -1,5 +1,8 @@
 import argparse
 import ast
+import hashlib
+import json
+import re
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -51,6 +54,26 @@ def load_parse_args():
     return namespace["parse_args"]
 
 
+def load_cache_helpers():
+    tree = ast.parse(MAS_SOURCE.read_text(encoding="utf-8"))
+    wanted = {"_safe_name", "_dataset_identity", "_cache_identity", "_cache_paths"}
+    nodes = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in wanted
+    ]
+    namespace = {
+        "hashlib": hashlib,
+        "json": json,
+        "re": re,
+        "Path": Path,
+        "CACHE_SCHEMA_VERSION": 2,
+        "CACHE_DIR": Path("cache"),
+    }
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(MAS_SOURCE), "exec"), namespace)
+    return namespace["_cache_identity"], namespace["_cache_paths"]
+
+
 def load_c2_summary():
     tree = ast.parse(MAS_SOURCE.read_text(encoding="utf-8"))
     wanted_assignments = {"MAS_ALIGNMENTS"}
@@ -100,6 +123,69 @@ class MasArgumentTests(unittest.TestCase):
         self.assertEqual(args.model_name, "Qwen/Qwen3-4B")
         self.assertEqual(args.dataset, "all")
         self.assertEqual(args.max_questions, 512)
+
+
+class MasCacheTests(unittest.TestCase):
+    @staticmethod
+    def args(**overrides):
+        values = {
+            "study": "c1",
+            "split": "test",
+            "model_name": "Qwen/Qwen3-8B",
+            "latent_step_values": [20, 40],
+            "alignments": ["identical", "linear"],
+            "max_questions": 2,
+            "generation_seed": 77,
+            "align_ridge": 1e-5,
+            "kernel_features": 2048,
+            "kernel_temperature": 1.0,
+            "kernel_seed": 101,
+            "kernel_chunk_size": 4096,
+            "soft_chunk_size": 32,
+            "trust_remote_code": False,
+            "max_new_tokens": 4096,
+            "bootstrap_replicates": 1000,
+            "probe_seed": 42,
+        }
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
+    def test_study_and_plot_settings_share_rollout_cache(self):
+        identity, paths = load_cache_helpers()
+        items = [(0, {"question": "q0", "gold": "g0"}), (1, {"question": "q1", "gold": "g1"})]
+        first_args = self.args(
+            study="c1", bootstrap_replicates=100, probe_seed=1
+        )
+        second_args = self.args(
+            study="c2", bootstrap_replicates=5000, probe_seed=999
+        )
+        first = identity(first_args, items)
+        second = identity(second_args, items)
+        self.assertEqual(first, second)
+        self.assertEqual(paths(first_args, first), paths(second_args, second))
+
+    def test_rollout_settings_invalidate_cache(self):
+        identity, _ = load_cache_helpers()
+        items = [(0, {"question": "q0", "gold": "g0"}), (1, {"question": "q1", "gold": "g1"})]
+        baseline = identity(self.args(study="c2"), items)
+        self.assertNotEqual(
+            baseline,
+            identity(self.args(study="c2", generation_seed=78), items),
+        )
+        self.assertNotEqual(
+            baseline,
+            identity(self.args(study="c2", max_new_tokens=2048), items),
+        )
+
+    def test_cache_hit_skips_model_rollout(self):
+        source = MAS_SOURCE.read_text(encoding="utf-8")
+        self.assertIn("if cache_hit:", source)
+        self.assertIn("rollout skipped: reusing shared C1/C2 cache", source)
+        self.assertIn(
+            "if not cache_hit:\n            cache_manifest = _save_metrics_cache",
+            source,
+        )
+        self.assertIn("latent_roles_only=False", source)
 
 
 class MasStudyDefinitionTests(unittest.TestCase):

@@ -82,9 +82,13 @@ def parse_args(argv=None):
     parser.add_argument(
         "--reuse_trajectory",
         action="store_true",
-        help="Require an existing compatible C0 trajectory cache.",
+        help="Require an existing compatible C0 trajectory or C1/C2 metrics cache.",
     )
-    parser.add_argument("--force_recollect", action="store_true")
+    parser.add_argument(
+        "--force_recollect",
+        action="store_true",
+        help="Ignore a compatible cache and collect rollouts again.",
+    )
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--trust_remote_code", action="store_true")
     args = parser.parse_args(argv)

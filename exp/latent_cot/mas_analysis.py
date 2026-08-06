@@ -26,6 +26,8 @@ from utils import set_seed
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNS_DIR = ROOT / "exp_result" / "latent_cot" / "runs"
+CACHE_DIR = ROOT / "exp" / "cache" / "latent_cot_mas"
+CACHE_SCHEMA_VERSION = 2
 MAS_ALIGNMENTS = ("identical", "linear", "soft", "kernel")
 LATENT_ROLES = ("planner", "critic", "refiner")
 ROLE_INDEX = {role: index for index, role in enumerate(LATENT_ROLES)}
@@ -58,6 +60,136 @@ def _write_parquet(path: Path, rows) -> None:
     pq.write_table(pa.Table.from_pylist(list(rows)), temporary, compression="zstd")
     temporary.replace(path)
 
+
+def _read_parquet(path: Path):
+    import pyarrow.parquet as pq
+
+    return pq.read_table(path).to_pylist()
+
+
+def _file_sha256(path: Path):
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _cache_identity(args, indexed_items):
+    return {
+        "schema_version": CACHE_SCHEMA_VERSION,
+        "experiment": "c1_c2_shared_rollout",
+        "dataset": "mbppplus",
+        "split": args.split,
+        "dataset_identity": _dataset_identity(indexed_items),
+        "model_name": args.model_name,
+        "latent_step_values": list(args.latent_step_values),
+        "alignments": list(args.alignments),
+        "max_questions": args.max_questions,
+        "generation_seed": args.generation_seed,
+        "prompt": "root_sequential_latent_mas_v1",
+        "sequential_info_only": False,
+        "latent_only": False,
+        "alignment_config": {
+            "linear_ridge": args.align_ridge,
+            "kernel_features": args.kernel_features,
+            "kernel_temperature": args.kernel_temperature,
+            "kernel_seed": args.kernel_seed,
+            "kernel_chunk_size": args.kernel_chunk_size,
+            "soft_chunk_size": args.soft_chunk_size,
+        },
+        "generation": {
+            "decoding": "greedy",
+            "max_new_tokens": args.max_new_tokens,
+        },
+        "trust_remote_code": bool(args.trust_remote_code),
+    }
+
+
+def _cache_paths(args, identity):
+    digest = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()[:16]
+    model = _safe_name(args.model_name.rsplit("/", 1)[-1])
+    stem = f"c1c2_mbppplus_{model}_q{args.max_questions}_{digest}"
+    return (
+        CACHE_DIR / f"{stem}.entropy.parquet",
+        CACHE_DIR / f"{stem}.accuracy.parquet",
+        CACHE_DIR / f"{stem}.manifest.json",
+    )
+
+
+def _load_metrics_cache(args, identity):
+    entropy_path, accuracy_path, manifest_path = _cache_paths(args, identity)
+    presence = [
+        entropy_path.exists(),
+        accuracy_path.exists(),
+        manifest_path.exists(),
+    ]
+    if any(presence) and not all(presence) and not args.force_recollect:
+        raise RuntimeError(
+            "Incomplete shared C1/C2 cache; use --force_recollect: "
+            f"{manifest_path}"
+        )
+    if not all(presence) or args.force_recollect:
+        if args.reuse_trajectory:
+            raise FileNotFoundError(
+                "--reuse_trajectory requested but shared C1/C2 cache is absent: "
+                f"{manifest_path}"
+            )
+        return None, None, None, entropy_path, accuracy_path, manifest_path
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("cache_identity") != identity:
+        raise RuntimeError(
+            f"Refusing incompatible shared C1/C2 cache: {manifest_path}"
+        )
+    expected_hashes = manifest.get("metrics_sha256", {})
+    if _file_sha256(entropy_path) != expected_hashes.get("entropy"):
+        raise RuntimeError("C1 entropy cache SHA256 integrity check failed.")
+    if _file_sha256(accuracy_path) != expected_hashes.get("accuracy"):
+        raise RuntimeError("C2 accuracy cache SHA256 integrity check failed.")
+    return (
+        _read_parquet(entropy_path),
+        _read_parquet(accuracy_path),
+        manifest,
+        entropy_path,
+        accuracy_path,
+        manifest_path,
+    )
+
+
+def _save_metrics_cache(
+    entropy_path,
+    accuracy_path,
+    manifest_path,
+    entropy_rows,
+    accuracy_rows,
+    identity,
+    model_info,
+):
+    _write_parquet(entropy_path, entropy_rows)
+    _write_parquet(accuracy_path, accuracy_rows)
+    manifest = {
+        "schema_version": CACHE_SCHEMA_VERSION,
+        "cache_identity": identity,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "row_count": {
+            "entropy": len(entropy_rows),
+            "accuracy": len(accuracy_rows),
+        },
+        "metrics": {
+            "entropy": str(entropy_path),
+            "accuracy": str(accuracy_path),
+        },
+        "metrics_sha256": {
+            "entropy": _file_sha256(entropy_path),
+            "accuracy": _file_sha256(accuracy_path),
+        },
+        "model": model_info,
+        "rollout_implementation_sha256": _implementation_sha256(),
+    }
+    _write_json(manifest_path, manifest)
+    return manifest
 
 def first_mbppplus_items(split: str, max_questions: int):
     """Return the dataset-order prefix, preserving stable original item IDs."""
@@ -447,76 +579,108 @@ def run_mas_study(args, logger: logging.Logger | None = None):
     _write_json(manifest_path, manifest)
     started = time.time()
     try:
-        model_args = _method_args(args, args.alignments[0])
-        wrapper = ModelWrapper(args.model_name, args.device, use_vllm=False, args=model_args)
-        config_payload = wrapper.model.config.to_dict()
-        manifest["model"] = {
-            "name": args.model_name,
-            "resolved_commit": getattr(wrapper.model.config, "_commit_hash", None),
-            "config_sha256": hashlib.sha256(
-                json.dumps(
-                    config_payload, sort_keys=True, default=str
-                ).encode("utf-8")
-            ).hexdigest(),
-            "parameter_dtype": str(next(wrapper.model.parameters()).dtype),
+        cache_identity = _cache_identity(args, indexed_items)
+        (
+            cached_entropy_rows,
+            cached_accuracy_rows,
+            cache_manifest,
+            entropy_cache_path,
+            accuracy_cache_path,
+            cache_manifest_path,
+        ) = _load_metrics_cache(args, cache_identity)
+        cache_hit = cached_entropy_rows is not None
+        entropy_rows = list(cached_entropy_rows or [])
+        accuracy_rows = list(cached_accuracy_rows or [])
+        model_info = cache_manifest.get("model") if cache_manifest else None
+        manifest["metrics_cache"] = {
+            "cache_hit": cache_hit,
+            "shared_c1_c2_rollout": True,
+            "entropy_metrics": str(entropy_cache_path),
+            "accuracy_metrics": str(accuracy_cache_path),
+            "manifest": str(cache_manifest_path),
         }
+        if model_info is not None:
+            manifest["model"] = model_info
         _write_json(manifest_path, manifest)
-        entropy_rows = []
-        accuracy_rows = []
-        output_head = wrapper.model.get_output_embeddings()
-        if output_head is None:
-            raise RuntimeError("Model does not expose an output embedding.")
-        for alignment in args.alignments:
-            wrapper.align_method = alignment
-            model_args.align_method = alignment
-            for latent_steps in args.latent_step_values:
-                logger.info(
-                    "%s alignment=%s K=%d started",
-                    args.study.upper(),
-                    alignment,
-                    latent_steps,
-                )
-                for number, (item_id, item) in enumerate(indexed_items, start=1):
-                    set_seed(args.generation_seed)
-                    observer = (
-                        EntropyObserver(
+
+        if cache_hit:
+            logger.info(
+                "%s rollout skipped: reusing shared C1/C2 cache %s",
+                args.study.upper(),
+                cache_manifest_path,
+            )
+        else:
+            model_args = _method_args(args, args.alignments[0])
+            wrapper = ModelWrapper(
+                args.model_name,
+                args.device,
+                use_vllm=False,
+                args=model_args,
+            )
+            config_payload = wrapper.model.config.to_dict()
+            model_info = {
+                "name": args.model_name,
+                "resolved_commit": getattr(wrapper.model.config, "_commit_hash", None),
+                "config_sha256": hashlib.sha256(
+                    json.dumps(
+                        config_payload,
+                        sort_keys=True,
+                        default=str,
+                    ).encode("utf-8")
+                ).hexdigest(),
+                "parameter_dtype": str(next(wrapper.model.parameters()).dtype),
+            }
+            manifest["model"] = model_info
+            _write_json(manifest_path, manifest)
+            if wrapper.model.get_output_embeddings() is None:
+                raise RuntimeError("Model does not expose an output embedding.")
+
+            for alignment in args.alignments:
+                wrapper.align_method = alignment
+                model_args.align_method = alignment
+                for latent_steps in args.latent_step_values:
+                    logger.info(
+                        "Shared C1/C2 rollout alignment=%s K=%d started",
+                        alignment,
+                        latent_steps,
+                    )
+                    for number, (item_id, item) in enumerate(indexed_items, start=1):
+                        set_seed(args.generation_seed)
+                        observer = EntropyObserver(
                             wrapper,
                             item_id=item_id,
                             alignment=alignment,
                             latent_steps=latent_steps,
                             split=args.split,
                         )
-                        if args.study == "c1"
-                        else None
-                    )
-                    method = LatentMASMethod(
-                        wrapper,
-                        latent_steps=latent_steps,
-                        judger_max_new_tokens=args.max_new_tokens,
-                        temperature=0.0,
-                        top_p=1.0,
-                        generate_bs=1,
-                        args=model_args,
-                        latent_step_observer=observer,
-                        latent_roles_only=args.study == "c1",
-                    )
-                    item_started = time.time()
-                    failure_reason = None
-                    try:
-                        result = method.run_batch([item])[0]
-                    except Exception as error:
-                        result = {
-                            "prediction": None,
-                            "raw_prediction": "",
-                            "correct": False,
-                            "error": f"{type(error).__name__}: {error}",
-                            "agents": [],
-                        }
-                        failure_reason = result["error"]
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
-                    elapsed = time.time() - item_started
-                    if observer is not None:
+                        method = LatentMASMethod(
+                            wrapper,
+                            latent_steps=latent_steps,
+                            judger_max_new_tokens=args.max_new_tokens,
+                            temperature=0.0,
+                            top_p=1.0,
+                            generate_bs=1,
+                            args=model_args,
+                            latent_step_observer=observer,
+                            latent_roles_only=False,
+                        )
+                        item_started = time.time()
+                        failure_reason = None
+                        try:
+                            result = method.run_batch([item])[0]
+                        except Exception as error:
+                            result = {
+                                "prediction": None,
+                                "raw_prediction": "",
+                                "correct": False,
+                                "error": f"{type(error).__name__}: {error}",
+                                "agents": [],
+                            }
+                            failure_reason = result["error"]
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
+                        elapsed = time.time() - item_started
+
                         observed = {
                             (row["agent"], row["local_step"])
                             for row in observer.rows
@@ -545,12 +709,11 @@ def run_mas_study(args, logger: logging.Logger | None = None):
                                         "adjacent_cosine": None,
                                         "finite": False,
                                         "failure_reason": (
-                                            failure_reason
-                                            or "missing_hidden_state"
+                                            failure_reason or "missing_hidden_state"
                                         ),
                                     }
                                 )
-                    else:
+
                         prediction = result.get("prediction")
                         accuracy_rows.append(
                             {
@@ -580,66 +743,125 @@ def run_mas_study(args, logger: logging.Logger | None = None):
                                 ),
                             }
                         )
+                        logger.info(
+                            "Shared rollout alignment=%s K=%d item=%d (%d/%d) completed",
+                            alignment,
+                            latent_steps,
+                            item_id,
+                            number,
+                            len(indexed_items),
+                        )
+
+                    entropy_cell_rows = [
+                        row
+                        for row in entropy_rows
+                        if row["alignment"] == alignment
+                        and row["latent_steps_per_agent"] == latent_steps
+                    ]
+                    accuracy_cell_rows = [
+                        row
+                        for row in accuracy_rows
+                        if row["alignment"] == alignment
+                        and row["latent_steps_per_agent"] == latent_steps
+                    ]
+                    entropy_checkpoint = (
+                        run_dir
+                        / "checkpoints"
+                        / f"c1_{alignment}_k{latent_steps}.parquet"
+                    )
+                    accuracy_checkpoint = (
+                        run_dir
+                        / "checkpoints"
+                        / f"c2_{alignment}_k{latent_steps}.parquet"
+                    )
+                    _write_parquet(entropy_checkpoint, entropy_cell_rows)
+                    _write_parquet(accuracy_checkpoint, accuracy_cell_rows)
                     logger.info(
-                        "%s alignment=%s K=%d item=%d (%d/%d) completed",
-                        args.study.upper(),
+                        "Shared C1/C2 checkpoints saved for alignment=%s K=%d",
                         alignment,
                         latent_steps,
-                        item_id,
-                        number,
-                        len(indexed_items),
                     )
-                source_rows = entropy_rows if args.study == "c1" else accuracy_rows
-                cell_rows = [
-                    row
-                    for row in source_rows
-                    if row["alignment"] == alignment
-                    and row["latent_steps_per_agent"] == latent_steps
-                ]
-                checkpoint_path = (
-                    run_dir
-                    / "checkpoints"
-                    / f"{args.study}_{alignment}_k{latent_steps}.parquet"
-                )
-                _write_parquet(checkpoint_path, cell_rows)
-                logger.info(
-                    "%s checkpoint saved: %s", args.study.upper(), checkpoint_path
-                )
-        if args.study == "c1":
-            expected_rows = (
-                len(indexed_items)
-                * len(args.alignments)
-                * 3
-                * sum(args.latent_step_values)
+
+        expected_entropy_rows = (
+            len(indexed_items)
+            * len(args.alignments)
+            * 3
+            * sum(args.latent_step_values)
+        )
+        if len(entropy_rows) != expected_entropy_rows:
+            raise RuntimeError(
+                "C1 row-count invariant failed: "
+                f"{len(entropy_rows)} != {expected_entropy_rows}"
             )
-            if len(entropy_rows) != expected_rows:
-                raise RuntimeError(
-                    f"C1 row-count invariant failed: "
-                    f"{len(entropy_rows)} != {expected_rows}"
-                )
-            finite_row_count = sum(row["finite"] for row in entropy_rows)
-            finite_rows_by_series = {
-                f"k={latent_steps}.{alignment}.{role}": sum(
-                    row["finite"]
-                    for row in entropy_rows
-                    if row["latent_steps_per_agent"] == latent_steps
-                    and row["alignment"] == alignment
-                    and row["agent"] == role
-                )
-                for latent_steps in args.latent_step_values
-                for alignment in args.alignments
-                for role in LATENT_ROLES
-            }
-            empty_series = [
-                name
-                for name, count in finite_rows_by_series.items()
-                if count == 0
-            ]
-            if empty_series:
-                raise RuntimeError(
-                    "C1 produced no finite entropy observations for: "
-                    + ", ".join(empty_series)
-                )
+        entropy_keys = {
+            (
+                row["item_id"],
+                row["alignment"],
+                row["latent_steps_per_agent"],
+                row["agent"],
+                row["local_step"],
+            )
+            for row in entropy_rows
+        }
+        if len(entropy_keys) != expected_entropy_rows:
+            raise RuntimeError("C1 cache contains duplicate or missing step records.")
+        finite_row_count = sum(row["finite"] for row in entropy_rows)
+        finite_rows_by_series = {
+            f"k={latent_steps}.{alignment}.{role}": sum(
+                row["finite"]
+                for row in entropy_rows
+                if row["latent_steps_per_agent"] == latent_steps
+                and row["alignment"] == alignment
+                and row["agent"] == role
+            )
+            for latent_steps in args.latent_step_values
+            for alignment in args.alignments
+            for role in LATENT_ROLES
+        }
+        empty_series = [
+            name
+            for name, count in finite_rows_by_series.items()
+            if count == 0
+        ]
+        if empty_series:
+            raise RuntimeError(
+                "C1 produced no finite entropy observations for: "
+                + ", ".join(empty_series)
+            )
+
+        expected_accuracy_rows = (
+            len(indexed_items)
+            * len(args.alignments)
+            * len(args.latent_step_values)
+        )
+        if len(accuracy_rows) != expected_accuracy_rows:
+            raise RuntimeError(
+                "C2 row-count invariant failed: "
+                f"{len(accuracy_rows)} != {expected_accuracy_rows}"
+            )
+        accuracy_keys = {
+            (
+                row["item_id"],
+                row["alignment"],
+                row["latent_steps_per_agent"],
+            )
+            for row in accuracy_rows
+        }
+        if len(accuracy_keys) != expected_accuracy_rows:
+            raise RuntimeError("C2 cache contains duplicate or missing question records.")
+
+        if not cache_hit:
+            cache_manifest = _save_metrics_cache(
+                entropy_cache_path,
+                accuracy_cache_path,
+                cache_manifest_path,
+                entropy_rows,
+                accuracy_rows,
+                cache_identity,
+                model_info,
+            )
+
+        if args.study == "c1":
             metrics_path = run_dir / "metrics" / "c1_entropy_by_agent_step.parquet"
             summary_path = run_dir / "summaries" / "c1_summary.json"
             figure_path = run_dir / "figures" / "c1_entropy_vs_cumulative_step.pdf"
@@ -649,16 +871,6 @@ def run_mas_study(args, logger: logging.Logger | None = None):
             _plot_c1(summary, figure_path, args)
             row_count = len(entropy_rows)
         else:
-            expected_rows = (
-                len(indexed_items)
-                * len(args.alignments)
-                * len(args.latent_step_values)
-            )
-            if len(accuracy_rows) != expected_rows:
-                raise RuntimeError(
-                    f"C2 row-count invariant failed: "
-                    f"{len(accuracy_rows)} != {expected_rows}"
-                )
             metrics_path = run_dir / "metrics" / "c2_accuracy_by_question.parquet"
             summary_path = run_dir / "summaries" / "c2_summary.json"
             figure_path = run_dir / "figures" / "c2_accuracy_vs_steps.pdf"
@@ -667,18 +879,22 @@ def run_mas_study(args, logger: logging.Logger | None = None):
             _write_json(summary_path, summary)
             _plot_c2(summary, figure_path, args)
             row_count = len(accuracy_rows)
+
+        manifest["metrics_cache"].update(
+            {
+                "cache_hit": cache_hit,
+                "metrics_sha256": cache_manifest["metrics_sha256"],
+            }
+        )
         manifest.update(
             {
                 "status": "completed",
                 "completed_at": datetime.now().isoformat(timespec="seconds"),
                 "elapsed_seconds": time.time() - started,
                 "row_count": row_count,
-                "finite_row_count": (
-                    finite_row_count if args.study == "c1" else None
-                ),
-                "finite_rows_by_series": (
-                    finite_rows_by_series if args.study == "c1" else None
-                ),
+                "shared_cache_row_count": cache_manifest["row_count"],
+                "finite_row_count": finite_row_count,
+                "finite_rows_by_series": finite_rows_by_series,
                 "artifacts": {
                     "metrics": str(metrics_path),
                     "summary": str(summary_path),
