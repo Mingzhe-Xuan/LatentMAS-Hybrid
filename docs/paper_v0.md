@@ -6,16 +6,18 @@
 
 推荐的一句话中心论点：
 
-> We introduce a vocabulary-mediated soft latent interface for language-model agents and an efficient kernel approximation that preserves the behavior of full-softmax latent recurrence and communication at substantially lower online cost.
+> We introduce a vocabulary-mediated reasoning-and-communication protocol whose soft latent interface is efficiently approximated by random features, preserving full-softmax recurrent and communicative behavior at substantially lower online cost.
 
 对应中文：
 
-> 我们定义一个基于共享词表的 `soft` latent interface，并用随机特征将其核化；kernel 不仅在单步数值上逼近 full-softmax soft mapping，而且在闭环推理和跨 agent 通信中保留其行为，同时降低在线成本。
+> 我们定义一个基于共享词表的 reasoning-and-communication protocol，其核心 `soft` latent interface 由随机特征高效近似；kernel 不仅在单步数值上逼近 full-softmax soft mapping，而且在闭环推理和跨 agent 通信中保留其行为，同时降低在线成本。
 
 整篇论文的论证链固定为：
 
 ```text
-hidden spaces 不兼容，文本通信昂贵
+多步推理与多 agent 协作首先需要选择 intermediate-state protocol
+→ text、vocabulary distribution 和 hidden state 各有不同的信息—成本—兼容性权衡
+→ Latent CoT 与 Latent Communication 共享 representation-to-input alignment 问题
 → shared vocabulary 提供 source-to-target 中介
 → soft decoding 可重写为 key/value 解耦的 vocabulary attention
 → full-softmax soft mapping 定义自然但在线成本高
@@ -49,24 +51,31 @@ Latent CoT 是 $F_{A\rightarrow A}$ 在时间上的反复应用；Latent Communi
 
 ## 2. Introduction 的五段结构
 
-### 第 1 段：直接提出 representation mismatch
+### 第 1 段：从 intermediate-state protocol 引出共同问题
 
-不要从“LLM agents 近年来受到广泛关注”开始。第一段直接建立具体问题：
+不要从“LLM agents 近年来受到广泛关注”开始。第一段直接指出：任何多步语言模型系统都必须决定，如何让一次模型调用的中间计算被下一次调用消费。把 **protocol** 定义为中间状态的 encoding、transport 和 target-side injection 规则，而不仅是一种 tensor format。
 
-> Latent communication between language-model agents is difficult because a hidden state produced by one model is generally not a valid input embedding for another model.
+推荐开头：
 
-紧接着用两句话拆开应用场景：
+> Multi-step language-model systems require a protocol for making intermediate computation consumable by a subsequent model invocation. Such a protocol specifies how a source state is encoded, transported, and injected into a target input.
 
 > We study two distinct uses of the same representation interface. Latent CoT feeds a model-derived state back into the same model across reasoning steps, whereas latent communication transfers a sender state into a receiver model across an agent edge.
 
 > Both require mapping a source representation into a valid target input space, but they pose different behavioral questions: recurrent stability for Latent CoT and usable information transfer for Latent Communication.
 
-然后说明常见接口各自的限制：
+随后比较三类 protocol。正文最好使用 **vocabulary-distribution (logit-mediated)**，而不是简称 `logits`，因为本文 `soft` 传递/消费的是 logits 诱导的完整词表分布及其 expected embedding，并非未经处理的 raw-logit vector。
 
-- `identical` 要求 hidden space 相容，且没有显式词表语义中介；
-- `linear` 便宜，但没有显式保留 source token distribution；
-- text communication 可读且稳健，却需要离散生成和传输多个 token；
-- full-softmax `soft` 定义自然，但每次通信或 latent step 都遍历完整词表。
+| Protocol | Intermediate representation | 优点 | 核心局限 |
+| --- | --- | --- | --- |
+| **Text** | sampled discrete tokens | 可解释；直接落在模型原生输入分布；跨模型兼容性强 | 自回归 decoding 昂贵；sampling 丢失完整分布信息；消息通常较长 |
+| **Vocabulary-distribution / logit-mediated** | 完整 next-token distribution 或其 expected target embedding | 保留不确定性；以共享词表为语义坐标；不需要 sampling | full-softmax 计算/显存随 $V$ 增长；要求 vocabulary 对齐 |
+| **Hidden-state** | continuous activation/KV representation | 紧凑且信息丰富；绕过离散 decoding | source/target geometry、维度、尺度和 input manifold 不自动兼容；通常需要 adapter |
+
+第一段最后收束为 protocol-selection problem：
+
+> Text protocols are interoperable but discretize and serialize intermediate computation; hidden-state protocols retain continuous information but lack a shared coordinate system; vocabulary-distribution protocols offer a principled bridge between them, but incur vocabulary-sized online computation.
+
+`identical` 和 `linear` 不作为第四、第五种上位 protocol，而应视为 hidden-state protocol 下的 alignment implementations；`soft` 和 `kernel` 则属于 vocabulary-mediated protocol 的 reference 与 efficient implementation。
 
 ### 第 2 段：共享词表把 soft decoding 化为跨模型 vocabulary attention
 
@@ -217,6 +226,20 @@ $$
 #### 4.2.3 Unified alignment interface
 
 最后再统一二者：同一个 $F_{A\rightarrow B}$ 解决 source representation 到 target input space 的转换，Latent CoT 取 $B=A$，Latent Communication 允许 $B\neq A$。`identical`、`linear`、`soft` 和 `kernel` 是 interface choices，不是两个场景的名称。
+
+在这里正式定义 protocol 与 interface 的层级，防止全文交替混用：
+
+$$
+\Pi_{A\rightarrow B}
+=
+\bigl(
+\operatorname{Encode}_A,\,
+\operatorname{Transport}_{A\rightarrow B},\,
+\operatorname{Inject}_B
+\bigr),
+$$
+
+其中 $F_{A\rightarrow B}$ 是 Encode/alignment 的核心映射，Transport 规定传递 text、distribution 或 continuous vector 的方式，Inject 规定结果如何进入 target prompt、embedding sequence 或 KV state。Latent CoT 中 transport 通常是同一进程内的时间反馈；Latent Communication 中 transport 对应显式 agent edge。本文的算法创新集中在 vocabulary-mediated $F_{A\rightarrow B}$，而端到端实验评价完整 protocol。
 
 这里集中定义：
 
@@ -567,6 +590,9 @@ ICLR 2026 的 submission/camera-ready page limit 是 10 页；投稿目标年份
 
 - 标题和摘要只有一个中心 claim；
 - Introduction 在第一页明确 representation mismatch；
+- Introduction 第一段定义 intermediate-state protocol，并比较 text、vocabulary-distribution 与 hidden-state 三类选择；
+- `logits` 仅作为 logit-mediated 的便捷称呼，正式表述使用 vocabulary distribution/expected embedding；
+- 明确 protocol 包含 encode、transport、inject，而 $F_{A\rightarrow B}$ 是其中的 alignment interface；
 - Introduction 和 Problem Formulation 分别定义 Latent CoT 与 Latent Communication；
 - Latent CoT 写成 $F_{A\rightarrow A}$ 的时间递推，Latent Communication 写成 $F_{A\rightarrow B}$ 的 agent-edge transfer；
 - 不用“latent communication”指代模型内部 recurrence，也不用“Latent CoT”指代跨 agent message；
