@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Plan-v4 C0: entropy across a single-model latent recurrence."""
+"""Latent-CoT C0 and sequential LatentMAS C1/C2 experiments."""
 
 from __future__ import annotations
 
@@ -46,16 +46,30 @@ TRAJECTORY_DIR = ROOT / "exp" / "cache" / "trajectories"
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--study", choices=["c0"], default="c0")
-    parser.add_argument("--model_name", default="Qwen/Qwen3-4B")
+    parser.add_argument("--study", choices=["c0", "c1", "c2"], default="c0")
+    parser.add_argument("--model_name", default=None)
     parser.add_argument(
         "--dataset",
         choices=["all", "gsm8k", "mbppplus", "arc_challenge", "aime2025"],
-        default="all",
+        default=None,
     )
     parser.add_argument("--split", default="test")
-    parser.add_argument("--max_questions", type=int, default=512)
+    parser.add_argument("--max_questions", type=int, default=None)
     parser.add_argument("--latent_steps", type=int, default=150)
+    parser.add_argument(
+        "--latent_step_values",
+        type=int,
+        nargs="+",
+        default=[20, 40, 60, 80, 100, 120, 140, 160, 180],
+    )
+    parser.add_argument(
+        "--alignments",
+        nargs="+",
+        choices=["identical", "linear", "soft", "kernel"],
+        default=["identical", "linear", "soft", "kernel"],
+    )
+    parser.add_argument("--max_new_tokens", type=int, default=4096)
+    parser.add_argument("--generation_seed", type=int, default=77)
     parser.add_argument("--probe_seed", type=int, default=42)
     parser.add_argument("--bootstrap_replicates", type=int, default=1000)
     parser.add_argument("--entropy_chunk_size", type=int, default=8)
@@ -74,6 +88,22 @@ def parse_args(argv=None):
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--trust_remote_code", action="store_true")
     args = parser.parse_args(argv)
+    if args.model_name is None:
+        args.model_name = (
+            "Qwen/Qwen3-4B" if args.study == "c0" else "Qwen/Qwen3-8B"
+        )
+    if args.dataset is None:
+        args.dataset = "all" if args.study == "c0" else "mbppplus"
+    if args.max_questions is None:
+        args.max_questions = 512 if args.study == "c0" else 30
+    if len(set(args.latent_step_values)) != len(args.latent_step_values):
+        parser.error("--latent_step_values must not contain duplicates")
+    if any(value < 1 for value in args.latent_step_values):
+        parser.error("--latent_step_values must contain positive integers")
+    if args.study in {"c1", "c2"} and args.dataset != "mbppplus":
+        parser.error("C1/C2 currently require --dataset mbppplus")
+    if args.max_new_tokens < 1:
+        parser.error("--max_new_tokens must be positive")
     if args.reuse_trajectory and args.force_recollect:
         parser.error("--reuse_trajectory and --force_recollect are mutually exclusive")
     if args.max_questions < 1 or args.latent_steps < 1:
@@ -682,6 +712,10 @@ def main(argv=None):
     args = parse_args(argv)
     logger = configure_logger()
     set_seed(args.probe_seed)
+    if args.study in {"c1", "c2"}:
+        from mas_analysis import run_mas_study
+
+        return run_mas_study(args, logger)
     run_dir = create_run_dir(args)
     run_manifest_path = run_dir / "run_manifest.json"
     started = time.time()

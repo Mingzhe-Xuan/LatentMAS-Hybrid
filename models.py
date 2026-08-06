@@ -3,7 +3,7 @@ import csv
 import time
 import torch
 import matplotlib.pyplot as plt
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 from transformers import AutoModelForCausalLM, AutoTokenizer, LogitsProcessorList
 from alignment import (
     AlignmentState,
@@ -380,19 +380,23 @@ class ModelWrapper:
         _sync_cuda(self.device)
         started_at = time.perf_counter()
         phase_timer = _FirstTokenTimer(self.device, started_at)
+        do_sample = temperature > 0
+        generation_kwargs = {
+            "temperature": temperature,
+            "top_p": top_p,
+        } if do_sample else {}
         outputs = self.model.generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
             max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            do_sample=True,
+            do_sample=do_sample,
             pad_token_id=self.tokenizer.pad_token_id,
             return_dict_in_generate=True,
             output_scores=False,
             logits_processor=LogitsProcessorList([phase_timer]),
             past_key_values=past_key_values,
             cache_position=cache_position,
+            **generation_kwargs,
         )
         _sync_cuda(self.device)
         finished_at = time.perf_counter()
@@ -485,6 +489,7 @@ class ModelWrapper:
         *,
         latent_steps: int,
         past_key_values: Optional[Tuple] = None,
+        step_observer: Optional[Callable[[int, torch.Tensor], None]] = None,
     ) -> Tuple:
         if input_ids.dim() != 2:
             raise ValueError("input_ids must be 2D with shape [batch, seq_len]")
@@ -543,6 +548,8 @@ class ModelWrapper:
             )
             past = outputs.past_key_values
             last_hidden = outputs.hidden_states[-1][:, -1, :]
+            if step_observer is not None:
+                step_observer(step + 1, last_hidden)
         _sync_cuda(self.device)
         latent_decode_seconds = time.perf_counter() - latent_started_at
         self.last_latent_metrics = {

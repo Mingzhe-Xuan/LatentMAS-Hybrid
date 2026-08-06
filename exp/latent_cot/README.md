@@ -63,3 +63,59 @@ Each invocation writes under `exp_result/latent_cot/runs/`:
 - `run_manifest.json`: parameters, cache provenance and failure counts.
 
 Progress is appended to `exp_state.txt` in the invocation working directory.
+
+## C1: sequential MAS entropy by agent
+
+C1 reuses the active root `methods/latent_mas.py` sequential organization. A
+single Qwen3-8B instance serves as Planner, Critic, Refiner, and Judger. Planner,
+Critic, and Refiner each perform the same K latent steps while retaining the
+complete accumulated prompt and latent KV cache. C1 stops before Judger text
+generation and records the post-feedback hidden state entropy at every local
+step. The cumulative index is Planner `t`, Critic `K+t`, and Refiner
+`2K+t`.
+
+The MBPP+ subset is the dataset-order prefix of 30 questions (not a shuffled
+sample). Colors identify `identical / linear / soft / kernel`; line styles
+identify the three latent roles.
+
+```bash
+python exp/latent_cot/run.py \
+  --study c1 \
+  --model_name Qwen/Qwen3-8B \
+  --dataset mbppplus --split test --max_questions 30 \
+  --latent_step_values 20 40 60 80 100 120 140 160 180 \
+  --alignments identical linear soft kernel \
+  --device cuda
+```
+
+C1 writes `c1_entropy_by_agent_step.parquet`, `c1_summary.json`, and
+`c1_entropy_vs_cumulative_step.pdf` in its run-local metrics, summaries, and
+figures directories.
+
+## C2: sequential MAS accuracy by per-agent latent steps
+
+C2 uses the same data, role prompts, alignments, K grid, and full sequential KV
+retention. After the three latent roles each run K steps, Judger performs greedy
+text decoding. MBPP+ correctness uses the repository Markdown Python extraction
+and timeout-based test execution.
+
+```bash
+python exp/latent_cot/run.py \
+  --study c2 \
+  --model_name Qwen/Qwen3-8B \
+  --dataset mbppplus --split test --max_questions 30 \
+  --latent_step_values 20 40 60 80 100 120 140 160 180 \
+  --alignments identical linear soft kernel \
+  --max_new_tokens 4096 --device cuda
+```
+
+C2 writes `c2_accuracy_by_question.parquet`, `c2_summary.json`, and
+`c2_accuracy_vs_steps.pdf`. Each point reports both accuracy and the raw
+`correct/30` count with a question-bootstrap 95% interval.
+
+PBS examples:
+
+```bash
+qsub -v "EXP_TARGET=latent_cot,STUDY=c1" exp.sh
+qsub -v "EXP_TARGET=latent_cot,STUDY=c2" exp.sh
+```

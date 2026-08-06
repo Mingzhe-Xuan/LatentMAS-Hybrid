@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from . import default_agents
 from models import ModelWrapper, _past_length, _sync_cuda, _vllm_phase_split
@@ -29,6 +29,10 @@ class LatentMASMethod:
         top_p: float = 0.95,
         generate_bs: int = 1,
         args: argparse.Namespace = None,
+        latent_step_observer: Optional[
+            Callable[[str, int, torch.Tensor], None]
+        ] = None,
+        latent_roles_only: bool = False,
     ) -> None:
         self.args = args
         self.model = model
@@ -54,6 +58,8 @@ class LatentMASMethod:
                 max_tokens=args.max_new_tokens,
             )
         self.task = args.task
+        self.latent_step_observer = latent_step_observer
+        self.latent_roles_only = bool(latent_roles_only)
 
     @staticmethod
     def _slice_tensor(tensor: torch.Tensor, tokens_to_keep: int) -> torch.Tensor:
@@ -137,11 +143,18 @@ class LatentMASMethod:
                     active_ids = ids_row[mask_row.bool()].tolist()
                     wrapped_tokens_batch.append(self.model.tokenizer.convert_ids_to_tokens(active_ids))
 
+                step_observer = None
+                if self.latent_step_observer is not None:
+                    step_observer = (
+                        lambda step, hidden, role=agent.role:
+                        self.latent_step_observer(role, step, hidden)
+                    )
                 past_kv = self.model.generate_latent_batch(
                     wrapped_ids,
                     attention_mask=wrapped_mask,
                     latent_steps=self.latent_steps,
                     past_key_values=past_kv,
+                    step_observer=step_observer,
                 )
                 latent_metrics = self.model.last_latent_metrics
                 if self.sequential_info_only or self.latent_only:
@@ -180,6 +193,8 @@ class LatentMASMethod:
                     else:
                         cached_text_tokens[idx] = total_text_tokens
             else:
+                if self.latent_roles_only:
+                    break
 
                 past_for_decoding = past_kv if self.latent_steps > 0 else None
                 role_kv_input_tokens = _past_length(past_for_decoding)
@@ -234,6 +249,21 @@ class LatentMASMethod:
                         }
                     )
 
+        if self.latent_roles_only:
+            return [
+                {
+                    "question": item["question"],
+                    "gold": item.get("gold", ""),
+                    "solution": item.get("solution", ""),
+                    "prediction": None,
+                    "raw_prediction": "",
+                    "agents": agent_traces[idx],
+                    "correct": False,
+                    "error": None,
+                }
+                for idx, item in enumerate(items)
+            ]
+
         results: List[Dict] = []
         for idx, item in enumerate(items):
             final_text = final_texts[idx]
@@ -284,6 +314,7 @@ class LatentMASMethod:
                     "raw_prediction": final_text,
                     "agents": agent_traces[idx],
                     "correct": ok,
+                    "error": error_msg,
                 }
             )
         return results

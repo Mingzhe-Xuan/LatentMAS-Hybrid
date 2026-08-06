@@ -118,10 +118,23 @@ case "${EXP_TARGET}" in
         ;;
     latent_cot)
         STUDY="${STUDY:-c0}"; MODEL_PAIR="${MODEL_PAIR:-c0}"
-        DATASET="${DATASET:-all}"; SPLIT="${SPLIT:-test}"
-        MAX_QUESTIONS="${MAX_QUESTIONS:-50}"; MODEL_NAME="${MODEL_NAME:-Qwen/Qwen3-4B}"
-        LATENT_STEPS="${LATENT_STEPS:-150}"; ENTRY="exp/latent_cot/run.py"
-        ARGS=(--study "${STUDY}" --model_name "${MODEL_NAME}" --dataset "${DATASET}" --split "${SPLIT}" --probe_seed "${PROBE_SEED}" --max_questions "${MAX_QUESTIONS}" --latent_steps "${LATENT_STEPS}" --kernel_features "${M}" --kernel_temperature "${TAU}" --kernel_seed "${ORF_SEED}" --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" --align_ridge "${ALIGN_RIDGE}" --device "${DEVICE}")
+        SPLIT="${SPLIT:-test}"; LATENT_STEPS="${LATENT_STEPS:-150}"
+        ENTRY="exp/latent_cot/run.py"
+        if [[ "${STUDY}" == "c1" || "${STUDY}" == "c2" ]]; then
+            DATASET="${DATASET:-mbppplus}"
+            MAX_QUESTIONS="${MAX_QUESTIONS:-30}"
+            MODEL_NAME="${MODEL_NAME:-Qwen/Qwen3-8B}"
+            LATENT_STEP_VALUES="${LATENT_STEP_VALUES:-20 40 60 80 100 120 140 160 180}"
+            ALIGNMENTS="${ALIGNMENTS:-identical linear soft kernel}"
+            read -r -a LATENT_STEP_ARRAY <<< "${LATENT_STEP_VALUES}"
+            read -r -a ALIGNMENT_ARRAY <<< "${ALIGNMENTS}"
+            ARGS=(--study "${STUDY}" --model_name "${MODEL_NAME}" --dataset "${DATASET}" --split "${SPLIT}" --probe_seed "${PROBE_SEED}" --generation_seed "${GENERATION_SEED}" --max_questions "${MAX_QUESTIONS}" --latent_step_values "${LATENT_STEP_ARRAY[@]}" --alignments "${ALIGNMENT_ARRAY[@]}" --max_new_tokens "${LATENT_COT_MAX_NEW_TOKENS:-4096}" --kernel_features "${M}" --kernel_temperature "${TAU}" --kernel_seed "${ORF_SEED}" --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" --align_ridge "${ALIGN_RIDGE}" --device "${DEVICE}")
+        else
+            DATASET="${DATASET:-all}"
+            MAX_QUESTIONS="${MAX_QUESTIONS:-50}"
+            MODEL_NAME="${MODEL_NAME:-Qwen/Qwen3-4B}"
+            ARGS=(--study "${STUDY}" --model_name "${MODEL_NAME}" --dataset "${DATASET}" --split "${SPLIT}" --probe_seed "${PROBE_SEED}" --max_questions "${MAX_QUESTIONS}" --latent_steps "${LATENT_STEPS}" --kernel_features "${M}" --kernel_temperature "${TAU}" --kernel_seed "${ORF_SEED}" --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" --align_ridge "${ALIGN_RIDGE}" --device "${DEVICE}")
+        fi
         ;;
     latent_comm)
         STUDY="${STUDY:-m0}"; MODEL_PAIR="${MODEL_PAIR:-x1}"

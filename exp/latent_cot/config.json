@@ -13,5 +13,24 @@
   "kernel_seed": 101,
   "kernel_chunk_size": 4096,
   "soft_chunk_size": 32,
-  "align_ridge": 1e-5
+  "align_ridge": 1e-05,
+  "latent_step_values": [
+    20,
+    40,
+    60,
+    80,
+    100,
+    120,
+    140,
+    160,
+    180
+  ],
+  "alignments": [
+    "identical",
+    "linear",
+    "soft",
+    "kernel"
+  ],
+  "max_new_tokens": 4096,
+  "generation_seed": 77
 }

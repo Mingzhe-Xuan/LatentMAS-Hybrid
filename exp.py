@@ -152,12 +152,27 @@ def build_command(
     elif target == "latent_cot":
         study = resolve("study", "STUDY", "c0")
         model_pair = resolve("model_pair", "MODEL_PAIR", "c0")
-        model_name = resolve("model_name", "MODEL_NAME", "Qwen/Qwen3-4B")
-        dataset = resolve("dataset", "DATASET", "all")
+        mas_study = study in {"c1", "c2"}
+        model_name = resolve(
+            "model_name", "MODEL_NAME",
+            "Qwen/Qwen3-8B" if mas_study else "Qwen/Qwen3-4B",
+        )
+        dataset = resolve(
+            "dataset", "DATASET", "mbppplus" if mas_study else "all"
+        )
         split = resolve("split", "SPLIT", "test")
         method = resolve("method", "METHOD")
-        max_questions = resolve("max_questions", "MAX_QUESTIONS", "50")
+        max_questions = resolve(
+            "max_questions", "MAX_QUESTIONS", "30" if mas_study else "50"
+        )
         latent_steps = resolve("latent_steps", "LATENT_STEPS", "150")
+        latent_step_values = shlex.split(
+            source_env.get("LATENT_STEP_VALUES")
+            or "20 40 60 80 100 120 140 160 180"
+        )
+        alignments = shlex.split(
+            source_env.get("ALIGNMENTS") or "identical linear soft kernel"
+        )
         entry = "exp/latent_cot/run.py"
         args = [
             "--study", study,
@@ -169,7 +184,21 @@ def build_command(
             "--latent_steps", latent_steps,
             "--device", device,
         ]
-        model_summary = model_pair
+        if mas_study:
+            mas_reply_tokens = (
+                source_env.get("LATENT_COT_MAX_NEW_TOKENS")
+                or source_env.get("MAX_REPLY_TOKENS")
+                or "4096"
+            )
+            args.extend(["--latent_step_values", *latent_step_values])
+            args.extend(["--alignments", *alignments])
+            args.extend(
+                [
+                    "--max_new_tokens", mas_reply_tokens,
+                    "--generation_seed", generation_seed,
+                ]
+            )
+        model_summary = model_name
     else:
         study = resolve("study", "STUDY", "m0")
         model_pair = resolve("model_pair", "MODEL_PAIR", "x1")
@@ -217,7 +246,11 @@ def build_command(
         "m": m,
         "tau": tau,
         "orf_seed": orf_seed,
-        "latent_steps": latent_steps,
+        "latent_steps": (
+            " ".join(latent_step_values)
+            if target == "latent_cot" and study in {"c1", "c2"}
+            else latent_steps
+        ),
         "entry": entry,
         "max_questions": max_questions,
     }
@@ -232,7 +265,11 @@ def _print_summary(summary: Mapping[str, str]) -> None:
     print("=" * 72)
     print(f"PBS job       : {_env('PBS_JOBID', 'interactive')}")
     print(f"Target/study  : {summary['target']}/{summary['study']}")
-    label = "Agent models" if summary["target"] == "approximator" else "Model pair"
+    label = (
+        "Agent models"
+        if summary["target"] == "approximator"
+        else "Model" if summary["target"] == "latent_cot" else "Model pair"
+    )
     print(f"{label:<14}: {summary['model']}")
     print(f"Dataset/split : {summary['dataset']}/{summary['split']}")
     print(f"Method        : {summary['method']}")
