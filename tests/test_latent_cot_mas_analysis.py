@@ -131,9 +131,35 @@ class MasStudyDefinitionTests(unittest.TestCase):
         model_source = MODEL_SOURCE.read_text(encoding="utf-8")
         method_source = METHOD_SOURCE.read_text(encoding="utf-8")
         self.assertIn("step_observer: Optional[Callable", model_source)
-        self.assertIn("step_observer(step + 1, last_hidden)", model_source)
         self.assertIn("latent_step_observer", method_source)
         self.assertIn("latent_roles_only: bool = False", method_source)
+
+    def test_observer_loop_defines_the_step_it_reports(self):
+        tree = ast.parse(MODEL_SOURCE.read_text(encoding="utf-8"))
+        function = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "generate_latent_batch"
+        )
+        observer_loop = next(
+            node
+            for node in ast.walk(function)
+            if isinstance(node, ast.For)
+            and any(
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Name)
+                and child.func.id == "step_observer"
+                for child in ast.walk(node)
+            )
+        )
+        self.assertIsInstance(observer_loop.target, ast.Name)
+        self.assertEqual(observer_loop.target.id, "step")
+
+    def test_c1_rejects_an_all_failed_entropy_run(self):
+        source = MAS_SOURCE.read_text(encoding="utf-8")
+        self.assertIn("if empty_series:", source)
+        self.assertIn("C1 produced no finite entropy observations for:", source)
 
     def test_greedy_temperature_zero_is_supported(self):
         source = MODEL_SOURCE.read_text(encoding="utf-8")

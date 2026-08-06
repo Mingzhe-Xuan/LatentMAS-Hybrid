@@ -526,7 +526,7 @@ class ModelWrapper:
 
         alignment_timer = _AlignmentTimer(self.device)
         latent_started_at = time.perf_counter()
-        for _ in range(latent_steps):
+        for step in range(latent_steps):
             source_model = self.HF_model if hasattr(self, "HF_model") else self.model
             latent_vec = alignment_timer.measure(
                 lambda: self._apply_latent_realignment(last_hidden, source_model)

@@ -617,6 +617,29 @@ def run_mas_study(args, logger: logging.Logger | None = None):
                     f"C1 row-count invariant failed: "
                     f"{len(entropy_rows)} != {expected_rows}"
                 )
+            finite_row_count = sum(row["finite"] for row in entropy_rows)
+            finite_rows_by_series = {
+                f"k={latent_steps}.{alignment}.{role}": sum(
+                    row["finite"]
+                    for row in entropy_rows
+                    if row["latent_steps_per_agent"] == latent_steps
+                    and row["alignment"] == alignment
+                    and row["agent"] == role
+                )
+                for latent_steps in args.latent_step_values
+                for alignment in args.alignments
+                for role in LATENT_ROLES
+            }
+            empty_series = [
+                name
+                for name, count in finite_rows_by_series.items()
+                if count == 0
+            ]
+            if empty_series:
+                raise RuntimeError(
+                    "C1 produced no finite entropy observations for: "
+                    + ", ".join(empty_series)
+                )
             metrics_path = run_dir / "metrics" / "c1_entropy_by_agent_step.parquet"
             summary_path = run_dir / "summaries" / "c1_summary.json"
             figure_path = run_dir / "figures" / "c1_entropy_vs_cumulative_step.pdf"
@@ -650,6 +673,12 @@ def run_mas_study(args, logger: logging.Logger | None = None):
                 "completed_at": datetime.now().isoformat(timespec="seconds"),
                 "elapsed_seconds": time.time() - started,
                 "row_count": row_count,
+                "finite_row_count": (
+                    finite_row_count if args.study == "c1" else None
+                ),
+                "finite_rows_by_series": (
+                    finite_rows_by_series if args.study == "c1" else None
+                ),
                 "artifacts": {
                     "metrics": str(metrics_path),
                     "summary": str(summary_path),
