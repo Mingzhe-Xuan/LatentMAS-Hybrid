@@ -271,43 +271,255 @@ Related Work 的关键任务是解释：随机特征本身并不新，本文的�
 
 ### 4.3 Kernelized Soft Latent Interface
 
-约 2 页，严格按照以下顺序：
+建议扩展到约 2.5--3 页。增加篇幅应来自定义、推导、算法和性质，而不是把实验配置或通用背景移入 Method。推荐按以下六个小节展开。
 
-1. 用统一的 $F_{A\rightarrow B}$ 定义 full-softmax `soft` reference；
-2. decoding-as-vocabulary-attention correspondence；
-3. sender-key/receiver-value decoupling；
-4. numerator/denominator reformulation；
-5. positive random features 与 block-ORF；
-6. receiver-side value preaggregation；
-7. online algorithm；
-8. numerical stabilization；
-9. 分别说明 $F_{A\rightarrow A}$ 的 Latent CoT 用法与 $F_{A\rightarrow B}$ 的 communication 用法；
-10. complexity comparison。
+#### 4.3.1 Protocol instantiation and full-softmax reference
 
-方法章节可以共享公式和算法，但不要共享场景描述。推荐统一使用：
+先说明完整 protocol $\Pi_{A\rightarrow B}$ 如何实例化，再把算法焦点收缩到 alignment interface $F_{A\rightarrow B}$。对 sender state $h\in\mathcal H_A$，定义
+
+$$
+p_A(i\mid h)
+=
+\frac{
+\exp\!\left((w_{A,i}^{\top}h+b_{A,i})/\tau\right)
+}{
+\sum_{j=1}^{V}
+\exp\!\left((w_{A,j}^{\top}h+b_{A,j})/\tau\right)
+},
+$$
+
+以及 full-softmax reference
+
+$$
+F^{\mathrm{soft}}_{A\rightarrow B}(h)
+=
+\sum_{i=1}^{V}p_A(i\mid h)e_{B,i}.
+$$
+
+这里 $w_{A,i}$ 是 sender 的 output representation，$e_{B,i}$ 是 receiver 的 input embedding。需要明确解释：
+
+- 为什么 values 取 receiver embeddings，而不是把 sender hidden state 直接输入 receiver；
+- 为什么 `soft` 消费的是完整 vocabulary distribution，而不是 raw logits；
+- temperature、output bias、tied/untied embeddings 如何进入定义；
+- token-to-ID vocabulary compatibility 是第一版方法的适用条件；
+- $F_{A\rightarrow A}$ 实例化 Latent CoT，$F_{A\rightarrow B}$ 实例化 Latent Communication。
+
+方法章节可以共享公式和算法，但不要共享场景描述。固定使用：
 
 - **latent state / latent step / recurrence** 描述 Latent CoT；
 - **latent message / sender / receiver / edge** 描述 Latent Communication；
-- **interface / alignment method** 仅描述 `identical`、`linear`、`soft`、`kernel`。
+- **interface / alignment method** 描述 `identical`、`linear`、`soft`、`kernel`。
 
-建议给出复杂度表：
+#### 4.3.2 Decoding as key--value-decoupled vocabulary attention
 
-| 方法 | 离线成本 | 每 query 在线成本 | 在线 vocabulary-sized tensor |
-| --- | ---: | ---: | --- |
-| soft | 无 | $O(V(d_A+d_B))$ | 是 |
-| linear | 拟合矩阵 | $O(d_Ad_B)$ | 否 |
-| kernel | 一次词表预聚合 | $O(m(d_A+d_B))$ | 否 |
-
-不要直接声称归一化后的 ratio estimator 无偏。单个 exponential-kernel estimator 的性质与最终 ratio mapping 的性质应严格区分。
-
-如果理论工作量允许，增加一个简洁的误差分解：在 denominator 有下界时，$\|\hat F-F\|$ 如何由 numerator error 和 denominator error 控制。还可以用
+忽略 bias 以简化记号，令
 
 $$
-\|h_{t+1}^{K}-h_{t+1}^{S}\|
-\le L_t\|h_t^{K}-h_t^{S}\|+\epsilon_t
+q=\frac{h}{\sqrt{\tau}},\qquad
+k_i=\frac{w_{A,i}}{\sqrt{\tau}},\qquad
+v_i=e_{B,i}.
 $$
 
-解释为什么静态 S1 不能替代闭环 C2；不必在无法验证假设时把它包装成强收敛定理。
+则
+
+$$
+F^{\mathrm{soft}}_{A\rightarrow B}(h)
+=
+\frac{
+\sum_i\exp(q^\top k_i)v_i
+}{
+\sum_i\exp(q^\top k_i)
+}
+=
+\operatorname{Attn}(q,K_A,V_B).
+$$
+
+本节重点不是再次介绍 attention，而是突出 key/value 解耦：
+
+$$
+K_A=W_{\mathrm{out}}^A,
+\qquad
+V_B=W_{\mathrm{in}}^B.
+$$
+
+普通同模型 vocabulary attention 常取 $K=V=W$；本文由 sender 提供 vocabulary keys，由 receiver 提供 values，使 attention output 原生位于 receiver input space。建议用一张小图展示：
+
+```text
+sender hidden --query--> sender vocabulary keys
+                           |
+                    attention weights
+                           |
+receiver vocabulary values +--> receiver-compatible embedding
+```
+
+#### 4.3.3 Random-feature factorization and preaggregation
+
+从 exponential dot-product kernel 开始：
+
+$$
+\exp(q^\top k)
+\approx
+\phi(q)^\top\phi(k),
+$$
+
+其中 $\phi:\mathbb R^{d_A}\rightarrow\mathbb R^m_+$ 使用 positive orthogonal random features。分别重排 numerator 和 denominator：
+
+$$
+\sum_i
+\phi(q)^\top\phi(k_i)v_i^\top
+=
+\phi(q)^\top
+\left(
+\sum_i\phi(k_i)v_i^\top
+\right),
+$$
+
+$$
+\sum_i\phi(q)^\top\phi(k_i)
+=
+\phi(q)^\top
+\left(
+\sum_i\phi(k_i)
+\right).
+$$
+
+若包含 output bias，定义固定权重
+
+$$
+r_i=\exp(b_{A,i}/\tau),
+$$
+
+并预聚合
+
+$$
+S_{A\rightarrow B}
+=
+\sum_i r_i\phi(k_i)v_i^\top,
+\qquad
+z_A
+=
+\sum_i r_i\phi(k_i).
+$$
+
+在线映射为
+
+$$
+F^{\mathrm{kernel}}_{A\rightarrow B}(h)
+=
+\frac{
+\phi(q)^\top S_{A\rightarrow B}
+}{
+\phi(q)^\top z_A
+}.
+$$
+
+这一节应明确：$S_{A\rightarrow B}$ 依赖 model pair，$z_A$ 只依赖 sender；二者还依赖 temperature、feature map 与 ORF seed。说明哪些 cache 能跨 task、prompt、latent step 和 agent edge 复用。
+
+将算法显式拆成两个阶段，并给出 Algorithm 1：
+
+```text
+Offline(model pair A→B, temperature τ, ORF seed):
+  construct vocabulary keys K_A and receiver values V_B
+  compute random features Φ(K_A)
+  aggregate S_{A→B} and z_A
+  cache the aggregates
+
+Online(query state h):
+  compute query feature φ(q)
+  evaluate numerator φ(q)^T S_{A→B}
+  evaluate denominator φ(q)^T z_A
+  normalize and inject the receiver-compatible embedding
+```
+
+#### 4.3.4 Complexity and break-even analysis
+
+复杂度表同时报告离线成本、在线时间、在线工作内存和传递对象：
+
+| 方法 | 离线成本 | 每 query 在线成本 | 额外在线工作内存 | protocol object |
+| --- | ---: | ---: | ---: | --- |
+| text | 无 | autoregressive decoding | KV-dependent | token sequence |
+| identical | 无 | $O(d_A)$ | $O(d_A)$ | hidden vector |
+| linear | adapter fitting | $O(d_Ad_B)$ | $O(d_B)$ | aligned vector |
+| soft | 无 | $O(V(d_A+d_B))$ | vocabulary-sized | distribution/embedding |
+| kernel | $O(Vm(d_A+d_B))$ | $O(m(d_A+d_B))$ | $O(md_B)$ cache | embedding |
+
+注意区分模型参数本身占用与算法新增的 working memory。进一步定义包含预计算的 break-even query count：
+
+$$
+N_{\mathrm{break}}
+=
+\frac{
+C_{\mathrm{offline}}
+}{
+C_{\mathrm{soft,online}}
+-
+C_{\mathrm{kernel,online}}
+}.
+$$
+
+这里不把 Big-O 直接等同于实际 speedup；实际 latency、memory 和 break-even point 由 E0 测量。
+
+#### 4.3.5 Approximation and closed-loop error
+
+令 soft mapping 与 kernel mapping 分别写为
+
+$$
+F=\frac{N}{D},
+\qquad
+\hat F=\frac{\hat N}{\hat D}.
+$$
+
+当 $D,\hat D\ge\delta>0$ 时，可以给出简洁的 ratio-error decomposition：
+
+$$
+\left\|
+\frac{\hat N}{\hat D}
+-
+\frac{N}{D}
+\right\|
+\le
+\frac{\|\hat N-N\|}{\delta}
++
+\frac{\|N\|\,|\hat D-D|}{\delta^2}.
+$$
+
+它解释 numerator error、denominator error 与小 denominator 如何共同影响最终 mapping。不要直接声称归一化后的 ratio estimator 无偏；单个 exponential-kernel estimator 的性质与最终 normalized mapping 的性质必须区分。
+
+随后连接闭环行为。若 $\Delta_t$ 表示 soft/kernel trajectory 在 step $t$ 的差异，$\epsilon_t$ 表示当前 mapping error，则可用
+
+$$
+\Delta_{t+1}
+\le
+L_t\Delta_t+\epsilon_t
+$$
+
+以及展开式
+
+$$
+\Delta_T
+\le
+\sum_{t=0}^{T-1}
+\left(
+\prod_{j=t+1}^{T-1}L_j
+\right)\epsilon_t
+$$
+
+解释为什么单步误差很小仍不保证 100-step recurrence 一致。这里将 $L_t$ 解释为 receiver transition 的局部敏感性，不在无法验证收缩条件时将其包装成全局收敛定理。这一分析直接支持 C2 的 divergence--step 实验。
+
+#### 4.3.6 Numerical implementation and protocol injection
+
+最后用约 0.25--0.4 页交代可复现且会影响结果的实现细节：
+
+- positive feature map 与 block-ORF 的构造；
+- query/key 的 temperature scaling；
+- feature normalization 和 exponent stabilization；
+- denominator clamp、NaN/Inf detection 与失败计数；
+- FP32 accumulation、mixed precision 和 cache dtype；
+- feature count $m$、ORF seed 与 cache layout；
+- Latent CoT 如何把结果作为下一 latent step 输入；
+- Latent Communication 如何把 message 注入 sequential/hierarchical receiver。
+
+不要把这部分写成代码参数列表。正文只保留影响数值正确性和 protocol 语义的选择，其余配置放附录。
 
 ### 4.4 Experimental Setup
 
@@ -573,11 +785,11 @@ ICLR 2026 的 submission/camera-ready page limit 是 10 页；投稿目标年份
 
 | 部分 | 建议页数 |
 | --- | ---: |
-| Introduction | 1.25 |
-| Problem + Related Work | 1.25 |
-| Method | 2.0 |
-| Setup | 0.75 |
-| Results | 3.5--4.0 |
+| Introduction | 1.0--1.25 |
+| Problem + Related Work | 1.0--1.25 |
+| Method | 2.5--3.0 |
+| Setup | 0.5--0.75 |
+| Results | 3.0--3.5 |
 | Discussion + Limitations + Conclusion | 0.75--1.0 |
 
 准备简洁的 Reproducibility Statement，指向匿名代码、配置、数据处理、seed、失败记录和附录。官方 Author Guide 也明确鼓励说明复现材料：
