@@ -75,8 +75,13 @@ Judger, so the same rollout also supplies C2 accuracy. The cumulative index is
 Planner `t`, Critic `K+t`, and Refiner `2K+t`.
 
 The MBPP+ subset is the dataset-order prefix of 30 questions (not a shuffled
-sample). Colors identify `identical / linear / soft / kernel`; line styles
-identify the three latent roles.
+sample). Colors identify `identical / linear / soft / kernel / text`; line styles
+identify the three latent roles. In these sequential MAS studies, `text` is a
+fixed-step greedy hard-token control: each latent role projects its current
+hidden state through the output head, takes the argmax token, and feeds that
+token back through the ordinary input embedding at the next step. It does not
+add free-form intermediate text generation; only Judger performs variable-length
+text generation.
 
 ```bash
 python exp/latent_cot/run.py \
@@ -84,7 +89,7 @@ python exp/latent_cot/run.py \
   --model_name Qwen/Qwen3-8B \
   --dataset mbppplus --split test --max_questions 30 \
   --latent_step_values 20 40 60 80 100 120 140 160 180 \
-  --alignments identical linear soft kernel \
+  --alignments identical linear soft kernel text \
   --device cuda
 ```
 
@@ -105,7 +110,7 @@ python exp/latent_cot/run.py \
   --model_name Qwen/Qwen3-8B \
   --dataset mbppplus --split test --max_questions 30 \
   --latent_step_values 20 40 60 80 100 120 140 160 180 \
-  --alignments identical linear soft kernel \
+  --alignments identical linear soft kernel text \
   --max_new_tokens 4096 --device cuda
 ```
 
@@ -129,7 +134,7 @@ python exp/latent_cot/run.py \
   --model_name Qwen/Qwen3-8B \
   --dataset mbppplus --split test --max_questions 30 \
   --latent_step_values 20 40 60 80 100 120 140 160 180 \
-  --alignments identical linear soft kernel \
+  --alignments identical linear soft kernel text \
   --max_new_tokens 4096 --device cuda
 ```
 
@@ -159,7 +164,9 @@ compatible cache exists), or `--force_recollect` to ignore and replace the
 cache. Plot-only settings such as `--bootstrap_replicates` and `--probe_seed`
 do not invalidate cached rollout data, so they can be changed when redrawing.
 The run manifest records the cache path, integrity hash, and whether it was a
-cache hit.
+cache hit. Because the alignment list is part of the cache identity, adding the
+`text` control creates a new five-alignment cache; an older four-alignment
+C1/C2/C3 cache is intentionally not reused.
 
 PBS examples:
 

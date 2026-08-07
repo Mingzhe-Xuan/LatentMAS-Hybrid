@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[2]
 RUNS_DIR = ROOT / "exp_result" / "latent_cot" / "runs"
 CACHE_DIR = ROOT / "exp" / "cache" / "latent_cot_mas"
 CACHE_SCHEMA_VERSION = 2
-MAS_ALIGNMENTS = ("identical", "linear", "soft", "kernel")
+MAS_ALIGNMENTS = ("identical", "linear", "soft", "kernel", "text")
 LATENT_ROLES = ("planner", "critic", "refiner")
 ROLE_INDEX = {role: index for index, role in enumerate(LATENT_ROLES)}
 COLORS = {
@@ -36,6 +36,7 @@ COLORS = {
     "linear": "#f58518",
     "soft": "#b279a2",
     "kernel": "#54a24b",
+    "text": "#e45756",
 }
 LINESTYLES = {"planner": "-", "critic": "--", "refiner": ":"}
 
@@ -540,7 +541,7 @@ def _plot_c1(summary, path: Path, args):
         axis.grid(alpha=0.2)
     flat[0].set_ylabel("Output entropy (nats)")
     handles, labels = flat[0].get_legend_handles_labels()
-    figure.legend(handles, labels, loc="lower center", ncol=4, fontsize=8)
+    figure.legend(handles, labels, loc="lower center", ncol=5, fontsize=8)
     figure.suptitle(
         "C1: sequential LatentMAS entropy trajectories\n"
         "Color=alignment; linestyle=agent; bands=question bootstrap 95% CI"

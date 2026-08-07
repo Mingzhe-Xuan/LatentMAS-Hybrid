@@ -65,8 +65,8 @@ def parse_args(argv=None):
     parser.add_argument(
         "--alignments",
         nargs="+",
-        choices=["identical", "linear", "soft", "kernel"],
-        default=["identical", "linear", "soft", "kernel"],
+        choices=["identical", "linear", "soft", "kernel", "text"],
+        default=["identical", "linear", "soft", "kernel", "text"],
     )
     parser.add_argument("--max_new_tokens", type=int, default=4096)
     parser.add_argument("--generation_seed", type=int, default=77)

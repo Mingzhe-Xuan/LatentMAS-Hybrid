@@ -29,7 +29,8 @@
     "identical",
     "linear",
     "soft",
-    "kernel"
+    "kernel",
+    "text"
   ],
   "max_new_tokens": 4096,
   "generation_seed": 77

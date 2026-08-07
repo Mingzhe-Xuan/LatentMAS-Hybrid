@@ -171,7 +171,7 @@ def build_command(
             or "20 40 60 80 100 120 140 160 180"
         )
         alignments = shlex.split(
-            source_env.get("ALIGNMENTS") or "identical linear soft kernel"
+            source_env.get("ALIGNMENTS") or "identical linear soft kernel text"
         )
         entry = "exp/latent_cot/run.py"
         args = [

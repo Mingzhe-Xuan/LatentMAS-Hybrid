@@ -528,18 +528,30 @@ class ModelWrapper:
         latent_started_at = time.perf_counter()
         for step in range(latent_steps):
             source_model = self.HF_model if hasattr(self, "HF_model") else self.model
-            latent_vec = alignment_timer.measure(
-                lambda: self._apply_latent_realignment(last_hidden, source_model)
-            )
-            latent_embed = latent_vec.unsqueeze(1)
+            if self.align_method == "text":
+                output_head = source_model.get_output_embeddings()
+                if output_head is None:
+                    raise RuntimeError("Text feedback requires an output head.")
+                next_token = alignment_timer.measure(
+                    lambda: output_head(last_hidden).argmax(dim=-1)
+                )
+                model_inputs = {"input_ids": next_token.unsqueeze(1)}
+                batch_size = next_token.shape[0]
+            else:
+                latent_vec = alignment_timer.measure(
+                    lambda: self._apply_latent_realignment(last_hidden, source_model)
+                )
+                latent_embed = latent_vec.unsqueeze(1)
+                model_inputs = {"inputs_embeds": latent_embed}
+                batch_size = latent_embed.shape[0]
             past_len = _past_length(past)
             latent_mask = torch.ones(
-                (latent_embed.shape[0], past_len + 1),
+                (batch_size, past_len + 1),
                 dtype=torch.long,
                 device=self.device,
             )
             outputs = self.model(
-                inputs_embeds=latent_embed,
+                **model_inputs,
                 attention_mask=latent_mask,
                 past_key_values=past,
                 use_cache=True,
