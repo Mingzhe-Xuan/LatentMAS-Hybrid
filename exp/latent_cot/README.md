@@ -75,9 +75,10 @@ Judger, so the same rollout also supplies C2 accuracy. The cumulative index is
 Planner `t`, Critic `K+t`, and Refiner `2K+t`.
 
 By default, each C1/C2/C3 command runs two separate 30-question dataset-order
-prefixes: MBPP+ `test` and AIME2025 `train` (the split exposed by its Hugging
-Face dataset). Each dataset gets its own run directory, cache, summary, and
-figure. Colors identify `identical / linear / soft / kernel / text`; line styles
+prefixes: MBPP+ `test` uses K=`20,40,60,80,100,120,140,160,180`, while
+AIME2025 `train` (the split exposed by its Hugging Face dataset) uses the reduced
+K=`20,60,100,140,180`. Each dataset gets its own run directory, cache, summary,
+and figure. Colors identify `identical / linear / soft / kernel / text`; line styles
 identify the three latent roles. In these sequential MAS studies, `text` is a
 fixed-step greedy hard-token control: each latent role projects its current
 hidden state through the output head, takes the argmax token, and feeds that
@@ -91,6 +92,7 @@ python exp/latent_cot/run.py \
   --model_name Qwen/Qwen3-8B \
   --dataset all --split test --max_questions 30 \
   --latent_step_values 20 40 60 80 100 120 140 160 180 \
+  --aime_latent_step_values 20 60 100 140 180 \
   --alignments identical linear soft kernel text \
   --device cuda
 ```
@@ -104,7 +106,7 @@ The PDF title identifies MBPP+ or AIME 2025.
 C2 uses the same data, role prompts, alignments, K grid, and full sequential KV
 retention. After the three latent roles each run K steps, Judger performs greedy
 text decoding. MBPP+ correctness uses Markdown Python extraction and
- timeout-based test execution; AIME2025 correctness uses the repository's
+timeout-based test execution; AIME2025 correctness uses the repository's
 normalized integer-answer evaluation.
 
 ```bash
@@ -113,6 +115,7 @@ python exp/latent_cot/run.py \
   --model_name Qwen/Qwen3-8B \
   --dataset all --split test --max_questions 30 \
   --latent_step_values 20 40 60 80 100 120 140 160 180 \
+  --aime_latent_step_values 20 60 100 140 180 \
   --alignments identical linear soft kernel text \
   --max_new_tokens 4096 --device cuda
 ```
@@ -138,6 +141,7 @@ python exp/latent_cot/run.py \
   --model_name Qwen/Qwen3-8B \
   --dataset all --split test --max_questions 30 \
   --latent_step_values 20 40 60 80 100 120 140 160 180 \
+  --aime_latent_step_values 20 60 100 140 180 \
   --alignments identical linear soft kernel text \
   --max_new_tokens 4096 --device cuda
 ```
@@ -162,6 +166,11 @@ dataset, split, exact question contents, model name, K grid, alignments, generat
 `max_new_tokens`, and rollout/alignment settings. It intentionally does not
 include `--study`, because C1, C2, and C3 are three views of the same cached
 rollout.
+
+The AIME grid can be overridden with `--aime_latent_step_values`; this does not
+change `--max_new_tokens`, whose default remains 4096. With 30 questions and
+five alignments, AIME2025 now performs `30 * 5 * 5 = 750` single-question
+rollouts rather than 1350.
 
 Use `--dataset mbppplus` or `--dataset aime2025` to run only one dataset.
 With `--dataset all --reuse_trajectory`, both dataset caches must exist; MBPP+

@@ -63,6 +63,13 @@ def parse_args(argv=None):
         default=[20, 40, 60, 80, 100, 120, 140, 160, 180],
     )
     parser.add_argument(
+        "--aime_latent_step_values",
+        type=int,
+        nargs="+",
+        default=[20, 60, 100, 140, 180],
+        help="AIME2025 K grid; MBPP+ continues to use --latent_step_values.",
+    )
+    parser.add_argument(
         "--alignments",
         nargs="+",
         choices=["identical", "linear", "soft", "kernel", "text"],
@@ -104,6 +111,10 @@ def parse_args(argv=None):
         parser.error("--latent_step_values must not contain duplicates")
     if any(value < 1 for value in args.latent_step_values):
         parser.error("--latent_step_values must contain positive integers")
+    if len(set(args.aime_latent_step_values)) != len(args.aime_latent_step_values):
+        parser.error("--aime_latent_step_values must not contain duplicates")
+    if any(value < 1 for value in args.aime_latent_step_values):
+        parser.error("--aime_latent_step_values must contain positive integers")
     if args.study in {"c1", "c2", "c3"} and args.dataset not in {
         "all",
         "mbppplus",
@@ -736,6 +747,11 @@ def main(argv=None):
                     **vars(args),
                     "dataset": dataset,
                     "split": resolved_dataset_split(dataset, args.split),
+                    "latent_step_values": (
+                        list(args.aime_latent_step_values)
+                        if dataset == "aime2025"
+                        else list(args.latent_step_values)
+                    ),
                 }
             )
             logger.info(

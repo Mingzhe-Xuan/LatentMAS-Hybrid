@@ -125,10 +125,12 @@ case "${EXP_TARGET}" in
             MAX_QUESTIONS="${MAX_QUESTIONS:-30}"
             MODEL_NAME="${MODEL_NAME:-Qwen/Qwen3-8B}"
             LATENT_STEP_VALUES="${LATENT_STEP_VALUES:-20 40 60 80 100 120 140 160 180}"
+            AIME_LATENT_STEP_VALUES="${AIME_LATENT_STEP_VALUES:-20 60 100 140 180}"
             ALIGNMENTS="${ALIGNMENTS:-identical linear soft kernel text}"
             read -r -a LATENT_STEP_ARRAY <<< "${LATENT_STEP_VALUES}"
+            read -r -a AIME_LATENT_STEP_ARRAY <<< "${AIME_LATENT_STEP_VALUES}"
             read -r -a ALIGNMENT_ARRAY <<< "${ALIGNMENTS}"
-            ARGS=(--study "${STUDY}" --model_name "${MODEL_NAME}" --dataset "${DATASET}" --split "${SPLIT}" --probe_seed "${PROBE_SEED}" --generation_seed "${GENERATION_SEED}" --max_questions "${MAX_QUESTIONS}" --latent_step_values "${LATENT_STEP_ARRAY[@]}" --alignments "${ALIGNMENT_ARRAY[@]}" --max_new_tokens "${LATENT_COT_MAX_NEW_TOKENS:-4096}" --kernel_features "${M}" --kernel_temperature "${TAU}" --kernel_seed "${ORF_SEED}" --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" --align_ridge "${ALIGN_RIDGE}" --device "${DEVICE}")
+            ARGS=(--study "${STUDY}" --model_name "${MODEL_NAME}" --dataset "${DATASET}" --split "${SPLIT}" --probe_seed "${PROBE_SEED}" --generation_seed "${GENERATION_SEED}" --max_questions "${MAX_QUESTIONS}" --latent_step_values "${LATENT_STEP_ARRAY[@]}" --aime_latent_step_values "${AIME_LATENT_STEP_ARRAY[@]}" --alignments "${ALIGNMENT_ARRAY[@]}" --max_new_tokens "${LATENT_COT_MAX_NEW_TOKENS:-4096}" --kernel_features "${M}" --kernel_temperature "${TAU}" --kernel_seed "${ORF_SEED}" --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" --align_ridge "${ALIGN_RIDGE}" --device "${DEVICE}")
         else
             DATASET="${DATASET:-all}"
             MAX_QUESTIONS="${MAX_QUESTIONS:-50}"

@@ -156,12 +156,22 @@ class MasArgumentTests(unittest.TestCase):
             args.alignments,
             ["identical", "linear", "soft", "kernel", "text"],
         )
+        self.assertEqual(
+            args.aime_latent_step_values,
+            [20, 60, 100, 140, 180],
+        )
 
     def test_c3_defaults_match_shared_experiment_contract(self):
         args = load_parse_args()(["--study", "c3"])
         self.assertEqual(args.model_name, "Qwen/Qwen3-8B")
         self.assertEqual(args.dataset, "all")
         self.assertEqual(args.max_questions, 30)
+
+    def test_main_assigns_dataset_specific_k_grids(self):
+        source = RUN_SOURCE.read_text(encoding="utf-8")
+        self.assertIn('if dataset == "aime2025"', source)
+        self.assertIn('list(args.aime_latent_step_values)', source)
+        self.assertIn('else list(args.latent_step_values)', source)
 
     def test_single_aime2025_dataset_is_accepted(self):
         args = load_parse_args()(["--study", "c2", "--dataset", "aime2025"])

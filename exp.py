@@ -173,6 +173,9 @@ def build_command(
         alignments = shlex.split(
             source_env.get("ALIGNMENTS") or "identical linear soft kernel text"
         )
+        aime_latent_step_values = shlex.split(
+            source_env.get("AIME_LATENT_STEP_VALUES") or "20 60 100 140 180"
+        )
         entry = "exp/latent_cot/run.py"
         args = [
             "--study", study,
@@ -191,6 +194,7 @@ def build_command(
                 or "4096"
             )
             args.extend(["--latent_step_values", *latent_step_values])
+            args.extend(["--aime_latent_step_values", *aime_latent_step_values])
             args.extend(["--alignments", *alignments])
             args.extend(
                 [
@@ -247,7 +251,10 @@ def build_command(
         "tau": tau,
         "orf_seed": orf_seed,
         "latent_steps": (
-            " ".join(latent_step_values)
+            (
+                "MBPP+=" + " ".join(latent_step_values)
+                + "; AIME2025=" + " ".join(aime_latent_step_values)
+            )
             if target == "latent_cot" and study in {"c1", "c2", "c3"}
             else latent_steps
         ),
