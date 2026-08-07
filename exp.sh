@@ -139,11 +139,11 @@ case "${EXP_TARGET}" in
         fi
         ;;
     latent_comm)
-        STUDY="${STUDY:-m0}"; MODEL_PAIR="${MODEL_PAIR:-x1}"
-        DATASET="${DATASET:-communication_probe}"; SPLIT="${SPLIT:-test}"
-        METHOD="${METHOD:-all}"; MAX_QUESTIONS="${MAX_QUESTIONS:-50}"
-        LATENT_STEPS="${LATENT_STEPS:-4}"; ENTRY="exp/latent_comm/run.py"
-        ARGS=(--study "${STUDY}" --model_pair "${MODEL_PAIR}" --dataset "${DATASET}" --split "${SPLIT}" --method "${METHOD}" --orf_seed "${ORF_SEED}" --m "${M}" --tau "${TAU}" --latent_steps "${LATENT_STEPS}" --generation_seed "${GENERATION_SEED}" --device "${DEVICE}")
+        STUDY="${STUDY:-m0}"; MODEL_PAIR="${MODEL_PAIR:-all}"
+        DATASET="${DATASET:-arc_easy}"; SPLIT="${SPLIT:-test}"
+        METHOD="${METHOD:-all}"; MAX_QUESTIONS="${MAX_QUESTIONS:-100}"
+        LATENT_STEPS="${LATENT_STEPS:-10}"; ENTRY="exp/latent_comm/run.py"
+        ARGS=(--study "${STUDY}" --model_pair "${MODEL_PAIR}" --dataset "${DATASET}" --split "${SPLIT}" --method "${METHOD}" --orf_seed "${ORF_SEED}" --m "${M}" --tau "${TAU}" --latent_steps "${LATENT_STEPS}" --max_questions "${MAX_QUESTIONS}" --max_new_tokens "${MAX_REPLY_TOKENS}" --sample_seed "${PROBE_SEED}" --probe_seed "${PROBE_SEED}" --generation_seed "${GENERATION_SEED}" --device "${DEVICE}")
         ;;
 esac
 

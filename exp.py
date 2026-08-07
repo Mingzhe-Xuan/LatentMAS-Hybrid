@@ -205,12 +205,12 @@ def build_command(
         model_summary = model_name
     else:
         study = resolve("study", "STUDY", "m0")
-        model_pair = resolve("model_pair", "MODEL_PAIR", "x1")
-        dataset = resolve("dataset", "DATASET", "communication_probe")
+        model_pair = resolve("model_pair", "MODEL_PAIR", "all")
+        dataset = resolve("dataset", "DATASET", "arc_easy")
         split = resolve("split", "SPLIT", "test")
         method = resolve("method", "METHOD", "all")
-        max_questions = resolve("max_questions", "MAX_QUESTIONS", "50")
-        latent_steps = resolve("latent_steps", "LATENT_STEPS", "4")
+        max_questions = resolve("max_questions", "MAX_QUESTIONS", "100")
+        latent_steps = resolve("latent_steps", "LATENT_STEPS", "10")
         entry = "exp/latent_comm/run.py"
         args = [
             "--study", study,
@@ -222,6 +222,10 @@ def build_command(
             "--m", m,
             "--tau", tau,
             "--latent_steps", latent_steps,
+            "--max_questions", max_questions,
+            "--max_new_tokens", max_reply_tokens,
+            "--sample_seed", probe_seed,
+            "--probe_seed", probe_seed,
             "--generation_seed", generation_seed,
             "--device", device,
         ]

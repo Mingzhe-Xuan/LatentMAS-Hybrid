@@ -439,17 +439,21 @@ class ModelWrapper:
         _sync_cuda(self.device)
         started_at = time.perf_counter()
         phase_timer = _FirstTokenTimer(self.device, started_at)
+        do_sample = temperature > 0
+        generation_kwargs = {
+            "temperature": temperature,
+            "top_p": top_p,
+        } if do_sample else {}
         outputs = self.model.generate(
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
             max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            do_sample=True,
+            do_sample=do_sample,
             pad_token_id=self.tokenizer.pad_token_id,
             return_dict_in_generate=True,
             output_scores=False,
             logits_processor=LogitsProcessorList([phase_timer]),
+            **generation_kwargs,
         )
         _sync_cuda(self.device)
         finished_at = time.perf_counter()
