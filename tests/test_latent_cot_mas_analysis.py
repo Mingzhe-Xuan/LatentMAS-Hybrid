@@ -20,17 +20,23 @@ MODEL_SOURCE = ROOT / "models.py"
 METHOD_SOURCE = ROOT / "methods" / "latent_mas.py"
 
 
-def load_first_items(loader):
+def load_first_items(mbpp_loader, aime_loader=None):
     tree = ast.parse(MAS_SOURCE.read_text(encoding="utf-8"))
+    wanted = {"first_mas_items", "first_mbppplus_items"}
     nodes = [
         node
         for node in tree.body
-        if isinstance(node, ast.FunctionDef)
-        and node.name == "first_mbppplus_items"
+        if isinstance(node, ast.FunctionDef) and node.name in wanted
     ]
-    namespace = {"load_mbppplus": loader}
-    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(MAS_SOURCE), "exec"), namespace)
-    return namespace["first_mbppplus_items"]
+    namespace = {
+        "load_mbppplus": mbpp_loader,
+        "load_aime2025": aime_loader or mbpp_loader,
+    }
+    exec(
+        compile(ast.Module(body=nodes, type_ignores=[]), str(MAS_SOURCE), "exec"),
+        namespace,
+    )
+    return namespace
 
 
 def load_parse_args():
@@ -117,17 +123,30 @@ class MasDatasetTests(unittest.TestCase):
             for index in range(40):
                 yield {"question": f"q-{index}", "gold": f"g-{index}"}
 
-        rows = load_first_items(loader)("test", 30)
+        rows = load_first_items(loader)["first_mbppplus_items"]("test", 30)
         self.assertEqual(calls, ["test"])
         self.assertEqual([item_id for item_id, _ in rows], list(range(30)))
         self.assertEqual(rows[-1][1]["question"], "q-29")
+
+    def test_aime2025_uses_train_prefix(self):
+        calls = []
+
+        def loader(split):
+            calls.append(split)
+            for index in range(30):
+                yield {"question": f"aime-{index}", "gold": str(index)}
+
+        helpers = load_first_items(lambda split: (), loader)
+        rows = helpers["first_mas_items"]("aime2025", "train", 30)
+        self.assertEqual(calls, ["train"])
+        self.assertEqual([item_id for item_id, _ in rows], list(range(30)))
 
 
 class MasArgumentTests(unittest.TestCase):
     def test_c1_defaults_match_experiment_contract(self):
         args = load_parse_args()(["--study", "c1"])
         self.assertEqual(args.model_name, "Qwen/Qwen3-8B")
-        self.assertEqual(args.dataset, "mbppplus")
+        self.assertEqual(args.dataset, "all")
         self.assertEqual(args.max_questions, 30)
         self.assertEqual(
             args.latent_step_values,
@@ -141,8 +160,12 @@ class MasArgumentTests(unittest.TestCase):
     def test_c3_defaults_match_shared_experiment_contract(self):
         args = load_parse_args()(["--study", "c3"])
         self.assertEqual(args.model_name, "Qwen/Qwen3-8B")
-        self.assertEqual(args.dataset, "mbppplus")
+        self.assertEqual(args.dataset, "all")
         self.assertEqual(args.max_questions, 30)
+
+    def test_single_aime2025_dataset_is_accepted(self):
+        args = load_parse_args()(["--study", "c2", "--dataset", "aime2025"])
+        self.assertEqual(args.dataset, "aime2025")
 
     def test_c0_defaults_remain_backward_compatible(self):
         args = load_parse_args()([])
@@ -156,6 +179,7 @@ class MasCacheTests(unittest.TestCase):
     def args(**overrides):
         values = {
             "study": "c1",
+            "dataset": "mbppplus",
             "split": "test",
             "model_name": "Qwen/Qwen3-8B",
             "latent_step_values": [20, 40],
@@ -193,6 +217,21 @@ class MasCacheTests(unittest.TestCase):
         self.assertEqual(first, third)
         self.assertEqual(paths(first_args, first), paths(second_args, second))
         self.assertEqual(paths(first_args, first), paths(third_args, third))
+
+    def test_datasets_use_distinct_cache_identities(self):
+        identity, paths = load_cache_helpers()
+        items = [(0, {"question": "q0", "gold": "g0"})]
+        mbpp_args = self.args(dataset="mbppplus", max_questions=1)
+        aime_args = self.args(
+            dataset="aime2025", split="train", max_questions=1
+        )
+        mbpp_identity = identity(mbpp_args, items)
+        aime_identity = identity(aime_args, items)
+        self.assertNotEqual(mbpp_identity, aime_identity)
+        self.assertNotEqual(
+            paths(mbpp_args, mbpp_identity),
+            paths(aime_args, aime_identity),
+        )
 
     def test_rollout_settings_invalidate_cache(self):
         identity, _ = load_cache_helpers()
@@ -306,6 +345,7 @@ class MasTimeSummaryTests(unittest.TestCase):
             },
         ]
         args = SimpleNamespace(
+            dataset="mbppplus",
             alignments=["identical"],
             latent_step_values=[20],
             bootstrap_replicates=20,
@@ -338,6 +378,7 @@ class MasAccuracySummaryTests(unittest.TestCase):
             },
         ]
         args = SimpleNamespace(
+            dataset="mbppplus",
             alignments=["identical"],
             latent_step_values=[20],
             bootstrap_replicates=20,

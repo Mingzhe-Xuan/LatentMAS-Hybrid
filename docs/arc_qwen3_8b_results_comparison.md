@@ -1,6 +1,6 @@
 # Qwen3-8B 实验结果对比
 
-本文档汇总指定实验目录中 `summary.json` 的平均结果。所有实验模型均为 `Qwen/Qwen3-8B`，split 均为 `test`。ARC 与 GSM8K 结果来自 1 次运行（seed 42）；HumanEval+ 结果为 4 次运行（seeds 42、43、44、45）的平均值。
+本文档汇总指定实验目录中 `summary.json` 的平均结果。所有实验模型均为 `Qwen/Qwen3-8B`，split 均为 `test`。ARC 与 GSM8K 结果来自 1 次运行（seed 42）；HumanEval+ 与 MBPP+ 的完整汇总结果为 4 次运行（seeds 42、43、44、45）的平均值。
 
 指标定义：
 
@@ -77,4 +77,31 @@
 | Text MAS | identical | hierarchical | 13921.3377 | 85.5183% (0.855183) | 1,259,946.75 |
 | Text MAS | identical | sequential | 8666.9324 | **89.6342% (0.896342)** | 669,085.25 |
 
-表格中的粗体表示各数据集的单项最优值。
+## MBPP+
+
+样本数：378；完整汇总数据为 4 次运行的平均值。
+
+| Method | Align method | Topology | Timing (total, s) ↓ | Accuracy ↑ | Text output tokens ↓ |
+|---|---|---|---:|---:|---:|
+| Baseline | identical | hierarchical | 6550.2281 | 73.7434% (0.737434) | 722,646.75 |
+| Baseline | identical | sequential | 6570.0886 | 74.2063% (0.742063) | 716,459.25 |
+| Latent MAS | identical | hierarchical | 7676.6528 | 70.9656% (0.709656) | 542,623.75 |
+| Latent MAS | identical | sequential | N/A | N/A | N/A |
+| Latent MAS | kernel | hierarchical | N/A | N/A | N/A |
+| Latent MAS | kernel | sequential | 6998.8064 | 75.2645% (0.752645) | 553,177.50 |
+| Latent MAS | linear | hierarchical | 7407.9916 | 17.5265% (0.175265) | 414,118.25 |
+| Latent MAS | linear | sequential | 7276.2998 | 29.3651% (0.293651) | 491,330.25 |
+| Latent MAS | soft | hierarchical | N/A | N/A | N/A |
+| Latent MAS | soft | sequential | **5116.7007** | 71.9577% (0.719577) | **262,830.25** |
+| Text MAS | identical | hierarchical | 29595.6652 | 79.4312% (0.794312) | 2,342,089.50 |
+| Text MAS | identical | sequential | 19895.1947 | **79.8941% (0.798941)** | 1,399,429.00 |
+
+### MBPP+ 缺失数据
+
+以下目录尚无 `summary.json`，因此对应指标记为 `N/A`：
+
+- `result/mbppplus_latent_mas_identical_sequential_Qwen_Qwen3-8B_20260806_001421`（目录为空）
+- `result/mbppplus_latent_mas_kernel_hierarchical_Qwen_Qwen3-8B_20260807_073743`（当前仅有 `repeat_1.json`）
+- `result/mbppplus_latent_mas_soft_hierarchical_Qwen_Qwen3-8B_20260807_073743`（当前仅有 `repeat_1.json`）
+
+表格中的粗体表示各数据集在现有完整汇总结果中的单项最优值；缺失结果不参与比较。

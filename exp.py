@@ -158,7 +158,7 @@ def build_command(
             "Qwen/Qwen3-8B" if mas_study else "Qwen/Qwen3-4B",
         )
         dataset = resolve(
-            "dataset", "DATASET", "mbppplus" if mas_study else "all"
+            "dataset", "DATASET", "all"
         )
         split = resolve("split", "SPLIT", "test")
         method = resolve("method", "METHOD")

@@ -74,8 +74,10 @@ records post-feedback hidden-state entropy at every local step and then runs the
 Judger, so the same rollout also supplies C2 accuracy. The cumulative index is
 Planner `t`, Critic `K+t`, and Refiner `2K+t`.
 
-The MBPP+ subset is the dataset-order prefix of 30 questions (not a shuffled
-sample). Colors identify `identical / linear / soft / kernel / text`; line styles
+By default, each C1/C2/C3 command runs two separate 30-question dataset-order
+prefixes: MBPP+ `test` and AIME2025 `train` (the split exposed by its Hugging
+Face dataset). Each dataset gets its own run directory, cache, summary, and
+figure. Colors identify `identical / linear / soft / kernel / text`; line styles
 identify the three latent roles. In these sequential MAS studies, `text` is a
 fixed-step greedy hard-token control: each latent role projects its current
 hidden state through the output head, takes the argmax token, and feeds that
@@ -87,28 +89,29 @@ text generation.
 python exp/latent_cot/run.py \
   --study c1 \
   --model_name Qwen/Qwen3-8B \
-  --dataset mbppplus --split test --max_questions 30 \
+  --dataset all --split test --max_questions 30 \
   --latent_step_values 20 40 60 80 100 120 140 160 180 \
   --alignments identical linear soft kernel text \
   --device cuda
 ```
 
 C1 writes `c1_entropy_by_agent_step.parquet`, `c1_summary.json`, and
-`c1_entropy_vs_cumulative_step.pdf` in its run-local metrics, summaries, and
-figures directories.
+`c1_entropy_vs_cumulative_step.pdf` inside each dataset-specific run directory.
+The PDF title identifies MBPP+ or AIME 2025.
 
 ## C2: sequential MAS accuracy by per-agent latent steps
 
 C2 uses the same data, role prompts, alignments, K grid, and full sequential KV
 retention. After the three latent roles each run K steps, Judger performs greedy
-text decoding. MBPP+ correctness uses the repository Markdown Python extraction
-and timeout-based test execution.
+text decoding. MBPP+ correctness uses Markdown Python extraction and
+ timeout-based test execution; AIME2025 correctness uses the repository's
+normalized integer-answer evaluation.
 
 ```bash
 python exp/latent_cot/run.py \
   --study c2 \
   --model_name Qwen/Qwen3-8B \
-  --dataset mbppplus --split test --max_questions 30 \
+  --dataset all --split test --max_questions 30 \
   --latent_step_values 20 40 60 80 100 120 140 160 180 \
   --alignments identical linear soft kernel text \
   --max_new_tokens 4096 --device cuda
@@ -116,31 +119,32 @@ python exp/latent_cot/run.py \
 
 C2 writes `c2_accuracy_by_question.parquet`, `c2_summary.json`, and
 `c2_accuracy_vs_steps.pdf`. Each point reports both accuracy and the raw
-`correct/30` count with a question-bootstrap 95% interval.
+`correct/30` count with a question-bootstrap 95% interval. MBPP+ and AIME2025
+are plotted and saved separately.
 
 ## C3: mean time per question by latent steps
 
 C3 reuses the per-question `wall_seconds` already stored by the shared C1/C2/C3
-rollout. For every alignment and K, it plots the mean time across the MBPP+
-questions with a question-bootstrap 95% interval. The horizontal axis is K,
+rollout. For every dataset, alignment, and K, it plots the mean time across
+that dataset's questions with a question-bootstrap 95% interval. The horizontal axis is K,
 the latent steps used by each of Planner, Critic, and Refiner; the corresponding
 total latent budget is `3K`. Timing covers the complete
-`LatentMASMethod.run_batch` call, including Judger decoding and MBPP+ correctness
-evaluation.
+`LatentMASMethod.run_batch` call, including Judger decoding and the active
+dataset's correctness evaluation.
 
 ```bash
 python exp/latent_cot/run.py \
   --study c3 \
   --model_name Qwen/Qwen3-8B \
-  --dataset mbppplus --split test --max_questions 30 \
+  --dataset all --split test --max_questions 30 \
   --latent_step_values 20 40 60 80 100 120 140 160 180 \
   --alignments identical linear soft kernel text \
   --max_new_tokens 4096 --device cuda
 ```
 
 C3 writes `c3_time_by_question.parquet`, `c3_summary.json`, and
-`c3_time_vs_steps.pdf`. If a compatible C1 or C2 shared cache already exists,
-C3 only performs aggregation and plotting.
+`c3_time_vs_steps.pdf` in each dataset-specific run directory. If compatible
+C1 or C2 shared caches already exist, C3 only performs aggregation and plotting.
 
 ### C1/C2/C3 shared rollout cache
 
@@ -154,10 +158,15 @@ decoding.
 
 A normal rerun only regenerates the requested run-local summary and figure; it
 does not load the model or perform rollout again. The cache identity covers the
-exact MBPP+ question contents, model name, K grid, alignments, generation seed,
+dataset, split, exact question contents, model name, K grid, alignments, generation seed,
 `max_new_tokens`, and rollout/alignment settings. It intentionally does not
 include `--study`, because C1, C2, and C3 are three views of the same cached
 rollout.
+
+Use `--dataset mbppplus` or `--dataset aime2025` to run only one dataset.
+With `--dataset all --reuse_trajectory`, both dataset caches must exist; MBPP+
+can continue to reuse a compatible existing shared cache while AIME2025 uses a
+separate cache.
 
 Use `--reuse_trajectory` when a cache hit is mandatory (the command fails if no
 compatible cache exists), or `--force_recollect` to ignore and replace the

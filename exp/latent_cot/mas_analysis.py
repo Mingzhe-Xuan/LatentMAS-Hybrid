@@ -1,4 +1,4 @@
-"""C1/C2/C3 analysis for sequential LatentMAS on MBPP+."""
+"""C1/C2/C3 analysis for sequential LatentMAS on MBPP+ and AIME2025."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from data import load_mbppplus
+from data import load_aime2025, load_mbppplus
 from methods.latent_mas import LatentMASMethod
 from models import ModelWrapper
 from utils import set_seed
@@ -39,6 +39,11 @@ COLORS = {
     "text": "#e45756",
 }
 LINESTYLES = {"planner": "-", "critic": "--", "refiner": ":"}
+DATASET_LABELS = {"mbppplus": "MBPP+", "aime2025": "AIME 2025"}
+
+
+def _dataset_label(dataset: str) -> str:
+    return DATASET_LABELS.get(dataset, dataset)
 
 
 def _write_json(path: Path, payload) -> None:
@@ -80,7 +85,7 @@ def _cache_identity(args, indexed_items):
     return {
         "schema_version": CACHE_SCHEMA_VERSION,
         "experiment": "c1_c2_shared_rollout",
-        "dataset": "mbppplus",
+        "dataset": args.dataset,
         "split": args.split,
         "dataset_identity": _dataset_identity(indexed_items),
         "model_name": args.model_name,
@@ -112,7 +117,7 @@ def _cache_paths(args, identity):
         json.dumps(identity, sort_keys=True, ensure_ascii=False).encode("utf-8")
     ).hexdigest()[:16]
     model = _safe_name(args.model_name.rsplit("/", 1)[-1])
-    stem = f"c1c2_mbppplus_{model}_q{args.max_questions}_{digest}"
+    stem = f"c1c2_{_safe_name(args.dataset)}_{model}_q{args.max_questions}_{digest}"
     return (
         CACHE_DIR / f"{stem}.entropy.parquet",
         CACHE_DIR / f"{stem}.accuracy.parquet",
@@ -192,14 +197,25 @@ def _save_metrics_cache(
     _write_json(manifest_path, manifest)
     return manifest
 
-def first_mbppplus_items(split: str, max_questions: int):
-    """Return the dataset-order prefix, preserving stable original item IDs."""
+def first_mas_items(dataset: str, split: str, max_questions: int):
+    """Return a dataset-order prefix with stable original item IDs."""
+    loaders = {
+        "mbppplus": load_mbppplus,
+        "aime2025": load_aime2025,
+    }
+    if dataset not in loaders:
+        raise ValueError(f"Unsupported C1/C2/C3 dataset: {dataset}")
     items = []
-    for item_id, item in enumerate(load_mbppplus(split=split)):
+    for item_id, item in enumerate(loaders[dataset](split=split)):
         if len(items) >= max_questions:
             break
         items.append((item_id, item))
     return items
+
+
+def first_mbppplus_items(split: str, max_questions: int):
+    """Backward-compatible MBPP+ dataset-order prefix helper."""
+    return first_mas_items("mbppplus", split, max_questions)
 
 
 def _bootstrap_mean(values, replicates: int, seed: int):
@@ -224,7 +240,7 @@ def _run_directory(args) -> Path:
         json.dumps(vars(args), sort_keys=True, default=str).encode("utf-8")
     ).hexdigest()[:8]
     name = (
-        f"mbppplus_{args.split}_{args.study}_{model}_"
+        f"{_safe_name(args.dataset)}_{args.split}_{args.study}_{model}_"
         f"k{_safe_name(steps)}_q{args.max_questions}_{timestamp}_{identity}"
     )
     path = RUNS_DIR / name
@@ -265,12 +281,20 @@ def _dataset_identity(indexed_items):
 
 class EntropyObserver:
     def __init__(
-        self, wrapper, *, item_id: int, alignment: str, latent_steps: int, split: str
+        self,
+        wrapper,
+        *,
+        item_id: int,
+        alignment: str,
+        latent_steps: int,
+        dataset: str,
+        split: str,
     ):
         self.wrapper = wrapper
         self.item_id = int(item_id)
         self.alignment = alignment
         self.latent_steps = int(latent_steps)
+        self.dataset = dataset
         self.split = split
         self.rows = []
         self.previous = {}
@@ -309,7 +333,7 @@ class EntropyObserver:
             failure_reason = "non_finite_hidden"
         self.rows.append(
             {
-                "dataset": "mbppplus",
+                "dataset": self.dataset,
                 "split": self.split,
                 "item_id": self.item_id,
                 "alignment": self.alignment,
@@ -331,7 +355,7 @@ class EntropyObserver:
 def _method_args(args, alignment: str):
     values = {
         **vars(args),
-        "task": "mbppplus",
+        "task": args.dataset,
         "method": "latent_mas",
         "prompt": "sequential",
         "align_method": alignment,
@@ -401,6 +425,7 @@ def _summarize_c1(rows, args):
             )
     return {
         "study": "c1",
+        "dataset": args.dataset,
         "metric": "pre_unembedding_output_entropy_nats",
         "total_questions": len({row["item_id"] for row in rows}),
         "failure_rows_by_reason": failure_rows_by_reason,
@@ -451,7 +476,8 @@ def _summarize_c2(rows, args):
         series[alignment] = points
     return {
         "study": "c2",
-        "metric": "mbppplus_pass_rate",
+        "dataset": args.dataset,
+        "metric": f"{args.dataset}_accuracy",
         "latent_budget": "three non-judger agents each use K latent steps",
         "series": series,
     }
@@ -494,10 +520,11 @@ def _summarize_c3(rows, args):
         series[alignment] = points
     return {
         "study": "c3",
+        "dataset": args.dataset,
         "metric": "mean_wall_seconds_per_question",
         "timing_scope": (
             "LatentMASMethod.run_batch end-to-end wall time, including Judger "
-            "decoding and MBPP+ correctness evaluation"
+            f"decoding and {args.dataset} correctness evaluation"
         ),
         "latent_budget": "three non-judger agents each use K latent steps",
         "series": series,
@@ -543,8 +570,9 @@ def _plot_c1(summary, path: Path, args):
     handles, labels = flat[0].get_legend_handles_labels()
     figure.legend(handles, labels, loc="lower center", ncol=5, fontsize=8)
     figure.suptitle(
-        "C1: sequential LatentMAS entropy trajectories\n"
-        "Color=alignment; linestyle=agent; bands=question bootstrap 95% CI"
+        f"C1 ({_dataset_label(args.dataset)}): sequential LatentMAS entropy "
+        "trajectories\nColor=alignment; linestyle=agent; "
+        "bands=question bootstrap 95% CI"
     )
     figure.tight_layout(rect=(0, 0.07, 1, 0.95))
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -582,11 +610,13 @@ def _plot_c2(summary, path: Path, args):
                     fontsize=7,
                 )
     axis.set_xlabel("Latent steps per Planner/Critic/Refiner agent (K)")
-    axis.set_ylabel("MBPP+ accuracy")
+    axis.set_ylabel(f"{_dataset_label(args.dataset)} accuracy")
     axis.set_ylim(-0.02, 1.02)
     axis.grid(alpha=0.25)
     axis.legend(title="Alignment")
-    axis.set_title("C2: sequential LatentMAS accuracy vs. per-agent latent steps")
+    axis.set_title(
+        f"C2 ({_dataset_label(args.dataset)}): accuracy vs. per-agent latent steps"
+    )
     figure.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(path)
@@ -619,22 +649,29 @@ def _plot_c3(summary, path: Path, args):
     axis.set_ylabel("Mean wall time per question (seconds)")
     axis.grid(alpha=0.25)
     axis.legend(title="Alignment")
-    axis.set_title("C3: sequential LatentMAS time vs. per-agent latent steps")
+    axis.set_title(
+        f"C3 ({_dataset_label(args.dataset)}): time vs. per-agent latent steps"
+    )
     figure.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(path)
     plt.close(figure)
 
-def run_mas_study(args, logger: logging.Logger | None = None):
-    if args.dataset != "mbppplus":
-        raise ValueError("C1/C2/C3 currently require --dataset mbppplus.")
+def run_mas_study(
+    args,
+    logger: logging.Logger | None = None,
+    model_holder: dict | None = None,
+):
+    if args.dataset not in {"mbppplus", "aime2025"}:
+        raise ValueError("C1/C2/C3 require mbppplus or aime2025.")
     logger = logger or logging.getLogger(f"latent_cot.{args.study}")
     run_dir = _run_directory(args)
     manifest_path = run_dir / "run_manifest.json"
-    indexed_items = first_mbppplus_items(args.split, args.max_questions)
+    indexed_items = first_mas_items(args.dataset, args.split, args.max_questions)
     if len(indexed_items) != args.max_questions:
         raise RuntimeError(
-            f"Requested {args.max_questions} MBPP+ items but loaded {len(indexed_items)}."
+            f"Requested {args.max_questions} {args.dataset} items but loaded "
+            f"{len(indexed_items)}."
         )
     manifest = {
         "status": "running",
@@ -690,12 +727,18 @@ def run_mas_study(args, logger: logging.Logger | None = None):
             )
         else:
             model_args = _method_args(args, args.alignments[0])
-            wrapper = ModelWrapper(
-                args.model_name,
-                args.device,
-                use_vllm=False,
-                args=model_args,
-            )
+            wrapper = None if model_holder is None else model_holder.get("wrapper")
+            if wrapper is None:
+                wrapper = ModelWrapper(
+                    args.model_name,
+                    args.device,
+                    use_vllm=False,
+                    args=model_args,
+                )
+                if model_holder is not None:
+                    model_holder["wrapper"] = wrapper
+            else:
+                wrapper.args = model_args
             config_payload = wrapper.model.config.to_dict()
             model_info = {
                 "name": args.model_name,
@@ -730,6 +773,7 @@ def run_mas_study(args, logger: logging.Logger | None = None):
                             item_id=item_id,
                             alignment=alignment,
                             latent_steps=latent_steps,
+                            dataset=args.dataset,
                             split=args.split,
                         )
                         method = LatentMASMethod(
@@ -771,7 +815,7 @@ def run_mas_study(args, logger: logging.Logger | None = None):
                                     continue
                                 entropy_rows.append(
                                     {
-                                        "dataset": "mbppplus",
+                                        "dataset": args.dataset,
                                         "split": args.split,
                                         "item_id": int(item_id),
                                         "alignment": alignment,
@@ -796,7 +840,7 @@ def run_mas_study(args, logger: logging.Logger | None = None):
                         prediction = result.get("prediction")
                         accuracy_rows.append(
                             {
-                                "dataset": "mbppplus",
+                                "dataset": args.dataset,
                                 "split": args.split,
                                 "item_id": int(item_id),
                                 "alignment": alignment,

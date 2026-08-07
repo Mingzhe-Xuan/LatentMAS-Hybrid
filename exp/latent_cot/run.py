@@ -97,15 +97,19 @@ def parse_args(argv=None):
             "Qwen/Qwen3-4B" if args.study == "c0" else "Qwen/Qwen3-8B"
         )
     if args.dataset is None:
-        args.dataset = "all" if args.study == "c0" else "mbppplus"
+        args.dataset = "all"
     if args.max_questions is None:
         args.max_questions = 512 if args.study == "c0" else 30
     if len(set(args.latent_step_values)) != len(args.latent_step_values):
         parser.error("--latent_step_values must not contain duplicates")
     if any(value < 1 for value in args.latent_step_values):
         parser.error("--latent_step_values must contain positive integers")
-    if args.study in {"c1", "c2", "c3"} and args.dataset != "mbppplus":
-        parser.error("C1/C2/C3 currently require --dataset mbppplus")
+    if args.study in {"c1", "c2", "c3"} and args.dataset not in {
+        "all",
+        "mbppplus",
+        "aime2025",
+    }:
+        parser.error("C1/C2/C3 require --dataset all, mbppplus, or aime2025")
     if args.max_new_tokens < 1:
         parser.error("--max_new_tokens must be positive")
     if args.reuse_trajectory and args.force_recollect:
@@ -719,7 +723,29 @@ def main(argv=None):
     if args.study in {"c1", "c2", "c3"}:
         from mas_analysis import run_mas_study
 
-        return run_mas_study(args, logger)
+        datasets = (
+            ("mbppplus", "aime2025")
+            if args.dataset == "all"
+            else (args.dataset,)
+        )
+        run_directories = []
+        model_holder = {}
+        for dataset in datasets:
+            dataset_args = argparse.Namespace(
+                **{
+                    **vars(args),
+                    "dataset": dataset,
+                    "split": resolved_dataset_split(dataset, args.split),
+                }
+            )
+            logger.info(
+                "%s dataset %s split %s started.",
+                args.study.upper(),
+                dataset,
+                dataset_args.split,
+            )
+            run_directories.append(run_mas_study(dataset_args, logger, model_holder))
+        return run_directories[0] if len(run_directories) == 1 else run_directories
     run_dir = create_run_dir(args)
     run_manifest_path = run_dir / "run_manifest.json"
     started = time.time()
