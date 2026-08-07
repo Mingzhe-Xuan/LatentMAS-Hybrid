@@ -53,7 +53,6 @@ class M0ContractTests(unittest.TestCase):
         args = scope["parse_args"]([])
         self.assertEqual(args.dataset, "arc_easy")
         self.assertEqual(args.max_questions, 100)
-        self.assertEqual(args.latent_steps, 10)
         self.assertEqual(args.prompt, "sequential")
         self.assertEqual(args.alignments, ["linear", "kernel", "soft", "text"])
 
@@ -80,7 +79,7 @@ class M0ContractTests(unittest.TestCase):
         private_question = "Which planet is closest to the Sun? a: Venus b: Mercury"
         self.assertNotIn(private_question, serialized)
         self.assertIn("not shown to you", serialized)
-        self.assertIn("latent message", serialized)
+        self.assertIn("aligned hidden-state sequence", serialized)
 
     def test_source_enforces_question_blind_audit_and_transfer_protocols(self):
         source = SOURCE.read_text(encoding="utf-8")
@@ -88,8 +87,9 @@ class M0ContractTests(unittest.TestCase):
         self.assertIn('"receiver_question_visible": False', source)
         self.assertIn('if alignment == "text":', source)
         self.assertIn("source.align_hidden_to(hidden, target)", source)
-        self.assertIn('wrapper.align_method = "identical"', source)
-        self.assertIn('"latent_states": torch.stack(latent_states)', source)
+        self.assertIn('return [{"role": "user", "content": question}]', source)
+        self.assertIn('"prefill_hidden_states": prefill_hidden_states', source)
+        self.assertNotIn("for _ in range(args.latent_steps)", source)
 
     def test_embedding_generation_supports_greedy_receiver_decode(self):
         source = MODEL_SOURCE.read_text(encoding="utf-8")

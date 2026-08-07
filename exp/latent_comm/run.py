@@ -26,18 +26,17 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from data import load_arc_easy
-from models import ModelWrapper, _past_length
-from prompts import build_agent_message_sequential_latent_mas
+from models import ModelWrapper
 from utils import extract_gsm8k_answer, normalize_answer, set_seed
 
 MODELS = ("Qwen/Qwen3-4B", "Qwen/Qwen3-8B")
 MODEL_PAIRS = tuple((source, target) for source in MODELS for target in MODELS)
 ALIGNMENTS = ("linear", "kernel", "soft", "text")
-CACHE_SCHEMA_VERSION = 1
+CACHE_SCHEMA_VERSION = 2
 CACHE_DIR = ROOT / "exp" / "cache" / "latent_comm_m0"
 RUNS_DIR = ROOT / "exp_result" / "latent_comm" / "runs"
-RECEIVER_PROMPT_VERSION = "m0_question_blind_receiver_v1"
-SENDER_PROMPT_VERSION = "m0_sequential_planner_v1"
+RECEIVER_PROMPT_VERSION = "m0_question_blind_prefill_receiver_v2"
+SENDER_PROMPT_VERSION = "m0_question_only_single_prefill_v2"
 PAIR_COLORS = ("#4c78a8", "#f58518", "#54a24b", "#e45756")
 
 
@@ -49,7 +48,6 @@ def parse_args(argv=None):
     parser.add_argument("--max_questions", type=int, default=100)
     parser.add_argument("--sample_seed", type=int, default=42)
     parser.add_argument("--generation_seed", type=int, default=77)
-    parser.add_argument("--latent_steps", type=int, default=10)
     parser.add_argument("--prompt", choices=["sequential"], default="sequential")
     parser.add_argument("--model_pair", choices=["all"], default="all")
     parser.add_argument("--method", choices=["all"], default="all")
@@ -70,8 +68,6 @@ def parse_args(argv=None):
     args = parser.parse_args(argv)
     if args.max_questions != 100:
         parser.error("M0 requires exactly --max_questions 100")
-    if args.latent_steps != 10:
-        parser.error("M0 requires exactly --latent_steps 10")
     if len(args.alignments) != len(ALIGNMENTS) or set(args.alignments) != set(ALIGNMENTS):
         parser.error("M0 requires --alignments linear kernel soft text")
     if args.reuse_cache and args.force_recollect:
@@ -180,14 +176,9 @@ def _model_args(args, alignment):
 
 
 def _sender_messages(question, model_name):
-    prompt_args = argparse.Namespace(model_name=model_name, task="arc_easy")
-    return build_agent_message_sequential_latent_mas(
-        role="planner",
-        question=question,
-        context="",
-        method="latent_mas_hybrid",
-        args=prompt_args,
-    )
+    del model_name
+    # Agent A is only an encoder: no Planner instruction and no generated thought.
+    return [{"role": "user", "content": question}]
 
 
 def _receiver_messages(model_name):
@@ -197,12 +188,14 @@ def _receiver_messages(model_name):
         else "You are a helpful assistant."
     )
     user = (
-        "You are Agent B in a sequential two-agent system. Agent A received a "
-        "private four-choice science question that is not shown to you. The latent "
-        "message prepended to this prompt is your only information about that "
-        "question and its choices. Infer the answer from that message. Respond with "
-        "exactly one final choice inside \\boxed{A}, \\boxed{B}, \\boxed{C}, or "
-        "\\boxed{D}. Do not request or assume access to the original question."
+        "You are Agent B in a two-agent system. Agent A encoded a private "
+        "four-choice science question that is not shown to you. Agent A used one "
+        "prefill pass and did not reason or "
+        "generate an answer. The aligned hidden-state sequence prepended to this "
+        "prompt is your only information about the question and its choices. "
+        "Reason from that representation and respond with exactly one final choice "
+        "inside \\boxed{A}, \\boxed{B}, \\boxed{C}, or \\boxed{D}. Do not request "
+        "or assume access to the original question."
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -225,8 +218,7 @@ def _trajectory_identity(args, source_model, sample_identity):
         "source_model": source_model,
         "sample": sample_identity,
         "prompt": SENDER_PROMPT_VERSION,
-        "latent_steps": args.latent_steps,
-        "sender_recurrence": "identical_target_norm_scaled",
+        "sender_operation": "single_prefill_full_last_layer_sequence",
         "trust_remote_code": bool(args.trust_remote_code),
     }
 
@@ -257,13 +249,14 @@ def _load_trajectory_cache(args, source_model, identity):
     if [record.get("item_id") for record in records] != expected_ids:
         raise RuntimeError("M0 sender trajectory item coverage mismatch")
     for record in records:
-        states = record.get("latent_states")
+        states = record.get("prefill_hidden_states")
         if (
             not isinstance(states, torch.Tensor)
             or states.device.type != "cpu"
             or states.dtype != torch.float32
             or states.ndim != 2
-            or states.shape[0] != args.latent_steps
+            or states.shape[0] < 1
+            or states.shape[0] != record.get("sender_prompt_token_count")
         ):
             raise RuntimeError(
                 f"Invalid M0 sender states for item_id={record.get('item_id')}"
@@ -273,70 +266,47 @@ def _load_trajectory_cache(args, source_model, identity):
 
 @torch.inference_mode()
 def _collect_sender_trajectory(wrapper, items, args, logger):
-    original_alignment = wrapper.align_method
-    wrapper.align_method = "identical"
-    wrapper.args.align_method = "identical"
     records = []
-    try:
-        for number, (item_id, item) in enumerate(items, start=1):
-            messages = _sender_messages(item["question"], wrapper.model_name)
-            rendered = wrapper.render_chat(messages, add_generation_prompt=True)
-            encoded = wrapper.tokenizer(
-                rendered,
-                return_tensors="pt",
-                add_special_tokens=False,
-            )
-            input_ids = encoded["input_ids"].to(wrapper.device)
-            attention_mask = encoded["attention_mask"].to(wrapper.device)
-            outputs = wrapper.model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                use_cache=True,
-                output_hidden_states=True,
-                return_dict=True,
-            )
-            past = outputs.past_key_values
-            last_hidden = outputs.hidden_states[-1][:, -1, :]
-            latent_states = []
-            for _ in range(args.latent_steps):
-                latent_vector = wrapper._apply_latent_realignment(last_hidden, wrapper.model)
-                latent_embed = latent_vector.unsqueeze(1)
-                outputs = wrapper.model(
-                    inputs_embeds=latent_embed,
-                    attention_mask=torch.ones(
-                        (1, _past_length(past) + 1),
-                        dtype=torch.long,
-                        device=wrapper.device,
-                    ),
-                    past_key_values=past,
-                    use_cache=True,
-                    output_hidden_states=True,
-                    return_dict=True,
-                )
-                past = outputs.past_key_values
-                last_hidden = outputs.hidden_states[-1][:, -1, :]
-                latent_states.append(last_hidden[0].detach().to("cpu", dtype=torch.float32))
-            records.append(
-                {
-                    "item_id": int(item_id),
-                    "question": item["question"],
-                    "gold": item.get("gold", ""),
-                    "source_model": wrapper.model_name,
-                    "sender_prompt_sha256": _sha256_bytes(rendered.encode("utf-8")),
-                    "sender_prompt_token_count": int(attention_mask.sum().item()),
-                    "latent_states": torch.stack(latent_states),
-                }
-            )
-            logger.info(
-                "M0 sender=%s question=%d/%d item_id=%d collected",
-                wrapper.model_name,
-                number,
-                len(items),
-                item_id,
-            )
-    finally:
-        wrapper.align_method = original_alignment
-        wrapper.args.align_method = original_alignment
+    for number, (item_id, item) in enumerate(items, start=1):
+        messages = _sender_messages(item["question"], wrapper.model_name)
+        rendered = wrapper.render_chat(messages, add_generation_prompt=True)
+        encoded = wrapper.tokenizer(
+            rendered,
+            return_tensors="pt",
+            add_special_tokens=False,
+        )
+        input_ids = encoded["input_ids"].to(wrapper.device)
+        attention_mask = encoded["attention_mask"].to(wrapper.device)
+        outputs = wrapper.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            use_cache=False,
+            output_hidden_states=True,
+            return_dict=True,
+        )
+        prefill_hidden_states = outputs.hidden_states[-1][0].detach().to(
+            "cpu", dtype=torch.float32
+        )
+        records.append(
+            {
+                "item_id": int(item_id),
+                "question": item["question"],
+                "gold": item.get("gold", ""),
+                "source_model": wrapper.model_name,
+                "sender_messages": json.dumps(messages, ensure_ascii=False),
+                "sender_prompt_sha256": _sha256_bytes(rendered.encode("utf-8")),
+                "sender_prompt_token_count": int(attention_mask.sum().item()),
+                "prefill_hidden_states": prefill_hidden_states,
+            }
+        )
+        logger.info(
+            "M0 sender=%s question=%d/%d item_id=%d prefill_tokens=%d collected",
+            wrapper.model_name,
+            number,
+            len(items),
+            item_id,
+            prefill_hidden_states.shape[0],
+        )
     return records
 
 
@@ -372,7 +342,7 @@ def _result_identity(args, source_model, target_model, alignment, sample_identit
         "sample": sample_identity,
         "source_trajectory_sha256": trajectory_sha,
         "receiver_prompt": RECEIVER_PROMPT_VERSION,
-        "latent_steps": args.latent_steps,
+        "sender_operation": "single_prefill_full_last_layer_sequence",
         "max_new_tokens": args.max_new_tokens,
         "decoding": "greedy",
         "alignment_config": {
@@ -447,7 +417,7 @@ def _validate_vocab(source, target):
 
 @torch.inference_mode()
 def _aligned_message(record, source, target, alignment):
-    hidden = record["latent_states"].to(source.device)
+    hidden = record["prefill_hidden_states"].to(source.device)
     source.align_method = alignment
     source.args.align_method = alignment
     if alignment == "text":
@@ -525,7 +495,8 @@ def _run_receiver_cell(records, source, target, alignment, args, logger):
                 "target_model": target.model_name,
                 "model_pair": f"{source.model_name}->{target.model_name}",
                 "alignment": alignment,
-                "latent_steps": args.latent_steps,
+                "source_prefill_token_count": int(record["sender_prompt_token_count"]),
+                "communication_hidden_state_count": int(message_embeds.shape[1]),
                 "question": record["question"],
                 "gold": gold,
                 "prediction": prediction,
@@ -589,14 +560,23 @@ def _summarize(rows, args):
                     "question_leak_count": sum(
                         row["receiver_question_visible"] for row in selected
                     ),
+                    "mean_communication_hidden_states": float(
+                        np.mean([row["communication_hidden_state_count"] for row in selected])
+                    ),
                 }
             )
+    lengths = [row["communication_hidden_state_count"] for row in rows]
     return {
         "study": "m0",
         "dataset": "arc_easy",
         "questions": args.max_questions,
-        "latent_steps": args.latent_steps,
-        "sender_recurrence": "identical",
+        "sender_operation": "single_prefill_full_last_layer_sequence",
+        "communication_length": {
+            "unit": "source_prefill_tokens",
+            "minimum": min(lengths),
+            "maximum": max(lengths),
+            "mean": float(np.mean(lengths)),
+        },
         "receiver_sees_original_question": False,
         "series": series,
     }
@@ -631,7 +611,7 @@ def _plot(summary, path, args):
         )
         axis.grid(axis="y", alpha=0.2)
     figure.suptitle(
-        "M0: question-blind receiver accuracy from 10-step Agent-A messages\n"
+        "M0: question-blind receiver accuracy from Agent-A prefill states\n"
         "Bars=accuracy over 100 questions; error bars=question bootstrap 95% CI"
     )
     figure.tight_layout(rect=(0, 0, 1, 0.94))
@@ -643,7 +623,7 @@ def _plot(summary, path, args):
 def _run_directory(args):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     digest = _sha256_bytes(json.dumps(vars(args), sort_keys=True, default=str).encode("utf-8"))[:8]
-    path = RUNS_DIR / f"m0_arc_easy_q{args.max_questions}_k{args.latent_steps}_{timestamp}_{digest}"
+    path = RUNS_DIR / f"m0_arc_easy_q{args.max_questions}_prefill_{timestamp}_{digest}"
     suffix = 1
     while path.exists():
         path = RUNS_DIR / f"{path.name}_{suffix:02d}"

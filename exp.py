@@ -210,7 +210,7 @@ def build_command(
         split = resolve("split", "SPLIT", "test")
         method = resolve("method", "METHOD", "all")
         max_questions = resolve("max_questions", "MAX_QUESTIONS", "100")
-        latent_steps = resolve("latent_steps", "LATENT_STEPS", "10")
+        latent_steps = "full-prefill-sequence"
         entry = "exp/latent_comm/run.py"
         args = [
             "--study", study,
@@ -221,7 +221,6 @@ def build_command(
             "--orf_seed", orf_seed,
             "--m", m,
             "--tau", tau,
-            "--latent_steps", latent_steps,
             "--max_questions", max_questions,
             "--max_new_tokens", max_reply_tokens,
             "--sample_seed", probe_seed,
@@ -288,7 +287,8 @@ def _print_summary(summary: Mapping[str, str]) -> None:
         "ORF (m,tau,seed): "
         f"{summary['m']}, {summary['tau']}, {summary['orf_seed']}"
     )
-    print(f"Latent steps  : {summary['latent_steps']}")
+    communication_label = "Communication" if summary["target"] == "latent_comm" else "Latent steps"
+    print(f"{communication_label:<14}: {summary['latent_steps']}")
     print(f"Host          : {socket.gethostname()}")
     if shutil.which("nvidia-smi"):
         subprocess.run(["nvidia-smi", "-L"], check=False)
