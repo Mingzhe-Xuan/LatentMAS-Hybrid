@@ -74,6 +74,22 @@ def load_cache_helpers():
     return namespace["_cache_identity"], namespace["_cache_paths"]
 
 
+def load_c3_summary():
+    tree = ast.parse(MAS_SOURCE.read_text(encoding="utf-8"))
+    wanted_functions = {"_bootstrap_mean", "_summarize_c3"}
+    nodes = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in wanted_functions
+    ]
+    namespace = {"np": np}
+    exec(
+        compile(ast.Module(body=nodes, type_ignores=[]), str(MAS_SOURCE), "exec"),
+        namespace,
+    )
+    return namespace["_summarize_c3"]
+
+
 def load_c2_summary():
     tree = ast.parse(MAS_SOURCE.read_text(encoding="utf-8"))
     wanted_assignments = {"MAS_ALIGNMENTS"}
@@ -118,6 +134,12 @@ class MasArgumentTests(unittest.TestCase):
             [20, 40, 60, 80, 100, 120, 140, 160, 180],
         )
 
+    def test_c3_defaults_match_shared_experiment_contract(self):
+        args = load_parse_args()(["--study", "c3"])
+        self.assertEqual(args.model_name, "Qwen/Qwen3-8B")
+        self.assertEqual(args.dataset, "mbppplus")
+        self.assertEqual(args.max_questions, 30)
+
     def test_c0_defaults_remain_backward_compatible(self):
         args = load_parse_args()([])
         self.assertEqual(args.model_name, "Qwen/Qwen3-4B")
@@ -159,10 +181,14 @@ class MasCacheTests(unittest.TestCase):
         second_args = self.args(
             study="c2", bootstrap_replicates=5000, probe_seed=999
         )
+        third_args = self.args(study="c3")
         first = identity(first_args, items)
         second = identity(second_args, items)
+        third = identity(third_args, items)
         self.assertEqual(first, second)
+        self.assertEqual(first, third)
         self.assertEqual(paths(first_args, first), paths(second_args, second))
+        self.assertEqual(paths(first_args, first), paths(third_args, third))
 
     def test_rollout_settings_invalidate_cache(self):
         identity, _ = load_cache_helpers()
@@ -180,7 +206,7 @@ class MasCacheTests(unittest.TestCase):
     def test_cache_hit_skips_model_rollout(self):
         source = MAS_SOURCE.read_text(encoding="utf-8")
         self.assertIn("if cache_hit:", source)
-        self.assertIn("rollout skipped: reusing shared C1/C2 cache", source)
+        self.assertIn("rollout skipped: reusing shared C1/C2/C3 cache", source)
         self.assertIn(
             "if not cache_hit:\n            cache_manifest = _save_metrics_cache",
             source,
@@ -251,6 +277,36 @@ class MasStudyDefinitionTests(unittest.TestCase):
         source = MODEL_SOURCE.read_text(encoding="utf-8")
         self.assertIn("do_sample = temperature > 0", source)
         self.assertIn("if do_sample else {}", source)
+
+
+@unittest.skipIf(np is None, "NumPy is not installed")
+class MasTimeSummaryTests(unittest.TestCase):
+    def test_c3_reports_mean_time_per_question(self):
+        rows = [
+            {
+                "alignment": "identical",
+                "latent_steps_per_agent": 20,
+                "wall_seconds": 2.0,
+            },
+            {
+                "alignment": "identical",
+                "latent_steps_per_agent": 20,
+                "wall_seconds": 4.0,
+            },
+        ]
+        args = SimpleNamespace(
+            alignments=["identical"],
+            latent_step_values=[20],
+            bootstrap_replicates=20,
+            probe_seed=42,
+        )
+        summary = load_c3_summary()(rows, args)
+        point = summary["series"]["identical"][0]
+        self.assertEqual(summary["study"], "c3")
+        self.assertEqual(point["timed_questions"], 2)
+        self.assertEqual(point["mean_seconds_per_question"], 3.0)
+        self.assertEqual(point["median_seconds_per_question"], 3.0)
+        self.assertEqual(point["total_latent_steps"], 60)
 
 
 @unittest.skipIf(np is None, "NumPy is not installed")

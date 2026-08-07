@@ -152,7 +152,7 @@ def build_command(
     elif target == "latent_cot":
         study = resolve("study", "STUDY", "c0")
         model_pair = resolve("model_pair", "MODEL_PAIR", "c0")
-        mas_study = study in {"c1", "c2"}
+        mas_study = study in {"c1", "c2", "c3"}
         model_name = resolve(
             "model_name", "MODEL_NAME",
             "Qwen/Qwen3-8B" if mas_study else "Qwen/Qwen3-4B",
@@ -248,7 +248,7 @@ def build_command(
         "orf_seed": orf_seed,
         "latent_steps": (
             " ".join(latent_step_values)
-            if target == "latent_cot" and study in {"c1", "c2"}
+            if target == "latent_cot" and study in {"c1", "c2", "c3"}
             else latent_steps
         ),
         "entry": entry,

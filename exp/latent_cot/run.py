@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Latent-CoT C0 and sequential LatentMAS C1/C2 experiments."""
+"""Latent-CoT C0 and sequential LatentMAS C1/C2/C3 experiments."""
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ TRAJECTORY_DIR = ROOT / "exp" / "cache" / "trajectories"
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--study", choices=["c0", "c1", "c2"], default="c0")
+    parser.add_argument("--study", choices=["c0", "c1", "c2", "c3"], default="c0")
     parser.add_argument("--model_name", default=None)
     parser.add_argument(
         "--dataset",
@@ -82,7 +82,7 @@ def parse_args(argv=None):
     parser.add_argument(
         "--reuse_trajectory",
         action="store_true",
-        help="Require an existing compatible C0 trajectory or C1/C2 metrics cache.",
+        help="Require an existing compatible C0 trajectory or C1/C2/C3 metrics cache.",
     )
     parser.add_argument(
         "--force_recollect",
@@ -104,8 +104,8 @@ def parse_args(argv=None):
         parser.error("--latent_step_values must not contain duplicates")
     if any(value < 1 for value in args.latent_step_values):
         parser.error("--latent_step_values must contain positive integers")
-    if args.study in {"c1", "c2"} and args.dataset != "mbppplus":
-        parser.error("C1/C2 currently require --dataset mbppplus")
+    if args.study in {"c1", "c2", "c3"} and args.dataset != "mbppplus":
+        parser.error("C1/C2/C3 currently require --dataset mbppplus")
     if args.max_new_tokens < 1:
         parser.error("--max_new_tokens must be positive")
     if args.reuse_trajectory and args.force_recollect:
@@ -716,7 +716,7 @@ def main(argv=None):
     args = parse_args(argv)
     logger = configure_logger()
     set_seed(args.probe_seed)
-    if args.study in {"c1", "c2"}:
+    if args.study in {"c1", "c2", "c3"}:
         from mas_analysis import run_mas_study
 
         return run_mas_study(args, logger)

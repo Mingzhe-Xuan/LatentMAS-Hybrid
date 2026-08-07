@@ -69,7 +69,7 @@ Progress is appended to `exp_state.txt` in the invocation working directory.
 C1 reuses the active root `methods/latent_mas.py` sequential organization. A
 single Qwen3-8B instance serves as Planner, Critic, Refiner, and Judger. Planner,
 Critic, and Refiner each perform the same K latent steps while retaining the
-complete accumulated prompt and latent KV cache. The shared C1/C2 collector
+complete accumulated prompt and latent KV cache. The shared C1/C2/C3 collector
 records post-feedback hidden-state entropy at every local step and then runs the
 Judger, so the same rollout also supplies C2 accuracy. The cumulative index is
 Planner `t`, Critic `K+t`, and Refiner `2K+t`.
@@ -113,20 +113,46 @@ C2 writes `c2_accuracy_by_question.parquet`, `c2_summary.json`, and
 `c2_accuracy_vs_steps.pdf`. Each point reports both accuracy and the raw
 `correct/30` count with a question-bootstrap 95% interval.
 
-### C1/C2 rollout cache
+## C3: mean time per question by latent steps
 
-Like C0, C1 and C2 keep validated rollout-derived data in a stable cache, under
-`exp/cache/latent_cot_mas/`. Each cache contains both a C1 entropy table and a
-C2 accuracy table produced by one complete Planner/Critic/Refiner/Judger
-rollout. Consequently, running C1 first makes the later C2 command a cache hit,
-and vice versa, provided their rollout arguments match. A cache miss from
-either study performs the complete flow, including Judger decoding.
+C3 reuses the per-question `wall_seconds` already stored by the shared C1/C2/C3
+rollout. For every alignment and K, it plots the mean time across the MBPP+
+questions with a question-bootstrap 95% interval. The horizontal axis is K,
+the latent steps used by each of Planner, Critic, and Refiner; the corresponding
+total latent budget is `3K`. Timing covers the complete
+`LatentMASMethod.run_batch` call, including Judger decoding and MBPP+ correctness
+evaluation.
+
+```bash
+python exp/latent_cot/run.py \
+  --study c3 \
+  --model_name Qwen/Qwen3-8B \
+  --dataset mbppplus --split test --max_questions 30 \
+  --latent_step_values 20 40 60 80 100 120 140 160 180 \
+  --alignments identical linear soft kernel \
+  --max_new_tokens 4096 --device cuda
+```
+
+C3 writes `c3_time_by_question.parquet`, `c3_summary.json`, and
+`c3_time_vs_steps.pdf`. If a compatible C1 or C2 shared cache already exists,
+C3 only performs aggregation and plotting.
+
+### C1/C2/C3 shared rollout cache
+
+Like C0, C1, C2, and C3 keep validated rollout-derived data in a stable cache
+under `exp/cache/latent_cot_mas/`. Each cache contains a C1 entropy table and a
+C2/C3 per-question table with accuracy and wall time, produced by one complete
+Planner/Critic/Refiner/Judger rollout. Consequently, running any one of C1, C2,
+or C3 makes the other two cache hits, provided their rollout arguments match.
+A cache miss from any study performs the complete flow, including Judger
+decoding.
 
 A normal rerun only regenerates the requested run-local summary and figure; it
 does not load the model or perform rollout again. The cache identity covers the
 exact MBPP+ question contents, model name, K grid, alignments, generation seed,
 `max_new_tokens`, and rollout/alignment settings. It intentionally does not
-include `--study`, because C1 and C2 are two views of the same cached rollout.
+include `--study`, because C1, C2, and C3 are three views of the same cached
+rollout.
 
 Use `--reuse_trajectory` when a cache hit is mandatory (the command fails if no
 compatible cache exists), or `--force_recollect` to ignore and replace the
@@ -140,4 +166,5 @@ PBS examples:
 ```bash
 qsub -v "EXP_TARGET=latent_cot,STUDY=c1" exp.sh
 qsub -v "EXP_TARGET=latent_cot,STUDY=c2" exp.sh
+qsub -v "EXP_TARGET=latent_cot,STUDY=c3" exp.sh
 ```

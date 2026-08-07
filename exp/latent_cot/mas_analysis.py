@@ -1,4 +1,4 @@
-"""C1/C2 analysis for sequential LatentMAS on MBPP+."""
+"""C1/C2/C3 analysis for sequential LatentMAS on MBPP+."""
 
 from __future__ import annotations
 
@@ -128,20 +128,20 @@ def _load_metrics_cache(args, identity):
     ]
     if any(presence) and not all(presence) and not args.force_recollect:
         raise RuntimeError(
-            "Incomplete shared C1/C2 cache; use --force_recollect: "
+            "Incomplete shared C1/C2/C3 cache; use --force_recollect: "
             f"{manifest_path}"
         )
     if not all(presence) or args.force_recollect:
         if args.reuse_trajectory:
             raise FileNotFoundError(
-                "--reuse_trajectory requested but shared C1/C2 cache is absent: "
+                "--reuse_trajectory requested but shared C1/C2/C3 cache is absent: "
                 f"{manifest_path}"
             )
         return None, None, None, entropy_path, accuracy_path, manifest_path
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("cache_identity") != identity:
         raise RuntimeError(
-            f"Refusing incompatible shared C1/C2 cache: {manifest_path}"
+            f"Refusing incompatible shared C1/C2/C3 cache: {manifest_path}"
         )
     expected_hashes = manifest.get("metrics_sha256", {})
     if _file_sha256(entropy_path) != expected_hashes.get("entropy"):
@@ -456,6 +456,52 @@ def _summarize_c2(rows, args):
     }
 
 
+
+def _summarize_c3(rows, args):
+    series = {}
+    for alignment_index, alignment in enumerate(args.alignments):
+        points = []
+        for latent_steps in args.latent_step_values:
+            selected = [
+                float(row["wall_seconds"])
+                for row in rows
+                if row["alignment"] == alignment
+                and row["latent_steps_per_agent"] == latent_steps
+                and row.get("wall_seconds") is not None
+                and np.isfinite(float(row["wall_seconds"]))
+            ]
+            low, high = _bootstrap_mean(
+                selected,
+                args.bootstrap_replicates,
+                args.probe_seed + latent_steps * 100 + alignment_index,
+            )
+            points.append(
+                {
+                    "latent_steps_per_agent": latent_steps,
+                    "total_latent_steps": 3 * latent_steps,
+                    "timed_questions": len(selected),
+                    "mean_seconds_per_question": (
+                        float(np.mean(selected)) if selected else None
+                    ),
+                    "median_seconds_per_question": (
+                        float(np.median(selected)) if selected else None
+                    ),
+                    "ci95_low": low,
+                    "ci95_high": high,
+                }
+            )
+        series[alignment] = points
+    return {
+        "study": "c3",
+        "metric": "mean_wall_seconds_per_question",
+        "timing_scope": (
+            "LatentMASMethod.run_batch end-to-end wall time, including Judger "
+            "decoding and MBPP+ correctness evaluation"
+        ),
+        "latent_budget": "three non-judger agents each use K latent steps",
+        "series": series,
+    }
+
 def _plot_c1(summary, path: Path, args):
     figure, axes = plt.subplots(3, 3, figsize=(18, 14), squeeze=False)
     flat = [axis for row in axes for axis in row]
@@ -546,9 +592,41 @@ def _plot_c2(summary, path: Path, args):
     plt.close(figure)
 
 
+
+def _plot_c3(summary, path: Path, args):
+    figure, axis = plt.subplots(figsize=(8, 5.5))
+    for alignment in args.alignments:
+        points = summary["series"][alignment]
+        x = np.asarray([point["latent_steps_per_agent"] for point in points])
+        mean = np.asarray([
+            np.nan
+            if point["mean_seconds_per_question"] is None
+            else point["mean_seconds_per_question"]
+            for point in points
+        ])
+        low = np.asarray([
+            np.nan if point["ci95_low"] is None else point["ci95_low"]
+            for point in points
+        ])
+        high = np.asarray([
+            np.nan if point["ci95_high"] is None else point["ci95_high"]
+            for point in points
+        ])
+        axis.plot(x, mean, marker="o", color=COLORS[alignment], label=alignment)
+        axis.fill_between(x, low, high, color=COLORS[alignment], alpha=0.12)
+    axis.set_xlabel("Latent steps per Planner/Critic/Refiner agent (K)")
+    axis.set_ylabel("Mean wall time per question (seconds)")
+    axis.grid(alpha=0.25)
+    axis.legend(title="Alignment")
+    axis.set_title("C3: sequential LatentMAS time vs. per-agent latent steps")
+    figure.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(path)
+    plt.close(figure)
+
 def run_mas_study(args, logger: logging.Logger | None = None):
     if args.dataset != "mbppplus":
-        raise ValueError("C1/C2 currently require --dataset mbppplus.")
+        raise ValueError("C1/C2/C3 currently require --dataset mbppplus.")
     logger = logger or logging.getLogger(f"latent_cot.{args.study}")
     run_dir = _run_directory(args)
     manifest_path = run_dir / "run_manifest.json"
@@ -594,7 +672,7 @@ def run_mas_study(args, logger: logging.Logger | None = None):
         model_info = cache_manifest.get("model") if cache_manifest else None
         manifest["metrics_cache"] = {
             "cache_hit": cache_hit,
-            "shared_c1_c2_rollout": True,
+            "shared_c1_c2_c3_views": True,
             "entropy_metrics": str(entropy_cache_path),
             "accuracy_metrics": str(accuracy_cache_path),
             "manifest": str(cache_manifest_path),
@@ -605,7 +683,7 @@ def run_mas_study(args, logger: logging.Logger | None = None):
 
         if cache_hit:
             logger.info(
-                "%s rollout skipped: reusing shared C1/C2 cache %s",
+                "%s rollout skipped: reusing shared C1/C2/C3 cache %s",
                 args.study.upper(),
                 cache_manifest_path,
             )
@@ -640,7 +718,7 @@ def run_mas_study(args, logger: logging.Logger | None = None):
                 model_args.align_method = alignment
                 for latent_steps in args.latent_step_values:
                     logger.info(
-                        "Shared C1/C2 rollout alignment=%s K=%d started",
+                        "Shared C1/C2/C3 rollout alignment=%s K=%d started",
                         alignment,
                         latent_steps,
                     )
@@ -777,7 +855,7 @@ def run_mas_study(args, logger: logging.Logger | None = None):
                     _write_parquet(entropy_checkpoint, entropy_cell_rows)
                     _write_parquet(accuracy_checkpoint, accuracy_cell_rows)
                     logger.info(
-                        "Shared C1/C2 checkpoints saved for alignment=%s K=%d",
+                        "Shared C1/C2/C3 checkpoints saved for alignment=%s K=%d",
                         alignment,
                         latent_steps,
                     )
@@ -870,7 +948,7 @@ def run_mas_study(args, logger: logging.Logger | None = None):
             _write_json(summary_path, summary)
             _plot_c1(summary, figure_path, args)
             row_count = len(entropy_rows)
-        else:
+        elif args.study == "c2":
             metrics_path = run_dir / "metrics" / "c2_accuracy_by_question.parquet"
             summary_path = run_dir / "summaries" / "c2_summary.json"
             figure_path = run_dir / "figures" / "c2_accuracy_vs_steps.pdf"
@@ -878,6 +956,15 @@ def run_mas_study(args, logger: logging.Logger | None = None):
             summary = _summarize_c2(accuracy_rows, args)
             _write_json(summary_path, summary)
             _plot_c2(summary, figure_path, args)
+            row_count = len(accuracy_rows)
+        else:
+            metrics_path = run_dir / "metrics" / "c3_time_by_question.parquet"
+            summary_path = run_dir / "summaries" / "c3_summary.json"
+            figure_path = run_dir / "figures" / "c3_time_vs_steps.pdf"
+            _write_parquet(metrics_path, accuracy_rows)
+            summary = _summarize_c3(accuracy_rows, args)
+            _write_json(summary_path, summary)
+            _plot_c3(summary, figure_path, args)
             row_count = len(accuracy_rows)
 
         manifest["metrics_cache"].update(

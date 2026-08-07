@@ -120,7 +120,7 @@ case "${EXP_TARGET}" in
         STUDY="${STUDY:-c0}"; MODEL_PAIR="${MODEL_PAIR:-c0}"
         SPLIT="${SPLIT:-test}"; LATENT_STEPS="${LATENT_STEPS:-150}"
         ENTRY="exp/latent_cot/run.py"
-        if [[ "${STUDY}" == "c1" || "${STUDY}" == "c2" ]]; then
+        if [[ "${STUDY}" == "c1" || "${STUDY}" == "c2" || "${STUDY}" == "c3" ]]; then
             DATASET="${DATASET:-mbppplus}"
             MAX_QUESTIONS="${MAX_QUESTIONS:-30}"
             MODEL_NAME="${MODEL_NAME:-Qwen/Qwen3-8B}"
