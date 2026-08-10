@@ -27,7 +27,8 @@ except ImportError:
     Cache = None
 
 
-EARLY_STOPPING_LATENT_MAX_STEPS = 20000
+SOFT_LATENT_MAX_STEPS = 20000
+KERNEL_EARLY_STOPPING_MAX_STEPS = 200
 KERNEL_ENTROPY_CHECK_INTERVAL = 10
 KERNEL_STABLE_CHANGE_THRESHOLD = 0.1
 KERNEL_STABLE_CHANGE_COUNT = 4
@@ -563,7 +564,12 @@ class ModelWrapper:
         alignment_timer = _AlignmentTimer(self.device)
         latent_started_at = time.perf_counter()
         early_stopping_enabled = self.align_method in ("soft", "kernel_early_stopping")
-        decode_step_limit = EARLY_STOPPING_LATENT_MAX_STEPS if early_stopping_enabled else latent_steps
+        if self.align_method == "soft":
+            decode_step_limit = SOFT_LATENT_MAX_STEPS
+        elif self.align_method == "kernel_early_stopping":
+            decode_step_limit = KERNEL_EARLY_STOPPING_MAX_STEPS
+        else:
+            decode_step_limit = latent_steps
         low_entropy_run = torch.zeros(
             input_ids.shape[0], dtype=torch.long, device=last_hidden.device
         )
@@ -716,7 +722,12 @@ class ModelWrapper:
         alignment_timer = _AlignmentTimer(self.HF_device)
         latent_started_at = time.perf_counter()
         early_stopping_enabled = self.align_method in ("soft", "kernel_early_stopping")
-        decode_step_limit = EARLY_STOPPING_LATENT_MAX_STEPS if early_stopping_enabled else latent_steps
+        if self.align_method == "soft":
+            decode_step_limit = SOFT_LATENT_MAX_STEPS
+        elif self.align_method == "kernel_early_stopping":
+            decode_step_limit = KERNEL_EARLY_STOPPING_MAX_STEPS
+        else:
+            decode_step_limit = latent_steps
         low_entropy_run = torch.zeros(
             input_ids.shape[0], dtype=torch.long, device=last_hidden.device
         )

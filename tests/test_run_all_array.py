@@ -98,7 +98,8 @@ class RunAllArrayTests(unittest.TestCase):
     def test_kernel_early_stopping_defaults_and_cap(self) -> None:
         self.assertIn('20 if args.align_method == "kernel_early_stopping" else 256', RUN_PY)
         self.assertIn('0.25 if args.align_method == "kernel_early_stopping" else 0.01', RUN_PY)
-        self.assertIn("EARLY_STOPPING_LATENT_MAX_STEPS = 20000", MODELS_PY)
+        self.assertIn("SOFT_LATENT_MAX_STEPS = 20000", MODELS_PY)
+        self.assertIn("KERNEL_EARLY_STOPPING_MAX_STEPS = 200", MODELS_PY)
         self.assertIn("KERNEL_ENTROPY_CHECK_INTERVAL = 10", MODELS_PY)
         self.assertIn("KERNEL_STABLE_CHANGE_THRESHOLD = 0.1", MODELS_PY)
         self.assertIn("KERNEL_STABLE_CHANGE_COUNT = 4", MODELS_PY)
