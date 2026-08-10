@@ -158,6 +158,50 @@ def build_linear_state(output_weight: torch.Tensor, input_weight: torch.Tensor, 
     return AlignmentState("linear", target.norm(dim=1).mean(), matrix=matrix)
 
 
+def compute_logits_entropy(
+    hidden: torch.Tensor,
+    output_weight: torch.Tensor,
+    output_bias: Optional[torch.Tensor],
+    *,
+    temperature: float,
+    query_chunk_size: int,
+) -> torch.Tensor:
+    """Compute exact full-vocabulary entropy for temperature-scaled logits."""
+    if temperature <= 0:
+        raise ValueError("logits entropy temperature must be positive")
+    if query_chunk_size <= 0:
+        raise ValueError("logits entropy query chunk size must be positive")
+    if not torch.isfinite(hidden).all():
+        raise FloatingPointError("Logits entropy received non-finite hidden states")
+
+    flat_hidden = hidden.reshape(-1, hidden.shape[-1]).float()
+    vocab = output_weight.shape[0]
+    vocab_chunk_size = min(4096, vocab)
+    entropy_chunks = []
+    for query_start in range(0, flat_hidden.shape[0], query_chunk_size):
+        query_stop = min(query_start + query_chunk_size, flat_hidden.shape[0])
+        queries = flat_hidden[query_start:query_stop]
+        logits = []
+        for vocab_start in range(0, vocab, vocab_chunk_size):
+            vocab_stop = min(vocab_start + vocab_chunk_size, vocab)
+            keys = output_weight[vocab_start:vocab_stop].to(
+                device=queries.device, dtype=torch.float32
+            )
+            chunk_logits = queries @ keys.T
+            if output_bias is not None:
+                chunk_logits = chunk_logits + output_bias[vocab_start:vocab_stop].to(
+                    device=queries.device, dtype=torch.float32
+                )
+            logits.append(chunk_logits / temperature)
+        probabilities = torch.softmax(torch.cat(logits, dim=-1), dim=-1)
+        entropy_chunks.append(torch.special.entr(probabilities).sum(dim=-1))
+    entropy = (
+        torch.cat(entropy_chunks, dim=0)
+        if entropy_chunks
+        else torch.empty(0, device=flat_hidden.device, dtype=torch.float32)
+    )
+    return entropy.reshape(*hidden.shape[:-1])
+
 def apply_soft_alignment_with_entropy(
     hidden: torch.Tensor, state: AlignmentState
 ) -> Tuple[torch.Tensor, torch.Tensor]:

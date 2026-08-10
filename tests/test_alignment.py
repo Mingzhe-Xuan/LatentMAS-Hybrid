@@ -9,6 +9,7 @@ from alignment import (
     apply_alignment,
     apply_soft_alignment_with_entropy,
     build_kernel_state,
+    compute_logits_entropy,
     build_linear_state,
     build_orf,
     build_soft_state,
@@ -111,6 +112,10 @@ class KernelAlgorithmTests(unittest.TestCase):
         aligned, entropy = apply_soft_alignment_with_entropy(hidden, state)
         torch.testing.assert_close(aligned, expected_aligned)
         torch.testing.assert_close(entropy, expected_entropy)
+        direct_entropy = compute_logits_entropy(
+            hidden, self.w_out, self.bias, temperature=0.8, query_chunk_size=1
+        )
+        torch.testing.assert_close(direct_entropy, expected_entropy)
 
     def test_soft_query_chunking_preserves_full_vocabulary_result(self) -> None:
         hidden = torch.tensor(

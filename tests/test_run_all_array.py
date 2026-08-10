@@ -1,4 +1,4 @@
-"""Static checks for the filtered 288-task PBS experiment array."""
+"""Static checks for the filtered 336-config PBS experiment array."""
 
 from itertools import product
 from pathlib import Path
@@ -10,7 +10,10 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 RUN_ALL = (ROOT / "run_all.sh").read_text(encoding="utf-8")
 RUN_ALL_FAST = (ROOT / "run_all_fast.sh").read_text(encoding="utf-8")
+RUN_ALL_SLOW = (ROOT / "run_all_slow.sh").read_text(encoding="utf-8")
 RUN = (ROOT / "run.sh").read_text(encoding="utf-8")
+RUN_PY = (ROOT / "run.py").read_text(encoding="utf-8")
+MODELS_PY = (ROOT / "models.py").read_text(encoding="utf-8")
 
 
 def bash_array(name: str) -> list[str]:
@@ -35,12 +38,12 @@ class RunAllArrayTests(unittest.TestCase):
         ]
 
     def test_pbs_array_directive_and_dimensions(self) -> None:
-        self.assertRegex(RUN_ALL, r"(?m)^#PBS -J 1-96%3$")
+        self.assertRegex(RUN_ALL, r"(?m)^#PBS -J 1-112%3$")
         self.assertEqual(len(self.datasets), 9)
         self.assertEqual(len(self.models), 3)
         self.assertEqual(len(self.four_b_datasets), 6)
-        self.assertEqual(len(self.configs), 12)
-        self.assertEqual(len(self.model_dataset_pairs) * len(self.configs), 288)
+        self.assertEqual(len(self.configs), 14)
+        self.assertEqual(len(self.model_dataset_pairs) * len(self.configs), 336)
         self.assertIn('TASKS_PER_GPU="${TASKS_PER_GPU:-3}"', RUN_ALL)
         self.assertIn('WORKER_MODE=true CONFIG_OFFSET="${CHILD_OFFSET}"', RUN_ALL)
 
@@ -57,18 +60,22 @@ class RunAllArrayTests(unittest.TestCase):
         self.assertEqual(self.model_dataset_pairs[18], ("Qwen/Qwen3-4B", "arc_challenge"))
 
     def test_fast_array_excludes_slow_datasets_for_every_model(self) -> None:
-        self.assertRegex(RUN_ALL_FAST, r"(?m)^#PBS -J 1-72%3$")
+        self.assertRegex(RUN_ALL_FAST, r"(?m)^#PBS -J 1-84%3$")
         self.assertIn("FAST_ONLY=true", RUN_ALL_FAST)
         self.assertIn('RUN_ALL_SCRIPT="${SUBMIT_DIR}/run_all.sh"', RUN_ALL_FAST)
         self.assertIn('exec bash "${RUN_ALL_SCRIPT}"', RUN_ALL_FAST)
         self.assertIn('if [[ "${FAST_ONLY}" == "true" ]]', RUN_ALL)
         self.assertEqual(
             len(self.four_b_datasets) * len(self.models) * len(self.configs),
-            216,
+            252,
         )
         excluded = {"aime2024", "aime2025", "gpqa"}
         self.assertTrue(excluded.isdisjoint(self.four_b_datasets))
 
+    def test_slow_array_dimensions(self) -> None:
+        self.assertRegex(RUN_ALL_SLOW, r"(?m)^#PBS -J 1-28%3$")
+        self.assertIn("84 slow configs", RUN_ALL_SLOW)
+        self.assertIn("SLOW_ONLY=true", RUN_ALL_SLOW)
     def test_exact_configuration_matrix(self) -> None:
         expected = [
             ("baseline", "sequential", "identical"),
@@ -78,14 +85,26 @@ class RunAllArrayTests(unittest.TestCase):
             ("latent_mas", "sequential", "identical"),
             ("latent_mas", "sequential", "linear"),
             ("latent_mas", "sequential", "kernel"),
+            ("latent_mas", "sequential", "kernel_early_stopping"),
             ("latent_mas", "sequential", "soft"),
             ("latent_mas", "hierarchical", "identical"),
             ("latent_mas", "hierarchical", "linear"),
             ("latent_mas", "hierarchical", "kernel"),
+            ("latent_mas", "hierarchical", "kernel_early_stopping"),
             ("latent_mas", "hierarchical", "soft"),
         ]
         self.assertEqual(self.configs, expected)
 
+    def test_kernel_early_stopping_defaults_and_cap(self) -> None:
+        self.assertIn('20 if args.align_method == "kernel_early_stopping" else 256', RUN_PY)
+        self.assertIn('0.25 if args.align_method == "kernel_early_stopping" else 0.01', RUN_PY)
+        self.assertIn("EARLY_STOPPING_LATENT_MAX_STEPS = 20000", MODELS_PY)
+        self.assertIn("KERNEL_ENTROPY_CHECK_INTERVAL = 10", MODELS_PY)
+        self.assertIn("KERNEL_STABLE_CHANGE_THRESHOLD = 0.1", MODELS_PY)
+        self.assertIn("KERNEL_STABLE_CHANGE_COUNT = 4", MODELS_PY)
+        self.assertIn(
+            'self.align_method in ("soft", "kernel_early_stopping")', MODELS_PY
+        )
     def test_all_state_file_names_are_unique(self) -> None:
         names = []
         for (model, dataset), (method, prompt, alignment) in product(
@@ -94,8 +113,8 @@ class RunAllArrayTests(unittest.TestCase):
             effective_method = f"{method}_{alignment}" if method == "latent_mas" else method
             model_slug = re.sub(r"[^A-Za-z0-9._-]", "_", model)
             names.append(f"{dataset}_{effective_method}_{prompt}_{model_slug}_state.txt")
-        self.assertEqual(len(names), 288)
-        self.assertEqual(len(set(names)), 288)
+        self.assertEqual(len(names), 336)
+        self.assertEqual(len(set(names)), 336)
         self.assertIn(
             "arc_easy_latent_mas_kernel_sequential_Qwen_Qwen3-4B_state.txt",
             names,
@@ -110,7 +129,7 @@ class RunAllArrayTests(unittest.TestCase):
             for method, prompt, alignment in self.configs
             if method == "latent_mas"
         }
-        self.assertEqual(len(latent_names), 8)
+        self.assertEqual(len(latent_names), 10)
 
     def test_skip_force_and_progress_ledger(self) -> None:
         self.assertIn('FORCE_ALL="${FORCE_ALL:-false}"', RUN_ALL)
@@ -127,7 +146,7 @@ class RunAllArrayTests(unittest.TestCase):
         self.assertIn('run_repeated "${CONFIG_METHOD}" "${CONFIG_PROMPT}" "${CONFIG_ALIGNMENT}"', RUN)
         self.assertIn("baseline|text_mas", RUN)
         self.assertIn("only supports identical alignment", RUN)
-        self.assertIn("identical|linear|kernel|soft", RUN)
+        self.assertIn("identical|linear|kernel|kernel_early_stopping|soft", RUN)
         self.assertIn('--soft_temperature "${SOFT_TEMPERATURE}"', RUN)
         self.assertIn('--soft_chunk_size "${SOFT_CHUNK_SIZE}"', RUN)
         self.assertIn("SOFT_TEMPERATURE=${SOFT_TEMPERATURE}", RUN_ALL)

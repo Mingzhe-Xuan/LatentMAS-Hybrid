@@ -183,7 +183,7 @@ class LatentMASMethod:
                                 latent_input_tokens=role_kv_input_tokens,
                                 text_output_tokens=(
                                     latent_metrics["latent_output_counts"][idx]
-                                    if self.args.align_method == "soft" else 0
+                                    if self.args.align_method in ("soft", "kernel_early_stopping") else 0
                                 ),
                                 latent_output_tokens=latent_metrics["latent_output_counts"][idx],
                                 phase_metrics=latent_metrics,
@@ -419,7 +419,7 @@ class LatentMASMethod:
                                 latent_input_tokens=role_kv_input_tokens,
                                 text_output_tokens=(
                                     latent_metrics["latent_output_counts"][idx]
-                                    if self.args.align_method == "soft" else 0
+                                    if self.args.align_method in ("soft", "kernel_early_stopping") else 0
                                 ),
                                 latent_output_tokens=latent_metrics["latent_output_counts"][idx],
                                 phase_metrics=latent_metrics,

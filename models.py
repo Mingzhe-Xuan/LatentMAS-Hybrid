@@ -10,6 +10,7 @@ from alignment import (
     apply_alignment,
     apply_soft_alignment_with_entropy,
     build_kernel_state,
+    compute_logits_entropy,
     build_linear_state,
     build_soft_state,
 )
@@ -26,7 +27,10 @@ except ImportError:
     Cache = None
 
 
-SOFT_LATENT_MAX_STEPS = 20000
+EARLY_STOPPING_LATENT_MAX_STEPS = 20000
+KERNEL_ENTROPY_CHECK_INTERVAL = 10
+KERNEL_STABLE_CHANGE_THRESHOLD = 0.1
+KERNEL_STABLE_CHANGE_COUNT = 4
 
 
 def _ensure_pad_token(tokenizer: AutoTokenizer) -> None:
@@ -307,7 +311,7 @@ class ModelWrapper:
             return AlignmentState("identical", input_weight.detach().float().norm(dim=1).mean())
         if self.align_method == "linear":
             return build_linear_state(output_weight, input_weight, ridge=float(getattr(self.args, "align_ridge", 1e-5)))
-        if self.align_method == "kernel":
+        if self.align_method in ("kernel", "kernel_early_stopping"):
             return build_kernel_state(
                 output_weight, input_weight, output_bias,
                 feature_count=int(getattr(self.args, "kernel_features", 1024)),
@@ -342,7 +346,20 @@ class ModelWrapper:
     ):
         state = self._ensure_alignment_state(model, model)
         if return_entropy:
-            aligned, entropy = apply_soft_alignment_with_entropy(hidden, state)
+            if self.align_method == "soft":
+                aligned, entropy = apply_soft_alignment_with_entropy(hidden, state)
+            elif self.align_method == "kernel_early_stopping":
+                aligned = apply_alignment(hidden, state)
+                output_weight, _, output_bias = self._embedding_weights(model, model)
+                entropy = compute_logits_entropy(
+                    hidden,
+                    output_weight,
+                    output_bias,
+                    temperature=float(getattr(self.args, "kernel_temperature", 1.0)),
+                    query_chunk_size=32,
+                )
+            else:
+                raise ValueError("Entropy-aware realignment requires an early-stopping alignment method")
             self.pre_aligned = aligned.detach().clone()
             return aligned, entropy
         aligned = apply_alignment(hidden, state)
@@ -545,20 +562,37 @@ class ModelWrapper:
 
         alignment_timer = _AlignmentTimer(self.device)
         latent_started_at = time.perf_counter()
-        decode_step_limit = SOFT_LATENT_MAX_STEPS if self.align_method == "soft" else latent_steps
+        early_stopping_enabled = self.align_method in ("soft", "kernel_early_stopping")
+        decode_step_limit = EARLY_STOPPING_LATENT_MAX_STEPS if early_stopping_enabled else latent_steps
         low_entropy_run = torch.zeros(
             input_ids.shape[0], dtype=torch.long, device=last_hidden.device
         )
+        stable_entropy_change_run = torch.zeros_like(low_entropy_run)
+        previous_sampled_entropy = None
+        default_length_threshold = 20 if self.align_method == "kernel_early_stopping" else 256
+        default_entropy_threshold = 0.25 if self.align_method == "kernel_early_stopping" else 0.01
         entropy_length_threshold = int(
-            getattr(self.args, "early_stopping_length_threshold", 256)
+            getattr(self.args, "early_stopping_length_threshold", default_length_threshold)
         )
         entropy_threshold = float(
-            getattr(self.args, "early_stopping_entropy_threshold", 0.01)
+            getattr(self.args, "early_stopping_entropy_threshold", default_entropy_threshold)
+        )
+        low_entropy_checks_required = (
+            max(1, (entropy_length_threshold + KERNEL_ENTROPY_CHECK_INTERVAL - 1) // KERNEL_ENTROPY_CHECK_INTERVAL)
+            if self.align_method == "kernel_early_stopping"
+            else entropy_length_threshold
         )
         actual_steps = 0
         for step in range(decode_step_limit):
             source_model = self.HF_model if hasattr(self, "HF_model") else self.model
             logits_entropy = None
+            measure_entropy = (
+                self.align_method == "soft"
+                or (
+                    self.align_method == "kernel_early_stopping"
+                    and (step + 1) % KERNEL_ENTROPY_CHECK_INTERVAL == 0
+                )
+            )
             if self.align_method == "text":
                 output_head = source_model.get_output_embeddings()
                 if output_head is None:
@@ -569,7 +603,7 @@ class ModelWrapper:
                 model_inputs = {"input_ids": next_token.unsqueeze(1)}
                 batch_size = next_token.shape[0]
             else:
-                if self.align_method == "soft":
+                if measure_entropy:
                     latent_vec, logits_entropy = alignment_timer.measure(
                         lambda: self._apply_latent_realignment(
                             last_hidden, source_model, return_entropy=True
@@ -607,7 +641,25 @@ class ModelWrapper:
                     low_entropy_run + 1,
                     torch.zeros_like(low_entropy_run),
                 )
-                if bool(torch.all(low_entropy_run >= entropy_length_threshold).item()):
+                stable_change_reached = False
+                if self.align_method == "kernel_early_stopping":
+                    if previous_sampled_entropy is not None:
+                        stable_entropy_change_run = torch.where(
+                            (logits_entropy - previous_sampled_entropy).abs()
+                            < KERNEL_STABLE_CHANGE_THRESHOLD,
+                            stable_entropy_change_run + 1,
+                            torch.zeros_like(stable_entropy_change_run),
+                        )
+                        stable_change_reached = bool(
+                            torch.all(
+                                stable_entropy_change_run >= KERNEL_STABLE_CHANGE_COUNT
+                            ).item()
+                        )
+                    previous_sampled_entropy = logits_entropy
+                low_entropy_reached = bool(
+                    torch.all(low_entropy_run >= low_entropy_checks_required).item()
+                )
+                if low_entropy_reached or stable_change_reached:
                     break
         _sync_cuda(self.device)
         latent_decode_seconds = time.perf_counter() - latent_started_at
@@ -663,21 +715,38 @@ class ModelWrapper:
 
         alignment_timer = _AlignmentTimer(self.HF_device)
         latent_started_at = time.perf_counter()
-        decode_step_limit = SOFT_LATENT_MAX_STEPS if self.align_method == "soft" else latent_steps
+        early_stopping_enabled = self.align_method in ("soft", "kernel_early_stopping")
+        decode_step_limit = EARLY_STOPPING_LATENT_MAX_STEPS if early_stopping_enabled else latent_steps
         low_entropy_run = torch.zeros(
             input_ids.shape[0], dtype=torch.long, device=last_hidden.device
         )
+        stable_entropy_change_run = torch.zeros_like(low_entropy_run)
+        previous_sampled_entropy = None
+        default_length_threshold = 20 if self.align_method == "kernel_early_stopping" else 256
+        default_entropy_threshold = 0.25 if self.align_method == "kernel_early_stopping" else 0.01
         entropy_length_threshold = int(
-            getattr(self.args, "early_stopping_length_threshold", 256)
+            getattr(self.args, "early_stopping_length_threshold", default_length_threshold)
         )
         entropy_threshold = float(
-            getattr(self.args, "early_stopping_entropy_threshold", 0.01)
+            getattr(self.args, "early_stopping_entropy_threshold", default_entropy_threshold)
+        )
+        low_entropy_checks_required = (
+            max(1, (entropy_length_threshold + KERNEL_ENTROPY_CHECK_INTERVAL - 1) // KERNEL_ENTROPY_CHECK_INTERVAL)
+            if self.align_method == "kernel_early_stopping"
+            else entropy_length_threshold
         )
         actual_steps = 0
-        for _ in range(decode_step_limit):
+        for step in range(decode_step_limit):
             source_model = self.HF_model if hasattr(self, "HF_model") else self.model
             logits_entropy = None
-            if self.align_method == "soft":
+            measure_entropy = (
+                self.align_method == "soft"
+                or (
+                    self.align_method == "kernel_early_stopping"
+                    and (step + 1) % KERNEL_ENTROPY_CHECK_INTERVAL == 0
+                )
+            )
+            if measure_entropy:
                 latent_vec, logits_entropy = alignment_timer.measure(
                     lambda: self._apply_latent_realignment(
                         last_hidden, source_model, return_entropy=True
@@ -712,7 +781,25 @@ class ModelWrapper:
                     low_entropy_run + 1,
                     torch.zeros_like(low_entropy_run),
                 )
-                if bool(torch.all(low_entropy_run >= entropy_length_threshold).item()):
+                stable_change_reached = False
+                if self.align_method == "kernel_early_stopping":
+                    if previous_sampled_entropy is not None:
+                        stable_entropy_change_run = torch.where(
+                            (logits_entropy - previous_sampled_entropy).abs()
+                            < KERNEL_STABLE_CHANGE_THRESHOLD,
+                            stable_entropy_change_run + 1,
+                            torch.zeros_like(stable_entropy_change_run),
+                        )
+                        stable_change_reached = bool(
+                            torch.all(
+                                stable_entropy_change_run >= KERNEL_STABLE_CHANGE_COUNT
+                            ).item()
+                        )
+                    previous_sampled_entropy = logits_entropy
+                low_entropy_reached = bool(
+                    torch.all(low_entropy_run >= low_entropy_checks_required).item()
+                )
+                if low_entropy_reached or stable_change_reached:
                     break
         _sync_cuda(self.HF_device)
         latent_decode_seconds = time.perf_counter() - latent_started_at

@@ -314,8 +314,8 @@ def main():
             "enabled for all other models."
         ),
     )
-    parser.add_argument("--align_method", dest="align_method", choices=["identical", "linear", "kernel", "soft"], default="identical",
-                        help="Latent-to-input alignment: identity with norm scaling, linear least-squares, ORF kernel approximation, or exact soft-token expectation.")
+    parser.add_argument("--align_method", dest="align_method", choices=["identical", "linear", "kernel", "kernel_early_stopping", "soft"], default="identical",
+                        help="Latent-to-input alignment: identity, linear, kernel, entropy-stopped kernel, or exact soft-token expectation.")
     parser.add_argument("--align_ridge", dest="align_ridge", type=float, default=1e-5,
                         help="Ridge regularization for --align_method linear.")
     parser.add_argument("--kernel_features", dest="kernel_features", type=int, default=1024,
@@ -330,10 +330,10 @@ def main():
                         help="Exact soft-token temperature; distinct from generation and kernel temperatures.")
     parser.add_argument("--soft_chunk_size", dest="soft_chunk_size", type=int, default=32,
                         help="Number of hidden queries per exact softmax chunk.")
-    parser.add_argument("--early_stopping_length_threshold", type=int, default=256,
-                        help="For soft alignment, stop after this many consecutive low-entropy decoding steps.")
-    parser.add_argument("--early_stopping_entropy_threshold", type=float, default=0.01,
-                        help="For soft alignment, a decoding step is low-entropy below this threshold.")
+    parser.add_argument("--early_stopping_length_threshold", type=int, default=None,
+                        help="Low-entropy latent-step span; kernel_early_stopping samples every 10 steps, so its default 20 requires two consecutive low-entropy samples.")
+    parser.add_argument("--early_stopping_entropy_threshold", type=float, default=None,
+                        help="Low-entropy cutoff; defaults to 0.25 for kernel_early_stopping and 0.01 otherwise.")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--result_path",
@@ -367,6 +367,15 @@ def main():
 
     args.think_requested = args.think
     args.think = resolve_manual_think(args.model_name, args.think)
+
+    if args.early_stopping_length_threshold is None:
+        args.early_stopping_length_threshold = (
+            20 if args.align_method == "kernel_early_stopping" else 256
+        )
+    if args.early_stopping_entropy_threshold is None:
+        args.early_stopping_entropy_threshold = (
+            0.25 if args.align_method == "kernel_early_stopping" else 0.01
+        )
 
     if args.soft_temperature <= 0:
         parser.error("--soft_temperature must be positive")
@@ -522,6 +531,10 @@ def main():
             "soft_temperature": args.soft_temperature,
             "soft_chunk_size": args.soft_chunk_size,
             "soft_latent_max_steps": 20000,
+            "kernel_early_stopping_max_steps": 20000,
+            "kernel_entropy_check_interval": 10,
+            "kernel_stable_change_threshold": 0.1,
+            "kernel_stable_change_count": 4,
             "early_stopping_length_threshold": args.early_stopping_length_threshold,
             "early_stopping_entropy_threshold": args.early_stopping_entropy_threshold,
             "model": args.model_name,

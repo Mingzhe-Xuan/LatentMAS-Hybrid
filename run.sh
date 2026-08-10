@@ -57,7 +57,7 @@ if [ "${SINGLE_CONFIG}" = true ]; then
             ;;
         latent_mas)
             case "${CONFIG_ALIGNMENT}" in
-                identical|linear|kernel|soft) ;;
+                identical|linear|kernel|kernel_early_stopping|soft) ;;
                 *) echo "ERROR: invalid CONFIG_ALIGNMENT=${CONFIG_ALIGNMENT}"; exit 2 ;;
             esac
             ;;
@@ -254,8 +254,8 @@ KERNEL_TEMPERATURE="${KERNEL_TEMPERATURE:-1.0}"   # Kernel temperature.
 KERNEL_CHUNK_SIZE="${KERNEL_CHUNK_SIZE:-4096}"    # Kernel chunk size.
 SOFT_TEMPERATURE="${SOFT_TEMPERATURE:-1.0}"       # Exact softmax temperature.
 SOFT_CHUNK_SIZE="${SOFT_CHUNK_SIZE:-32}"          # Hidden queries per softmax chunk.
-EARLY_STOPPING_LENGTH_THRESHOLD="${EARLY_STOPPING_LENGTH_THRESHOLD:-256}"
-EARLY_STOPPING_ENTROPY_THRESHOLD="${EARLY_STOPPING_ENTROPY_THRESHOLD:-0.01}"
+EARLY_STOPPING_LENGTH_THRESHOLD="${EARLY_STOPPING_LENGTH_THRESHOLD:-auto}"
+EARLY_STOPPING_ENTROPY_THRESHOLD="${EARLY_STOPPING_ENTROPY_THRESHOLD:-auto}"
 
 ## --- vLLM backend settings ---
 USE_VLLM=false              # Whether to enable the optional vLLM backend.
@@ -292,8 +292,6 @@ COMMON=(
     --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" # run.py default: 4096; used by kernel
     --soft_temperature "${SOFT_TEMPERATURE}" # run.py default: 1.0; used by soft
     --soft_chunk_size "${SOFT_CHUNK_SIZE}" # run.py default: 32; used by soft
-    --early_stopping_length_threshold "${EARLY_STOPPING_LENGTH_THRESHOLD}" # soft default: 256
-    --early_stopping_entropy_threshold "${EARLY_STOPPING_ENTROPY_THRESHOLD}" # soft default: 0.01
 
     # vLLM numeric settings; ignored unless --use_vllm is enabled below.
     --tensor_parallel_size "${TENSOR_PARALLEL_SIZE}" # run.py default: 1
@@ -336,8 +334,8 @@ fi
 ##   --device2 DEVICE         default: None, then run.py uses --device.
 ##   --agent_models MODEL...  default: None; only used by latent_mas_hybrid.
 ##
-## --align_method choices/default: identical (default), linear, kernel, soft.
-## The current suite runs all four methods explicitly below.
+## --align_method choices/default: identical (default), linear, kernel, kernel_early_stopping, soft.
+## The current suite runs all five methods explicitly below.
 
 ## ========================== Run Experiment Suite =============================
 ## Store each repetition separately and write one average summary per config.
@@ -351,7 +349,7 @@ run_repeated() {
     local -a result_paths command
 
     # Alignment is part of the effective LatentMAS method. Without it, the
-    # identical/linear/kernel/soft suites would overwrite one another.
+    # identical/linear/kernel/kernel_early_stopping/soft suites would overwrite one another.
     if [ "${method}" = "latent_mas" ]; then
         method_slug="${method}_${align_method}"
     fi
@@ -374,6 +372,12 @@ run_repeated() {
             --result_path "${result_path}" --log_path "${log_path}" "${COMMON[@]}")
         if [ "${method}" = "latent_mas" ]; then
             command+=(--align_method "${align_method}" "${LATENT_CACHE_ARGS[@]}")
+            if [ "${EARLY_STOPPING_LENGTH_THRESHOLD}" != "auto" ]; then
+                command+=(--early_stopping_length_threshold "${EARLY_STOPPING_LENGTH_THRESHOLD}")
+            fi
+            if [ "${EARLY_STOPPING_ENTROPY_THRESHOLD}" != "auto" ]; then
+                command+=(--early_stopping_entropy_threshold "${EARLY_STOPPING_ENTROPY_THRESHOLD}")
+            fi
         fi
         "${command[@]}" || return $?
     done
@@ -427,10 +431,12 @@ run_suite() {
     run_repeated latent_mas "${PROMPT_SEQUENTIAL}" identical &&
     run_repeated latent_mas "${PROMPT_SEQUENTIAL}" linear &&
     run_repeated latent_mas "${PROMPT_SEQUENTIAL}" kernel &&
+    run_repeated latent_mas "${PROMPT_SEQUENTIAL}" kernel_early_stopping &&
     run_repeated latent_mas "${PROMPT_SEQUENTIAL}" soft &&
     run_repeated latent_mas "${PROMPT_HIERARCHICAL}" identical &&
     run_repeated latent_mas "${PROMPT_HIERARCHICAL}" linear &&
     run_repeated latent_mas "${PROMPT_HIERARCHICAL}" kernel &&
+    run_repeated latent_mas "${PROMPT_HIERARCHICAL}" kernel_early_stopping &&
     run_repeated latent_mas "${PROMPT_HIERARCHICAL}" soft
 }
 if [ "${FULL_EXP}" = true ]; then

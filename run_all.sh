@@ -4,7 +4,7 @@
 #PBS -q gpu_ded
 #PBS -l walltime=72:00:00
 #PBS -l select=1:ncpus=12:ngpus=1
-#PBS -J 1-96%3
+#PBS -J 1-112%3
 #PBS -j oe
 
 set -euo pipefail
@@ -24,8 +24,8 @@ KERNEL_CHUNK_SIZE="${KERNEL_CHUNK_SIZE:-4096}"
 ALIGN_RIDGE="${ALIGN_RIDGE:-1e-5}"
 SOFT_TEMPERATURE="${SOFT_TEMPERATURE:-1.0}"
 SOFT_CHUNK_SIZE="${SOFT_CHUNK_SIZE:-32}"
-EARLY_STOPPING_LENGTH_THRESHOLD="${EARLY_STOPPING_LENGTH_THRESHOLD:-256}"
-EARLY_STOPPING_ENTROPY_THRESHOLD="${EARLY_STOPPING_ENTROPY_THRESHOLD:-0.01}"
+EARLY_STOPPING_LENGTH_THRESHOLD="${EARLY_STOPPING_LENGTH_THRESHOLD:-auto}"
+EARLY_STOPPING_ENTROPY_THRESHOLD="${EARLY_STOPPING_ENTROPY_THRESHOLD:-auto}"
 PROGRESS_FILE="${SUBMIT_DIR}/state.txt"
 
 for ARG in "$@"; do
@@ -50,17 +50,18 @@ FOUR_B_DATASETS=(
 SLOW_DATASETS=(aime2024 aime2025 gpqa)
 METHODS=(
     baseline baseline text_mas text_mas
-    latent_mas latent_mas latent_mas latent_mas
-    latent_mas latent_mas latent_mas latent_mas
+    latent_mas latent_mas latent_mas latent_mas latent_mas
+    latent_mas latent_mas latent_mas latent_mas latent_mas
 )
 PROMPTS=(
     sequential hierarchical sequential hierarchical
-    sequential sequential sequential sequential
-    hierarchical hierarchical hierarchical hierarchical
+    sequential sequential sequential sequential sequential
+    hierarchical hierarchical hierarchical hierarchical hierarchical
 )
 ALIGNMENTS=(
     identical identical identical identical
-    identical linear kernel soft identical linear kernel soft
+    identical linear kernel kernel_early_stopping soft
+    identical linear kernel kernel_early_stopping soft
 )
 
 DATASET_COUNT=${#DATASETS[@]}
@@ -181,7 +182,7 @@ case "${CONFIG_METHOD}" in
         ;;
     latent_mas)
         case "${CONFIG_ALIGNMENT}" in
-            identical|linear|kernel|soft) ;;
+            identical|linear|kernel|kernel_early_stopping|soft) ;;
             *) echo "ERROR: invalid alignment: ${CONFIG_ALIGNMENT}"; exit 2 ;;
         esac
         ;;
