@@ -81,12 +81,26 @@ class M0ContractTests(unittest.TestCase):
         self.assertIn("not shown to you", serialized)
         self.assertIn("aligned hidden-state sequence", serialized)
 
-    def test_source_enforces_question_blind_audit_and_transfer_protocols(self):
+    def test_direct_text_prompt_contains_the_original_question(self):
+        scope = load_nodes("_direct_text_receiver_messages")
+        question = "Which planet is closest to the Sun?\na: Venus\nb: Mercury"
+        messages = scope["_direct_text_receiver_messages"](
+            "Qwen/Qwen3-8B", question
+        )
+        self.assertIn(question, messages[1]["content"])
+        self.assertIn("directly as text", messages[1]["content"])
+
+    def test_source_enforces_visibility_and_transfer_protocols(self):
         source = SOURCE.read_text(encoding="utf-8")
         self.assertIn("M0 receiver prompt leaked the original question", source)
-        self.assertIn('"receiver_question_visible": False', source)
-        self.assertIn('if alignment == "text":', source)
+        self.assertIn("M0 direct-text receiver prompt omitted", source)
+        self.assertIn("receiver_question_visible = True", source)
+        self.assertIn("receiver_question_visible = False", source)
+        self.assertIn("target.generate_text_batch", source)
+        self.assertIn('"direct_original_text_no_agent_a"', source)
         self.assertIn("source.align_hidden_to(hidden, target)", source)
+        self.assertNotIn("output_head = source.model.get_output_embeddings()", source)
+        self.assertNotIn(".argmax(dim=-1)", source)
         self.assertIn('return [{"role": "user", "content": question}]', source)
         self.assertIn('"prefill_hidden_states": prefill_hidden_states', source)
         self.assertNotIn("for _ in range(args.latent_steps)", source)

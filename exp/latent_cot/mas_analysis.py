@@ -27,7 +27,7 @@ from utils import set_seed
 ROOT = Path(__file__).resolve().parents[2]
 RUNS_DIR = ROOT / "exp_result" / "latent_cot" / "runs"
 CACHE_DIR = ROOT / "exp" / "cache" / "latent_cot_mas"
-CACHE_SCHEMA_VERSION = 2
+CACHE_SCHEMA_VERSION = 3
 MAS_ALIGNMENTS = ("identical", "linear", "soft", "kernel", "text")
 LATENT_ROLES = ("planner", "critic", "refiner")
 ROLE_INDEX = {role: index for index, role in enumerate(LATENT_ROLES)}
@@ -93,6 +93,7 @@ def _cache_identity(args, indexed_items):
         "alignments": list(args.alignments),
         "max_questions": args.max_questions,
         "generation_seed": args.generation_seed,
+        "rollout_implementation_sha256": _implementation_sha256(),
         "prompt": "root_sequential_latent_mas_v1",
         "sequential_info_only": False,
         "latent_only": False,
@@ -105,9 +106,11 @@ def _cache_identity(args, indexed_items):
             "soft_chunk_size": args.soft_chunk_size,
         },
         "generation": {
-            "decoding": "greedy",
+            "temperature": args.temperature,
+            "top_p": args.top_p,
             "max_new_tokens": args.max_new_tokens,
         },
+        "manual_think": bool(args.think),
         "trust_remote_code": bool(args.trust_remote_code),
     }
 
@@ -361,7 +364,7 @@ def _method_args(args, alignment: str):
         "align_method": alignment,
         "seed": args.generation_seed,
         "device2": args.device,
-        "think": False,
+        "think": args.think,
         "sequential_info_only": False,
         "latent_only": False,
         "use_vllm": False,
@@ -682,9 +685,9 @@ def run_mas_study(
         "dataset_identity": _dataset_identity(indexed_items),
         "implementation_sha256": _implementation_sha256(),
         "generation": {
-            "decoding": "greedy",
-            "temperature": 0.0,
-            "top_p_ignored": True,
+            "decoding": "sampling" if args.temperature > 0 else "greedy",
+            "temperature": args.temperature,
+            "top_p": args.top_p,
         },
         "sequential_context": {
             "roles": ["planner", "critic", "refiner", "judger"],
@@ -780,8 +783,8 @@ def run_mas_study(
                             wrapper,
                             latent_steps=latent_steps,
                             judger_max_new_tokens=args.max_new_tokens,
-                            temperature=0.0,
-                            top_p=1.0,
+                            temperature=args.temperature,
+                            top_p=args.top_p,
                             generate_bs=1,
                             args=model_args,
                             latent_step_observer=observer,

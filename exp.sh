@@ -101,7 +101,7 @@ PROBE_SEED="${PROBE_SEED:-42}"; DEVICE="${DEVICE:-cuda}"
 KERNEL_CHUNK_SIZE="${KERNEL_CHUNK_SIZE:-4096}"; ALIGN_RIDGE="${ALIGN_RIDGE:-1e-5}"
 MAX_STATES_PER_QUESTION="${MAX_STATES_PER_QUESTION:-50}"
 MAX_REPLY_TOKENS="${MAX_REPLY_TOKENS:-512}"; PROMPT_LIMIT="${PROMPT_LIMIT:-512}"
-GENERATION_SEED="${GENERATION_SEED:-77}"
+GENERATION_SEED="${GENERATION_SEED:-42}"
 
 # Main-experiment defaults. The plan_v2 study/dataset matrix requires one PBS
 # submission per cell; these select its first primary cell for each layer.
@@ -130,7 +130,7 @@ case "${EXP_TARGET}" in
             read -r -a LATENT_STEP_ARRAY <<< "${LATENT_STEP_VALUES}"
             read -r -a AIME_LATENT_STEP_ARRAY <<< "${AIME_LATENT_STEP_VALUES}"
             read -r -a ALIGNMENT_ARRAY <<< "${ALIGNMENTS}"
-            ARGS=(--study "${STUDY}" --model_name "${MODEL_NAME}" --dataset "${DATASET}" --split "${SPLIT}" --probe_seed "${PROBE_SEED}" --generation_seed "${GENERATION_SEED}" --max_questions "${MAX_QUESTIONS}" --latent_step_values "${LATENT_STEP_ARRAY[@]}" --aime_latent_step_values "${AIME_LATENT_STEP_ARRAY[@]}" --alignments "${ALIGNMENT_ARRAY[@]}" --max_new_tokens "${LATENT_COT_MAX_NEW_TOKENS:-4096}" --kernel_features "${M}" --kernel_temperature "${TAU}" --kernel_seed "${ORF_SEED}" --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" --align_ridge "${ALIGN_RIDGE}" --device "${DEVICE}")
+            ARGS=(--study "${STUDY}" --model_name "${MODEL_NAME}" --dataset "${DATASET}" --split "${SPLIT}" --probe_seed "${PROBE_SEED}" --generation_seed "${GENERATION_SEED}" --max_questions "${MAX_QUESTIONS}" --latent_step_values "${LATENT_STEP_ARRAY[@]}" --aime_latent_step_values "${AIME_LATENT_STEP_ARRAY[@]}" --alignments "${ALIGNMENT_ARRAY[@]}" --max_new_tokens "${LATENT_COT_MAX_NEW_TOKENS:-20000}" --temperature "${TEMPERATURE:-0.6}" --top_p "${TOP_P:-0.95}" --trust_remote_code --kernel_features "${M}" --kernel_temperature "${TAU}" --kernel_seed "${ORF_SEED}" --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" --align_ridge "${ALIGN_RIDGE}" --device "${DEVICE}")
         else
             DATASET="${DATASET:-all}"
             MAX_QUESTIONS="${MAX_QUESTIONS:-50}"

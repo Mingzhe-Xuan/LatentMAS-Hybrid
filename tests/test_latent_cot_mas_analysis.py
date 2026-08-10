@@ -52,6 +52,9 @@ def load_parse_args():
             cuda=SimpleNamespace(is_available=lambda: False)
         ),
         "auto_device": lambda value: value,
+        "resolve_manual_think": lambda model_name, requested: (
+            True if requested is None else requested
+        ),
     }
     exec(
         compile(ast.Module(body=nodes, type_ignores=[]), str(RUN_SOURCE), "exec"),
@@ -73,8 +76,9 @@ def load_cache_helpers():
         "json": json,
         "re": re,
         "Path": Path,
-        "CACHE_SCHEMA_VERSION": 2,
+        "CACHE_SCHEMA_VERSION": 3,
         "CACHE_DIR": Path("cache"),
+        "_implementation_sha256": lambda: "implementation-test-hash",
     }
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(MAS_SOURCE), "exec"), namespace)
     return namespace["_cache_identity"], namespace["_cache_paths"]
@@ -160,6 +164,12 @@ class MasArgumentTests(unittest.TestCase):
             args.aime_latent_step_values,
             [20, 60, 100, 140, 180],
         )
+        self.assertEqual(args.max_new_tokens, 20000)
+        self.assertEqual(args.generation_seed, 42)
+        self.assertEqual(args.temperature, 0.6)
+        self.assertEqual(args.top_p, 0.95)
+        self.assertTrue(args.think)
+        self.assertTrue(args.trust_remote_code)
 
     def test_c3_defaults_match_shared_experiment_contract(self):
         args = load_parse_args()(["--study", "c3"])
@@ -195,15 +205,18 @@ class MasCacheTests(unittest.TestCase):
             "latent_step_values": [20, 40],
             "alignments": ["identical", "linear"],
             "max_questions": 2,
-            "generation_seed": 77,
+            "generation_seed": 42,
+            "temperature": 0.6,
+            "top_p": 0.95,
+            "think": True,
             "align_ridge": 1e-5,
             "kernel_features": 2048,
             "kernel_temperature": 1.0,
             "kernel_seed": 101,
             "kernel_chunk_size": 4096,
             "soft_chunk_size": 32,
-            "trust_remote_code": False,
-            "max_new_tokens": 4096,
+            "trust_remote_code": True,
+            "max_new_tokens": 20000,
             "bootstrap_replicates": 1000,
             "probe_seed": 42,
         }
@@ -333,10 +346,12 @@ class MasStudyDefinitionTests(unittest.TestCase):
         self.assertIn('model_inputs = {"input_ids": next_token.unsqueeze(1)}', source)
         self.assertIn('model_inputs = {"inputs_embeds": latent_embed}', source)
 
-    def test_greedy_temperature_zero_is_supported(self):
+    def test_sampling_and_greedy_temperature_zero_are_supported(self):
         source = MODEL_SOURCE.read_text(encoding="utf-8")
         self.assertIn("do_sample = temperature > 0", source)
         self.assertIn("if do_sample else {}", source)
+        mas_source = MAS_SOURCE.read_text(encoding="utf-8")
+        self.assertIn('"decoding": "sampling" if args.temperature > 0 else "greedy"', mas_source)
 
 
 @unittest.skipIf(np is None, "NumPy is not installed")

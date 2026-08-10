@@ -35,6 +35,7 @@ from trajectory import (
     prompt_template_sha256,
     prompt_template_version,
 )
+from reasoning_models import resolve_manual_think
 from utils import auto_device, set_seed
 
 
@@ -75,8 +76,21 @@ def parse_args(argv=None):
         choices=["identical", "linear", "soft", "kernel", "text"],
         default=["identical", "linear", "soft", "kernel", "text"],
     )
-    parser.add_argument("--max_new_tokens", type=int, default=4096)
-    parser.add_argument("--generation_seed", type=int, default=77)
+    parser.add_argument(
+        "--max_new_tokens",
+        type=int,
+        default=None,
+        help="Judger generation limit; C1/C2/C3 default to run.sh's AIME limit (20000).",
+    )
+    parser.add_argument("--generation_seed", type=int, default=42)
+    parser.add_argument("--temperature", type=float, default=0.6)
+    parser.add_argument("--top_p", type=float, default=0.95)
+    parser.add_argument(
+        "--think",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Match run.py: auto-add <think> unless the model chat template does so.",
+    )
     parser.add_argument("--probe_seed", type=int, default=42)
     parser.add_argument("--bootstrap_replicates", type=int, default=1000)
     parser.add_argument("--entropy_chunk_size", type=int, default=8)
@@ -97,7 +111,11 @@ def parse_args(argv=None):
         help="Ignore a compatible cache and collect rollouts again.",
     )
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--trust_remote_code", action="store_true")
+    parser.add_argument(
+        "--trust_remote_code",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
     args = parser.parse_args(argv)
     if args.model_name is None:
         args.model_name = (
@@ -107,6 +125,14 @@ def parse_args(argv=None):
         args.dataset = "all"
     if args.max_questions is None:
         args.max_questions = 512 if args.study == "c0" else 30
+    if args.max_new_tokens is None:
+        # Preserve C0's historical limit while making the end-to-end MAS
+        # studies comparable to run.sh's AIME2025 configuration.
+        args.max_new_tokens = 4096 if args.study == "c0" else 20000
+    if args.trust_remote_code is None:
+        args.trust_remote_code = args.study in {"c1", "c2", "c3"}
+    args.think_requested = args.think
+    args.think = resolve_manual_think(args.model_name, args.think)
     if len(set(args.latent_step_values)) != len(args.latent_step_values):
         parser.error("--latent_step_values must not contain duplicates")
     if any(value < 1 for value in args.latent_step_values):
@@ -133,6 +159,8 @@ def parse_args(argv=None):
         parser.error("kernel feature/chunk sizes must be positive")
     if args.soft_chunk_size < 1:
         parser.error("soft chunk size must be positive")
+    if args.temperature < 0 or not 0 < args.top_p <= 1:
+        parser.error("--temperature must be non-negative and --top_p must be in (0, 1]")
     if args.kernel_temperature <= 0 or args.align_ridge < 0:
         parser.error("kernel temperature must be positive and ridge non-negative")
     args.device = auto_device(args.device)

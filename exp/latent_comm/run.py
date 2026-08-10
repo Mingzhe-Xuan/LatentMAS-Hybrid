@@ -33,9 +33,11 @@ MODELS = ("Qwen/Qwen3-4B", "Qwen/Qwen3-8B")
 MODEL_PAIRS = tuple((source, target) for source in MODELS for target in MODELS)
 ALIGNMENTS = ("linear", "kernel", "soft", "text")
 CACHE_SCHEMA_VERSION = 2
+RESULT_CACHE_SCHEMA_VERSION = 3
 CACHE_DIR = ROOT / "exp" / "cache" / "latent_comm_m0"
 RUNS_DIR = ROOT / "exp_result" / "latent_comm" / "runs"
 RECEIVER_PROMPT_VERSION = "m0_question_blind_prefill_receiver_v2"
+DIRECT_TEXT_PROMPT_VERSION = "m0_direct_text_receiver_v1"
 SENDER_PROMPT_VERSION = "m0_question_only_single_prefill_v2"
 PAIR_COLORS = ("#4c78a8", "#f58518", "#54a24b", "#e45756")
 
@@ -200,6 +202,31 @@ def _receiver_messages(model_name):
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
+def _direct_text_receiver_messages(model_name, question):
+    system = (
+        "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
+        if "qwen" in model_name.lower()
+        else "You are a helpful assistant."
+    )
+    user = (
+        "Agent A transmitted the following four-choice science question directly "
+        "as text. Solve it and respond with exactly one final choice inside "
+        "\\boxed{A}, \\boxed{B}, \\boxed{C}, or \\boxed{D}.\n\n"
+        f"Question:\n{question}"
+    )
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def _direct_text_receiver_prompt(wrapper, question):
+    messages = _direct_text_receiver_messages(wrapper.model_name, question)
+    rendered = wrapper.render_chat(messages, add_generation_prompt=True)
+    normalized_question = " ".join(question.split())
+    normalized_prompt = " ".join(rendered.split())
+    if normalized_question not in normalized_prompt:
+        raise RuntimeError("M0 direct-text receiver prompt omitted the original question")
+    return messages, rendered
+
+
 def _receiver_prompt(wrapper, question):
     messages = _receiver_messages(wrapper.model_name)
     rendered = wrapper.render_chat(messages, add_generation_prompt=True)
@@ -333,19 +360,28 @@ def _save_trajectory_cache(path, manifest_path, records, identity):
 
 
 def _result_identity(args, source_model, target_model, alignment, sample_identity, trajectory_sha):
+    direct_text = alignment == "text"
     return {
-        "schema_version": CACHE_SCHEMA_VERSION,
+        "schema_version": (
+            RESULT_CACHE_SCHEMA_VERSION if direct_text else CACHE_SCHEMA_VERSION
+        ),
         "experiment": "m0_receiver_answers",
         "source_model": source_model,
         "target_model": target_model,
         "alignment": alignment,
         "sample": sample_identity,
-        "source_trajectory_sha256": trajectory_sha,
-        "receiver_prompt": RECEIVER_PROMPT_VERSION,
-        "sender_operation": "single_prefill_full_last_layer_sequence",
+        "source_trajectory_sha256": None if direct_text else trajectory_sha,
+        "receiver_prompt": (
+            DIRECT_TEXT_PROMPT_VERSION if direct_text else RECEIVER_PROMPT_VERSION
+        ),
+        "sender_operation": (
+            "direct_original_text_no_agent_a"
+            if direct_text
+            else "single_prefill_full_last_layer_sequence"
+        ),
         "max_new_tokens": args.max_new_tokens,
         "decoding": "greedy",
-        "alignment_config": {
+        "alignment_config": None if direct_text else {
             "linear_ridge": args.align_ridge,
             "kernel_features": args.kernel_features,
             "kernel_temperature": args.kernel_temperature,
@@ -379,29 +415,35 @@ def _load_result_cache(args, identity, paths):
     if _sha256_file(metrics_path) != manifest.get("metrics_sha256"):
         raise RuntimeError("M0 answer cache SHA256 check failed")
     rows = _read_parquet(metrics_path)
+    for row in rows:
+        row.setdefault("transfer_mode", "aligned_hidden_states")
+        row.setdefault("direct_text_token_count", 0)
     if len(rows) != args.max_questions:
         raise RuntimeError("M0 answer cache row count mismatch")
     expected_ids = set(identity["sample"]["question_ids"])
     if {row.get("item_id") for row in rows} != expected_ids:
         raise RuntimeError("M0 answer cache item coverage mismatch")
-    if any(row.get("receiver_question_visible") for row in rows):
-        raise RuntimeError("M0 cached receiver prompt failed question-blind audit")
+    expected_visible = identity["alignment"] == "text"
+    if any(bool(row.get("receiver_question_visible")) != expected_visible for row in rows):
+        raise RuntimeError("M0 cached receiver prompt failed visibility audit")
     return rows, manifest
 
 
 def _save_result_cache(paths, rows, identity):
     metrics_path, manifest_path = paths
     _write_parquet(metrics_path, rows)
+    expected_visible = identity["alignment"] == "text"
+    visibility_passed = all(
+        bool(row.get("receiver_question_visible")) == expected_visible for row in rows
+    )
     manifest = {
-        "schema_version": CACHE_SCHEMA_VERSION,
+        "schema_version": identity["schema_version"],
         "cache_identity": identity,
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "row_count": len(rows),
         "metrics": str(metrics_path),
         "metrics_sha256": _sha256_file(metrics_path),
-        "question_blind_audit_passed": not any(
-            row.get("receiver_question_visible") for row in rows
-        ),
+        "receiver_visibility_audit_passed": visibility_passed,
     }
     _write_json(manifest_path, manifest)
     return manifest
@@ -417,19 +459,13 @@ def _validate_vocab(source, target):
 
 @torch.inference_mode()
 def _aligned_message(record, source, target, alignment):
+    if alignment == "text":
+        raise ValueError("Direct text is handled without Agent A hidden states")
     hidden = record["prefill_hidden_states"].to(source.device)
     source.align_method = alignment
     source.args.align_method = alignment
-    if alignment == "text":
-        _validate_vocab(source, target)
-        output_head = source.model.get_output_embeddings()
-        if output_head is None:
-            raise RuntimeError("M0 text transfer requires a source output head")
-        token_ids = output_head(hidden.to(next(source.model.parameters()).dtype)).argmax(dim=-1)
-        aligned = target.model.get_input_embeddings()(token_ids.to(target.device))
-        return aligned.unsqueeze(0), token_ids.detach().cpu().tolist()
     aligned = source.align_hidden_to(hidden, target)
-    return aligned.unsqueeze(0), None
+    return aligned.unsqueeze(0)
 
 
 def _parse_arc_answer(text):
@@ -442,46 +478,78 @@ def _parse_arc_answer(text):
 
 @torch.inference_mode()
 def _run_receiver_cell(records, source, target, alignment, args, logger):
-    _validate_vocab(source, target)
+    direct_text = alignment == "text"
+    source_model_name = source if isinstance(source, str) else source.model_name
+    if not direct_text:
+        _validate_vocab(source, target)
     rows = []
     for number, record in enumerate(records, start=1):
         set_seed(args.generation_seed)
-        messages, receiver_prompt = _receiver_prompt(target, record["question"])
-        encoded = target.tokenizer(
-            receiver_prompt,
-            return_tensors="pt",
-            add_special_tokens=False,
-        )
-        prompt_ids = encoded["input_ids"].to(target.device)
-        prompt_mask = encoded["attention_mask"].to(target.device)
-        prompt_embeds = target.model.get_input_embeddings()(prompt_ids)
-        message_embeds, message_token_ids = _aligned_message(
-            record, source, target, alignment
-        )
-        message_embeds = message_embeds.to(
-            device=target.device,
-            dtype=prompt_embeds.dtype,
-        )
-        combined = torch.cat([message_embeds, prompt_embeds], dim=1)
-        combined_mask = torch.cat(
-            [
-                torch.ones(
-                    message_embeds.shape[:2],
-                    dtype=prompt_mask.dtype,
-                    device=target.device,
-                ),
+        if direct_text:
+            messages, receiver_prompt = _direct_text_receiver_prompt(
+                target, record["question"]
+            )
+            encoded = target.tokenizer(
+                receiver_prompt,
+                return_tensors="pt",
+                add_special_tokens=False,
+            )
+            prompt_ids = encoded["input_ids"].to(target.device)
+            prompt_mask = encoded["attention_mask"].to(target.device)
+            question_ids = target.tokenizer(
+                record["question"], add_special_tokens=False
+            )["input_ids"]
+            started = time.perf_counter()
+            generated, _ = target.generate_text_batch(
+                prompt_ids,
                 prompt_mask,
-            ],
-            dim=1,
-        )
-        started = time.perf_counter()
-        generated, _ = target.generate_text_from_embeds_batch(
-            combined,
-            combined_mask,
-            max_new_tokens=args.max_new_tokens,
-            temperature=0.0,
-            top_p=1.0,
-        )
+                max_new_tokens=args.max_new_tokens,
+                temperature=0.0,
+                top_p=1.0,
+            )
+            source_prefill_token_count = None
+            communication_hidden_state_count = 0
+            direct_text_token_count = len(question_ids)
+            receiver_question_visible = True
+        else:
+            messages, receiver_prompt = _receiver_prompt(target, record["question"])
+            encoded = target.tokenizer(
+                receiver_prompt,
+                return_tensors="pt",
+                add_special_tokens=False,
+            )
+            prompt_ids = encoded["input_ids"].to(target.device)
+            prompt_mask = encoded["attention_mask"].to(target.device)
+            prompt_embeds = target.model.get_input_embeddings()(prompt_ids)
+            message_embeds = _aligned_message(record, source, target, alignment)
+            message_embeds = message_embeds.to(
+                device=target.device,
+                dtype=prompt_embeds.dtype,
+            )
+            combined = torch.cat([message_embeds, prompt_embeds], dim=1)
+            combined_mask = torch.cat(
+                [
+                    torch.ones(
+                        message_embeds.shape[:2],
+                        dtype=prompt_mask.dtype,
+                        device=target.device,
+                    ),
+                    prompt_mask,
+                ],
+                dim=1,
+            )
+            started = time.perf_counter()
+            generated, _ = target.generate_text_from_embeds_batch(
+                combined,
+                combined_mask,
+                max_new_tokens=args.max_new_tokens,
+                temperature=0.0,
+                top_p=1.0,
+            )
+            source_prefill_token_count = int(record["sender_prompt_token_count"])
+            communication_hidden_state_count = int(message_embeds.shape[1])
+            direct_text_token_count = 0
+            receiver_question_visible = False
         wall_seconds = time.perf_counter() - started
         raw_prediction = generated[0]
         prediction = _parse_arc_answer(raw_prediction)
@@ -491,12 +559,16 @@ def _run_receiver_cell(records, source, target, alignment, args, logger):
                 "dataset": "arc_easy",
                 "split": args.split,
                 "item_id": int(record["item_id"]),
-                "source_model": source.model_name,
+                "source_model": source_model_name,
                 "target_model": target.model_name,
-                "model_pair": f"{source.model_name}->{target.model_name}",
+                "model_pair": f"{source_model_name}->{target.model_name}",
                 "alignment": alignment,
-                "source_prefill_token_count": int(record["sender_prompt_token_count"]),
-                "communication_hidden_state_count": int(message_embeds.shape[1]),
+                "transfer_mode": (
+                    "direct_original_text" if direct_text else "aligned_hidden_states"
+                ),
+                "source_prefill_token_count": source_prefill_token_count,
+                "communication_hidden_state_count": communication_hidden_state_count,
+                "direct_text_token_count": direct_text_token_count,
                 "question": record["question"],
                 "gold": gold,
                 "prediction": prediction,
@@ -507,8 +579,8 @@ def _run_receiver_cell(records, source, target, alignment, args, logger):
                 "receiver_prompt": receiver_prompt,
                 "receiver_prompt_sha256": _sha256_bytes(receiver_prompt.encode("utf-8")),
                 "receiver_prompt_token_count": int(prompt_mask.sum().item()),
-                "receiver_question_visible": False,
-                "message_token_ids": message_token_ids,
+                "receiver_question_visible": receiver_question_visible,
+                "message_token_ids": None,
                 "wall_seconds": wall_seconds,
                 "receiver_output_tokens": target.last_generation_metrics[
                     "output_token_counts"
@@ -517,7 +589,7 @@ def _run_receiver_cell(records, source, target, alignment, args, logger):
         )
         logger.info(
             "M0 %s -> %s alignment=%s question=%d/%d correct=%s",
-            source.model_name,
+            source_model_name,
             target.model_name,
             alignment,
             number,
@@ -541,7 +613,10 @@ def _summarize(rows, args):
         pair = f"{source}->{target}"
         series[pair] = []
         for alignment_index, alignment in enumerate(args.alignments):
-            selected = [row for row in rows if row["model_pair"] == pair and row["alignment"] == alignment]
+            selected = [
+                row for row in rows
+                if row["model_pair"] == pair and row["alignment"] == alignment
+            ]
             values = [float(row["correct"]) for row in selected]
             low, high = _bootstrap(
                 values,
@@ -557,27 +632,57 @@ def _summarize(rows, args):
                     "ci95_low": low,
                     "ci95_high": high,
                     "parse_success": sum(row["parse_success"] for row in selected),
-                    "question_leak_count": sum(
+                    "question_visible_count": sum(
                         row["receiver_question_visible"] for row in selected
                     ),
+                    "unexpected_question_leak_count": sum(
+                        bool(row["receiver_question_visible"]) != (alignment == "text")
+                        for row in selected
+                    ),
                     "mean_communication_hidden_states": float(
-                        np.mean([row["communication_hidden_state_count"] for row in selected])
+                        np.mean([
+                            row["communication_hidden_state_count"] for row in selected
+                        ])
+                    ),
+                    "mean_direct_text_tokens": float(
+                        np.mean([row["direct_text_token_count"] for row in selected])
                     ),
                 }
             )
-    lengths = [row["communication_hidden_state_count"] for row in rows]
+    latent_lengths = [
+        row["communication_hidden_state_count"]
+        for row in rows
+        if row["alignment"] != "text"
+    ]
+    direct_text_lengths = [
+        row["direct_text_token_count"]
+        for row in rows
+        if row["alignment"] == "text"
+    ]
     return {
         "study": "m0",
         "dataset": "arc_easy",
         "questions": args.max_questions,
-        "sender_operation": "single_prefill_full_last_layer_sequence",
-        "communication_length": {
-            "unit": "source_prefill_tokens",
-            "minimum": min(lengths),
-            "maximum": max(lengths),
-            "mean": float(np.mean(lengths)),
+        "transfer_protocols": {
+            "linear_kernel_soft": "single_prefill_full_last_layer_sequence",
+            "text": "direct_original_text_no_agent_a",
         },
-        "receiver_sees_original_question": False,
+        "communication_length": {
+            "aligned_hidden_states": {
+                "minimum": min(latent_lengths),
+                "maximum": max(latent_lengths),
+                "mean": float(np.mean(latent_lengths)),
+            },
+            "direct_text_tokens": {
+                "minimum": min(direct_text_lengths),
+                "maximum": max(direct_text_lengths),
+                "mean": float(np.mean(direct_text_lengths)),
+            },
+        },
+        "receiver_visibility": {
+            "linear_kernel_soft_sees_original_question": False,
+            "text_sees_original_question": True,
+        },
         "series": series,
     }
 
@@ -650,6 +755,14 @@ def main(argv=None):
     try:
         items = sampled_items(args)
         sample_identity = _sample_identity(items, args)
+        direct_text_records = [
+            {
+                "item_id": int(item_id),
+                "question": item["question"],
+                "gold": item.get("gold", ""),
+            }
+            for item_id, item in items
+        ]
         wrappers = {}
 
         def wrapper_for(model_name, alignment="identical"):
@@ -715,10 +828,16 @@ def main(argv=None):
                         raise FileNotFoundError(
                             f"--reuse_cache requested but answer cache is absent: {paths[0]}"
                         )
-                    source = wrapper_for(source_model, alignment)
-                    target = wrapper_for(target_model, alignment)
+                    if alignment == "text":
+                        source = source_model
+                        target = wrapper_for(target_model, "identical")
+                        cell_records = direct_text_records
+                    else:
+                        source = wrapper_for(source_model, alignment)
+                        target = wrapper_for(target_model, alignment)
+                        cell_records = trajectory["records"]
                     rows = _run_receiver_cell(
-                        trajectory["records"],
+                        cell_records,
                         source,
                         target,
                         alignment,
@@ -737,8 +856,11 @@ def main(argv=None):
         expected = len(MODEL_PAIRS) * len(args.alignments) * args.max_questions
         if len(all_rows) != expected:
             raise RuntimeError(f"M0 row count mismatch: {len(all_rows)} != {expected}")
-        if any(row["receiver_question_visible"] for row in all_rows):
-            raise RuntimeError("M0 question-blind invariant failed")
+        if any(
+            bool(row["receiver_question_visible"]) != (row["alignment"] == "text")
+            for row in all_rows
+        ):
+            raise RuntimeError("M0 receiver visibility invariant failed")
 
         metrics_path = run_dir / "metrics" / "m0_answers.parquet"
         summary_path = run_dir / "summaries" / "m0_summary.json"
@@ -754,7 +876,10 @@ def main(argv=None):
                 "elapsed_seconds": time.time() - started,
                 "sample_identity": sample_identity,
                 "row_count": len(all_rows),
-                "receiver_question_leak_count": 0,
+                "unexpected_receiver_question_leak_count": 0,
+                "direct_text_visible_row_count": sum(
+                    row["alignment"] == "text" for row in all_rows
+                ),
                 "sender_trajectory_cache_hits": trajectory_cache_hits,
                 "answer_cache": answer_cache,
                 "artifacts": {
