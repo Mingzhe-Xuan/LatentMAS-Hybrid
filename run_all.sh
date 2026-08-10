@@ -4,7 +4,7 @@
 #PBS -q gpu_ded
 #PBS -l walltime=72:00:00
 #PBS -l select=1:ncpus=12:ngpus=1
-#PBS -J 1-288%3
+#PBS -J 1-96%3
 #PBS -j oe
 
 set -euo pipefail
@@ -13,6 +13,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBMIT_DIR="${PBS_O_WORKDIR:-${SCRIPT_DIR}}"
 FORCE_ALL="${FORCE_ALL:-false}"
 FAST_ONLY="${FAST_ONLY:-false}"
+SLOW_ONLY="${SLOW_ONLY:-false}"
+TASKS_PER_GPU="${TASKS_PER_GPU:-3}"
+CONFIG_OFFSET="${CONFIG_OFFSET:-}"
+WORKER_MODE="${WORKER_MODE:-false}"
 MAX_SAMPLES="${MAX_SAMPLES:--1}"
 KERNEL_FEATURES="${KERNEL_FEATURES:-1024}"
 KERNEL_TEMPERATURE="${KERNEL_TEMPERATURE:-1.0}"
@@ -20,6 +24,8 @@ KERNEL_CHUNK_SIZE="${KERNEL_CHUNK_SIZE:-4096}"
 ALIGN_RIDGE="${ALIGN_RIDGE:-1e-5}"
 SOFT_TEMPERATURE="${SOFT_TEMPERATURE:-1.0}"
 SOFT_CHUNK_SIZE="${SOFT_CHUNK_SIZE:-32}"
+EARLY_STOPPING_LENGTH_THRESHOLD="${EARLY_STOPPING_LENGTH_THRESHOLD:-256}"
+EARLY_STOPPING_ENTROPY_THRESHOLD="${EARLY_STOPPING_ENTROPY_THRESHOLD:-0.01}"
 PROGRESS_FILE="${SUBMIT_DIR}/state.txt"
 
 for ARG in "$@"; do
@@ -41,6 +47,7 @@ MODELS=("Qwen/Qwen3-8B" "Qwen/Qwen3-14B" "Qwen/Qwen3-4B")
 FOUR_B_DATASETS=(
     arc_challenge arc_easy gsm8k humanevalplus mbppplus medqa
 )
+SLOW_DATASETS=(aime2024 aime2025 gpqa)
 METHODS=(
     baseline baseline text_mas text_mas
     latent_mas latent_mas latent_mas latent_mas
@@ -59,26 +66,38 @@ ALIGNMENTS=(
 DATASET_COUNT=${#DATASETS[@]}
 MODEL_COUNT=${#MODELS[@]}
 FOUR_B_DATASET_COUNT=${#FOUR_B_DATASETS[@]}
+SLOW_DATASET_COUNT=${#SLOW_DATASETS[@]}
 CONFIG_COUNT=${#METHODS[@]}
-if [[ "${FAST_ONLY}" == "true" ]]; then
+if [[ "${FAST_ONLY}" == "true" && "${SLOW_ONLY}" == "true" ]]; then
+    echo "ERROR: FAST_ONLY and SLOW_ONLY cannot both be true."
+    exit 2
+elif [[ "${FAST_ONLY}" == "true" ]]; then
     ACTIVE_DATASETS=("${FOUR_B_DATASETS[@]}")
     ACTIVE_DATASET_COUNT=${#ACTIVE_DATASETS[@]}
     MODEL_DATASET_COUNT=$((ACTIVE_DATASET_COUNT * MODEL_COUNT))
+elif [[ "${SLOW_ONLY}" == "true" ]]; then
+    MODEL_DATASET_COUNT=$((SLOW_DATASET_COUNT * 2))
 else
     MODEL_DATASET_COUNT=$((DATASET_COUNT * 2 + FOUR_B_DATASET_COUNT))
 fi
 TOTAL_COUNT=$((MODEL_DATASET_COUNT * CONFIG_COUNT))
+if ! [[ "${TASKS_PER_GPU}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: TASKS_PER_GPU must be a positive integer, got: ${TASKS_PER_GPU}"
+    exit 2
+fi
+ARRAY_JOB_COUNT=$(((TOTAL_COUNT + TASKS_PER_GPU - 1) / TASKS_PER_GPU))
 
-# `bash run_all.sh` submits the array once. Every array subjob is independently
-# queued by PBS; %3 is the global running-job limit.
+# `bash run_all.sh` submits the array once. Each array subjob owns one GPU and
+# runs TASKS_PER_GPU independent configurations on that GPU in parallel. %3 is
+# the global running-array-job (GPU) limit.
 if [[ -z "${PBS_ARRAY_INDEX:-}" ]]; then
     if ! command -v qsub >/dev/null 2>&1; then
         echo "ERROR: qsub was not found in PATH."
         exit 127
     fi
-    VARIABLES="FORCE_ALL=${FORCE_ALL},FAST_ONLY=${FAST_ONLY},MAX_SAMPLES=${MAX_SAMPLES},KERNEL_FEATURES=${KERNEL_FEATURES},KERNEL_TEMPERATURE=${KERNEL_TEMPERATURE},KERNEL_CHUNK_SIZE=${KERNEL_CHUNK_SIZE},ALIGN_RIDGE=${ALIGN_RIDGE},SOFT_TEMPERATURE=${SOFT_TEMPERATURE},SOFT_CHUNK_SIZE=${SOFT_CHUNK_SIZE}"
-    JOB_ID="$(cd "${SCRIPT_DIR}" && qsub -v "${VARIABLES}" "${BASH_SOURCE[0]}")"
-    echo "Submitted ${JOB_ID}: ${TOTAL_COUNT} independently queued configs, maximum concurrency 3, force_all=${FORCE_ALL}."
+    VARIABLES="FORCE_ALL=${FORCE_ALL},FAST_ONLY=${FAST_ONLY},SLOW_ONLY=${SLOW_ONLY},TASKS_PER_GPU=${TASKS_PER_GPU},MAX_SAMPLES=${MAX_SAMPLES},KERNEL_FEATURES=${KERNEL_FEATURES},KERNEL_TEMPERATURE=${KERNEL_TEMPERATURE},KERNEL_CHUNK_SIZE=${KERNEL_CHUNK_SIZE},ALIGN_RIDGE=${ALIGN_RIDGE},SOFT_TEMPERATURE=${SOFT_TEMPERATURE},SOFT_CHUNK_SIZE=${SOFT_CHUNK_SIZE},EARLY_STOPPING_LENGTH_THRESHOLD=${EARLY_STOPPING_LENGTH_THRESHOLD},EARLY_STOPPING_ENTROPY_THRESHOLD=${EARLY_STOPPING_ENTROPY_THRESHOLD}"
+    JOB_ID="$(cd "${SCRIPT_DIR}" && qsub -J "1-${ARRAY_JOB_COUNT}%3" -v "${VARIABLES}" "${BASH_SOURCE[0]}")"
+    echo "Submitted ${JOB_ID}: ${TOTAL_COUNT} configs in ${ARRAY_JOB_COUNT} GPU jobs, ${TASKS_PER_GPU} parallel configs per GPU, maximum 3 concurrent GPU jobs, force_all=${FORCE_ALL}."
     exit 0
 fi
 
@@ -86,9 +105,43 @@ if ! [[ "${PBS_ARRAY_INDEX}" =~ ^[0-9]+$ ]]; then
     echo "ERROR: invalid PBS_ARRAY_INDEX=${PBS_ARRAY_INDEX}"
     exit 2
 fi
-ARRAY_OFFSET=$((PBS_ARRAY_INDEX - 1))
+if [[ "${WORKER_MODE}" != "true" ]]; then
+    FIRST_OFFSET=$(((PBS_ARRAY_INDEX - 1) * TASKS_PER_GPU))
+    PIDS=()
+    OFFSETS=()
+    for ((slot = 0; slot < TASKS_PER_GPU; slot++)); do
+        CHILD_OFFSET=$((FIRST_OFFSET + slot))
+        if (( CHILD_OFFSET >= TOTAL_COUNT )); then
+            break
+        fi
+        echo "Launching GPU slot $((slot + 1))/${TASKS_PER_GPU}: config offset ${CHILD_OFFSET}"
+        WORKER_MODE=true CONFIG_OFFSET="${CHILD_OFFSET}" bash "${BASH_SOURCE[0]}" &
+        PIDS+=("$!")
+        OFFSETS+=("${CHILD_OFFSET}")
+    done
+
+    OVERALL_STATUS=0
+    for i in "${!PIDS[@]}"; do
+        if wait "${PIDS[${i}]}"; then
+            echo "Config offset ${OFFSETS[${i}]} finished successfully."
+        else
+            CHILD_STATUS=$?
+            echo "ERROR: config offset ${OFFSETS[${i}]} failed with exit ${CHILD_STATUS}." >&2
+            if (( OVERALL_STATUS == 0 )); then
+                OVERALL_STATUS=${CHILD_STATUS}
+            fi
+        fi
+    done
+    exit "${OVERALL_STATUS}"
+fi
+
+if ! [[ "${CONFIG_OFFSET}" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: invalid CONFIG_OFFSET=${CONFIG_OFFSET}"
+    exit 2
+fi
+ARRAY_OFFSET=${CONFIG_OFFSET}
 if (( ARRAY_OFFSET < 0 || ARRAY_OFFSET >= TOTAL_COUNT )); then
-    echo "ERROR: PBS_ARRAY_INDEX=${PBS_ARRAY_INDEX} is outside 1-${TOTAL_COUNT}."
+    echo "ERROR: CONFIG_OFFSET=${ARRAY_OFFSET} is outside 0-$((TOTAL_COUNT - 1))."
     exit 2
 fi
 
@@ -100,6 +153,11 @@ if [[ "${FAST_ONLY}" == "true" ]]; then
     DATASET_INDEX=$((MODEL_DATASET_INDEX % ACTIVE_DATASET_COUNT))
     MODEL_NAME="${MODELS[${MODEL_INDEX}]}"
     TASK="${ACTIVE_DATASETS[${DATASET_INDEX}]}"
+elif [[ "${SLOW_ONLY}" == "true" ]]; then
+    MODEL_INDEX=$((MODEL_DATASET_INDEX / SLOW_DATASET_COUNT))
+    DATASET_INDEX=$((MODEL_DATASET_INDEX % SLOW_DATASET_COUNT))
+    MODEL_NAME="${MODELS[${MODEL_INDEX}]}"
+    TASK="${SLOW_DATASETS[${DATASET_INDEX}]}"
 elif (( MODEL_DATASET_INDEX < DATASET_COUNT )); then
     MODEL_NAME="${MODELS[0]}"
     TASK="${DATASETS[${MODEL_DATASET_INDEX}]}"
@@ -177,7 +235,7 @@ append_progress STARTED "state file: ${STATE_PATH}"
 export FULL_EXP=false TASK_ONLY=true SINGLE_CONFIG=true CAPTURE_ALL_OUTPUT=true
 export TASK MODEL_NAME CONFIG_METHOD CONFIG_PROMPT CONFIG_ALIGNMENT STATE_FILE="${STATE_PATH}"
 export MAX_SAMPLES KERNEL_FEATURES KERNEL_TEMPERATURE KERNEL_CHUNK_SIZE ALIGN_RIDGE
-export SOFT_TEMPERATURE SOFT_CHUNK_SIZE
+export SOFT_TEMPERATURE SOFT_CHUNK_SIZE EARLY_STOPPING_LENGTH_THRESHOLD EARLY_STOPPING_ENTROPY_THRESHOLD
 if bash "${RUN_SCRIPT}"; then
     append_progress COMPLETED "state file: ${STATE_PATH}"
 else
