@@ -157,10 +157,11 @@ class LatentMASMethod:
                     step_observer=step_observer,
                 )
                 latent_metrics = self.model.last_latent_metrics
+                actual_latent_steps = max(latent_metrics["latent_output_counts"], default=0)
                 if self.sequential_info_only or self.latent_only:
                     new_past_len = _past_length(past_kv)
                     tokens_added = new_past_len - prev_past_len
-                    tokens_to_keep = self.latent_steps if self.latent_only else tokens_added
+                    tokens_to_keep = actual_latent_steps if self.latent_only else tokens_added
                     past_kv = self._truncate_past(past_kv, tokens_to_keep)
 
                 for idx in range(batch_size):
@@ -175,11 +176,15 @@ class LatentMASMethod:
                             "input": wrapped_prompts[idx],
                             "input_ids": trimmed_ids,
                             "input_tokens": wrapped_tokens_batch[idx],
-                            "latent_steps": self.latent_steps,
+                            "latent_steps": latent_metrics["latent_output_counts"][idx],
                             "output": "",
                             "metrics": build_agent_metrics(
                                 text_input_tokens=total_text_tokens,
                                 latent_input_tokens=role_kv_input_tokens,
+                                text_output_tokens=(
+                                    latent_metrics["latent_output_counts"][idx]
+                                    if self.args.align_method == "soft" else 0
+                                ),
                                 latent_output_tokens=latent_metrics["latent_output_counts"][idx],
                                 phase_metrics=latent_metrics,
                                 batch_size=batch_size,
@@ -196,7 +201,7 @@ class LatentMASMethod:
                 if self.latent_roles_only:
                     break
 
-                past_for_decoding = past_kv if self.latent_steps > 0 else None
+                past_for_decoding = past_kv if _past_length(past_kv) > 0 else None
                 role_kv_input_tokens = _past_length(past_for_decoding)
 
                 if self.args.think:
@@ -377,15 +382,16 @@ class LatentMASMethod:
                     past_key_values=past_kv,
                 )
                 latent_metrics = self.model.last_latent_metrics
+                actual_latent_steps = max(latent_metrics["latent_output_counts"], default=0)
                 if self.sequential_info_only or self.latent_only:
                     new_past_len = _past_length(past_kv)
                     tokens_added = new_past_len - prev_past_len
-                    tokens_to_keep = self.latent_steps if self.latent_only else tokens_added
+                    tokens_to_keep = actual_latent_steps if self.latent_only else tokens_added
                     past_kv = self._truncate_past(past_kv, tokens_to_keep)
 
                 if self.latent_only:
-                    if self.latent_steps > 0:
-                        previous_hidden_embedding = previous_hidden_embedding[:, -self.latent_steps:, :]
+                    if actual_latent_steps > 0:
+                        previous_hidden_embedding = previous_hidden_embedding[:, -actual_latent_steps:, :]
                     else:
                         previous_hidden_embedding = previous_hidden_embedding[:, 0:0, :]
 
@@ -406,11 +412,15 @@ class LatentMASMethod:
                             "input": wrapped_prompts[idx],
                             "input_ids": trimmed_ids,
                             "input_tokens": wrapped_tokens_batch[idx],
-                            "latent_steps": self.latent_steps,
+                            "latent_steps": latent_metrics["latent_output_counts"][idx],
                             "output": "",
                             "metrics": build_agent_metrics(
                                 text_input_tokens=total_text_tokens,
                                 latent_input_tokens=role_kv_input_tokens,
+                                text_output_tokens=(
+                                    latent_metrics["latent_output_counts"][idx]
+                                    if self.args.align_method == "soft" else 0
+                                ),
                                 latent_output_tokens=latent_metrics["latent_output_counts"][idx],
                                 phase_metrics=latent_metrics,
                                 batch_size=batch_size,

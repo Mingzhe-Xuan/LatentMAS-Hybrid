@@ -254,6 +254,8 @@ KERNEL_TEMPERATURE="${KERNEL_TEMPERATURE:-1.0}"   # Kernel temperature.
 KERNEL_CHUNK_SIZE="${KERNEL_CHUNK_SIZE:-4096}"    # Kernel chunk size.
 SOFT_TEMPERATURE="${SOFT_TEMPERATURE:-1.0}"       # Exact softmax temperature.
 SOFT_CHUNK_SIZE="${SOFT_CHUNK_SIZE:-32}"          # Hidden queries per softmax chunk.
+EARLY_STOPPING_LENGTH_THRESHOLD="${EARLY_STOPPING_LENGTH_THRESHOLD:-256}"
+EARLY_STOPPING_ENTROPY_THRESHOLD="${EARLY_STOPPING_ENTROPY_THRESHOLD:-0.01}"
 
 ## --- vLLM backend settings ---
 USE_VLLM=false              # Whether to enable the optional vLLM backend.
@@ -290,6 +292,8 @@ COMMON=(
     --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" # run.py default: 4096; used by kernel
     --soft_temperature "${SOFT_TEMPERATURE}" # run.py default: 1.0; used by soft
     --soft_chunk_size "${SOFT_CHUNK_SIZE}" # run.py default: 32; used by soft
+    --early_stopping_length_threshold "${EARLY_STOPPING_LENGTH_THRESHOLD}" # soft default: 256
+    --early_stopping_entropy_threshold "${EARLY_STOPPING_ENTROPY_THRESHOLD}" # soft default: 0.01
 
     # vLLM numeric settings; ignored unless --use_vllm is enabled below.
     --tensor_parallel_size "${TENSOR_PARALLEL_SIZE}" # run.py default: 1

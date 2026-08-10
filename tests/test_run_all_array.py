@@ -35,12 +35,14 @@ class RunAllArrayTests(unittest.TestCase):
         ]
 
     def test_pbs_array_directive_and_dimensions(self) -> None:
-        self.assertRegex(RUN_ALL, r"(?m)^#PBS -J 1-288%3$")
+        self.assertRegex(RUN_ALL, r"(?m)^#PBS -J 1-96%3$")
         self.assertEqual(len(self.datasets), 9)
         self.assertEqual(len(self.models), 3)
         self.assertEqual(len(self.four_b_datasets), 6)
         self.assertEqual(len(self.configs), 12)
         self.assertEqual(len(self.model_dataset_pairs) * len(self.configs), 288)
+        self.assertIn('TASKS_PER_GPU="${TASKS_PER_GPU:-3}"', RUN_ALL)
+        self.assertIn('WORKER_MODE=true CONFIG_OFFSET="${CHILD_OFFSET}"', RUN_ALL)
 
     def test_model_order_and_four_b_exclusions(self) -> None:
         self.assertEqual(
@@ -55,7 +57,7 @@ class RunAllArrayTests(unittest.TestCase):
         self.assertEqual(self.model_dataset_pairs[18], ("Qwen/Qwen3-4B", "arc_challenge"))
 
     def test_fast_array_excludes_slow_datasets_for_every_model(self) -> None:
-        self.assertRegex(RUN_ALL_FAST, r"(?m)^#PBS -J 1-216%3$")
+        self.assertRegex(RUN_ALL_FAST, r"(?m)^#PBS -J 1-72%3$")
         self.assertIn("FAST_ONLY=true", RUN_ALL_FAST)
         self.assertIn('RUN_ALL_SCRIPT="${SUBMIT_DIR}/run_all.sh"', RUN_ALL_FAST)
         self.assertIn('exec bash "${RUN_ALL_SCRIPT}"', RUN_ALL_FAST)

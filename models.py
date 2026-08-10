@@ -8,6 +8,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, LogitsProcessorLis
 from alignment import (
     AlignmentState,
     apply_alignment,
+    apply_soft_alignment_with_entropy,
     build_kernel_state,
     build_linear_state,
     build_soft_state,
@@ -23,6 +24,9 @@ try:
     from transformers.cache_utils import Cache
 except ImportError:
     Cache = None
+
+
+SOFT_LATENT_MAX_STEPS = 20000
 
 
 def _ensure_pad_token(tokenizer: AutoTokenizer) -> None:
@@ -329,8 +333,19 @@ class ModelWrapper:
             self._alignment_states[key] = state
         return state
 
-    def _apply_latent_realignment(self, hidden: torch.Tensor, model: torch.nn.Module) -> torch.Tensor:
-        aligned = apply_alignment(hidden, self._ensure_alignment_state(model, model))
+    def _apply_latent_realignment(
+        self,
+        hidden: torch.Tensor,
+        model: torch.nn.Module,
+        *,
+        return_entropy: bool = False,
+    ):
+        state = self._ensure_alignment_state(model, model)
+        if return_entropy:
+            aligned, entropy = apply_soft_alignment_with_entropy(hidden, state)
+            self.pre_aligned = aligned.detach().clone()
+            return aligned, entropy
+        aligned = apply_alignment(hidden, state)
         self.pre_aligned = aligned.detach().clone()
         return aligned
 
@@ -530,8 +545,20 @@ class ModelWrapper:
 
         alignment_timer = _AlignmentTimer(self.device)
         latent_started_at = time.perf_counter()
-        for step in range(latent_steps):
+        decode_step_limit = SOFT_LATENT_MAX_STEPS if self.align_method == "soft" else latent_steps
+        low_entropy_run = torch.zeros(
+            input_ids.shape[0], dtype=torch.long, device=last_hidden.device
+        )
+        entropy_length_threshold = int(
+            getattr(self.args, "early_stopping_length_threshold", 256)
+        )
+        entropy_threshold = float(
+            getattr(self.args, "early_stopping_entropy_threshold", 0.01)
+        )
+        actual_steps = 0
+        for step in range(decode_step_limit):
             source_model = self.HF_model if hasattr(self, "HF_model") else self.model
+            logits_entropy = None
             if self.align_method == "text":
                 output_head = source_model.get_output_embeddings()
                 if output_head is None:
@@ -542,9 +569,16 @@ class ModelWrapper:
                 model_inputs = {"input_ids": next_token.unsqueeze(1)}
                 batch_size = next_token.shape[0]
             else:
-                latent_vec = alignment_timer.measure(
-                    lambda: self._apply_latent_realignment(last_hidden, source_model)
-                )
+                if self.align_method == "soft":
+                    latent_vec, logits_entropy = alignment_timer.measure(
+                        lambda: self._apply_latent_realignment(
+                            last_hidden, source_model, return_entropy=True
+                        )
+                    )
+                else:
+                    latent_vec = alignment_timer.measure(
+                        lambda: self._apply_latent_realignment(last_hidden, source_model)
+                    )
                 latent_embed = latent_vec.unsqueeze(1)
                 model_inputs = {"inputs_embeds": latent_embed}
                 batch_size = latent_embed.shape[0]
@@ -564,15 +598,24 @@ class ModelWrapper:
             )
             past = outputs.past_key_values
             last_hidden = outputs.hidden_states[-1][:, -1, :]
+            actual_steps += 1
             if step_observer is not None:
                 step_observer(step + 1, last_hidden)
+            if logits_entropy is not None:
+                low_entropy_run = torch.where(
+                    logits_entropy < entropy_threshold,
+                    low_entropy_run + 1,
+                    torch.zeros_like(low_entropy_run),
+                )
+                if bool(torch.all(low_entropy_run >= entropy_length_threshold).item()):
+                    break
         _sync_cuda(self.device)
         latent_decode_seconds = time.perf_counter() - latent_started_at
         self.last_latent_metrics = {
             "prefill_seconds": prefill_seconds,
             "latent_decode_seconds": latent_decode_seconds,
             "alignment_seconds": alignment_timer.seconds(),
-            "latent_output_counts": [latent_steps] * input_ids.shape[0],
+            "latent_output_counts": [actual_steps] * input_ids.shape[0],
             "timing_source": "model_stage_boundaries",
         }
         return past
@@ -620,11 +663,30 @@ class ModelWrapper:
 
         alignment_timer = _AlignmentTimer(self.HF_device)
         latent_started_at = time.perf_counter()
-        for _ in range(latent_steps):
+        decode_step_limit = SOFT_LATENT_MAX_STEPS if self.align_method == "soft" else latent_steps
+        low_entropy_run = torch.zeros(
+            input_ids.shape[0], dtype=torch.long, device=last_hidden.device
+        )
+        entropy_length_threshold = int(
+            getattr(self.args, "early_stopping_length_threshold", 256)
+        )
+        entropy_threshold = float(
+            getattr(self.args, "early_stopping_entropy_threshold", 0.01)
+        )
+        actual_steps = 0
+        for _ in range(decode_step_limit):
             source_model = self.HF_model if hasattr(self, "HF_model") else self.model
-            latent_vec = alignment_timer.measure(
-                lambda: self._apply_latent_realignment(last_hidden, source_model)
-            )
+            logits_entropy = None
+            if self.align_method == "soft":
+                latent_vec, logits_entropy = alignment_timer.measure(
+                    lambda: self._apply_latent_realignment(
+                        last_hidden, source_model, return_entropy=True
+                    )
+                )
+            else:
+                latent_vec = alignment_timer.measure(
+                    lambda: self._apply_latent_realignment(last_hidden, source_model)
+                )
             latent_embed = latent_vec.unsqueeze(1)
             past_len = _past_length(past)
             latent_mask = torch.ones(
@@ -643,13 +705,22 @@ class ModelWrapper:
             past = outputs.past_key_values
             last_hidden = outputs.hidden_states[-1][:, -1, :]
             curr_output_embedding.append(latent_embed.detach())
+            actual_steps += 1
+            if logits_entropy is not None:
+                low_entropy_run = torch.where(
+                    logits_entropy < entropy_threshold,
+                    low_entropy_run + 1,
+                    torch.zeros_like(low_entropy_run),
+                )
+                if bool(torch.all(low_entropy_run >= entropy_length_threshold).item()):
+                    break
         _sync_cuda(self.HF_device)
         latent_decode_seconds = time.perf_counter() - latent_started_at
         self.last_latent_metrics = {
             "prefill_seconds": prefill_seconds,
             "latent_decode_seconds": latent_decode_seconds,
             "alignment_seconds": alignment_timer.seconds(),
-            "latent_output_counts": [latent_steps] * input_ids.shape[0],
+            "latent_output_counts": [actual_steps] * input_ids.shape[0],
             "timing_source": "model_stage_boundaries",
         }
         return past, torch.cat(curr_output_embedding, dim=1)

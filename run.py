@@ -330,6 +330,10 @@ def main():
                         help="Exact soft-token temperature; distinct from generation and kernel temperatures.")
     parser.add_argument("--soft_chunk_size", dest="soft_chunk_size", type=int, default=32,
                         help="Number of hidden queries per exact softmax chunk.")
+    parser.add_argument("--early_stopping_length_threshold", type=int, default=256,
+                        help="For soft alignment, stop after this many consecutive low-entropy decoding steps.")
+    parser.add_argument("--early_stopping_entropy_threshold", type=float, default=0.01,
+                        help="For soft alignment, a decoding step is low-entropy below this threshold.")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--result_path",
@@ -368,6 +372,10 @@ def main():
         parser.error("--soft_temperature must be positive")
     if args.soft_chunk_size <= 0:
         parser.error("--soft_chunk_size must be positive")
+    if args.early_stopping_length_threshold <= 0:
+        parser.error("--early_stopping_length_threshold must be positive")
+    if args.early_stopping_entropy_threshold < 0:
+        parser.error("--early_stopping_entropy_threshold must be non-negative")
 
     # An explicit --max_new_tokens value takes precedence over the task default.
     if args.max_new_tokens is None:
@@ -513,6 +521,9 @@ def main():
             "align_method": args.align_method,
             "soft_temperature": args.soft_temperature,
             "soft_chunk_size": args.soft_chunk_size,
+            "soft_latent_max_steps": 20000,
+            "early_stopping_length_threshold": args.early_stopping_length_threshold,
+            "early_stopping_entropy_threshold": args.early_stopping_entropy_threshold,
             "model": args.model_name,
             "task": args.task,
             "split": args.split,

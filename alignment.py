@@ -158,6 +158,69 @@ def build_linear_state(output_weight: torch.Tensor, input_weight: torch.Tensor, 
     return AlignmentState("linear", target.norm(dim=1).mean(), matrix=matrix)
 
 
+def apply_soft_alignment_with_entropy(
+    hidden: torch.Tensor, state: AlignmentState
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Return the exact soft-token embedding and entropy of its logits distribution."""
+    if state.method != "soft":
+        raise ValueError("Entropy is only available for soft alignment")
+    assert state.output_weight is not None and state.input_weight is not None
+    if not torch.isfinite(hidden).all():
+        raise FloatingPointError("Soft alignment received non-finite hidden states")
+
+    original_dtype = hidden.dtype
+    flat_hidden = hidden.reshape(-1, hidden.shape[-1]).float()
+    vocab = state.output_weight.shape[0]
+    vocab_chunk_size = min(4096, vocab)
+    aligned_chunks = []
+    entropy_chunks = []
+    for query_start in range(0, flat_hidden.shape[0], state.query_chunk_size):
+        query_stop = min(query_start + state.query_chunk_size, flat_hidden.shape[0])
+        queries = flat_hidden[query_start:query_stop]
+        logits = []
+        for vocab_start in range(0, vocab, vocab_chunk_size):
+            vocab_stop = min(vocab_start + vocab_chunk_size, vocab)
+            keys = state.output_weight[vocab_start:vocab_stop].to(
+                device=queries.device, dtype=torch.float32
+            )
+            chunk_logits = queries @ keys.T
+            if state.output_bias is not None:
+                chunk_logits = chunk_logits + state.output_bias[
+                    vocab_start:vocab_stop
+                ].to(device=queries.device, dtype=torch.float32)
+            logits.append(chunk_logits / state.temperature)
+        probabilities = torch.softmax(torch.cat(logits, dim=-1), dim=-1)
+        del logits
+        entropy_chunks.append(torch.special.entr(probabilities).sum(dim=-1))
+        chunk_aligned = torch.zeros(
+            (queries.shape[0], state.input_weight.shape[1]),
+            device=queries.device,
+            dtype=torch.float32,
+        )
+        for vocab_start in range(0, vocab, vocab_chunk_size):
+            vocab_stop = min(vocab_start + vocab_chunk_size, vocab)
+            values = state.input_weight[vocab_start:vocab_stop].to(
+                device=queries.device, dtype=torch.float32
+            )
+            chunk_aligned += probabilities[:, vocab_start:vocab_stop] @ values
+        aligned_chunks.append(chunk_aligned)
+
+    if aligned_chunks:
+        aligned = torch.cat(aligned_chunks, dim=0)
+        entropy = torch.cat(entropy_chunks, dim=0)
+    else:
+        aligned = torch.empty(
+            (0, state.input_weight.shape[1]),
+            device=flat_hidden.device,
+            dtype=torch.float32,
+        )
+        entropy = torch.empty(0, device=flat_hidden.device, dtype=torch.float32)
+    return (
+        aligned.reshape(*hidden.shape[:-1], aligned.shape[-1]).to(original_dtype),
+        entropy.reshape(*hidden.shape[:-1]),
+    )
+
+
 def apply_alignment(hidden: torch.Tensor, state: AlignmentState) -> torch.Tensor:
     """Apply one state to row-vector hidden states of shape ``[..., d_a]``."""
     original_dtype = hidden.dtype
@@ -171,57 +234,8 @@ def apply_alignment(hidden: torch.Tensor, state: AlignmentState) -> torch.Tensor
         aligned = flat_hidden @ state.matrix
         aligned = aligned * (state.target_norm / aligned.norm(dim=-1, keepdim=True).clamp_min(1e-6))
     elif state.method == "soft":
-        assert state.output_weight is not None and state.input_weight is not None
-        if not torch.isfinite(flat_hidden).all():
-            raise FloatingPointError("Soft alignment received non-finite hidden states")
-        vocab = state.output_weight.shape[0]
-        # Convert vocabulary weights in bounded slices instead of materializing
-        # full FP32 copies of large tied embedding tables. Each query chunk still
-        # constructs and normalizes probabilities over the complete vocabulary.
-        vocab_chunk_size = min(4096, vocab)
-        aligned_chunks = []
-        for query_start in range(0, flat_hidden.shape[0], state.query_chunk_size):
-            query_stop = min(
-                query_start + state.query_chunk_size, flat_hidden.shape[0]
-            )
-            queries = flat_hidden[query_start:query_stop]
-            logits = []
-            for vocab_start in range(0, vocab, vocab_chunk_size):
-                vocab_stop = min(vocab_start + vocab_chunk_size, vocab)
-                keys = state.output_weight[vocab_start:vocab_stop].to(
-                    device=queries.device, dtype=torch.float32
-                )
-                chunk_logits = queries @ keys.T
-                if state.output_bias is not None:
-                    chunk_logits = chunk_logits + state.output_bias[
-                        vocab_start:vocab_stop
-                    ].to(device=queries.device, dtype=torch.float32)
-                logits.append(chunk_logits / state.temperature)
-            probabilities = torch.softmax(torch.cat(logits, dim=-1), dim=-1)
-            del logits
-            chunk_aligned = torch.zeros(
-                (queries.shape[0], state.input_weight.shape[1]),
-                device=queries.device,
-                dtype=torch.float32,
-            )
-            for vocab_start in range(0, vocab, vocab_chunk_size):
-                vocab_stop = min(vocab_start + vocab_chunk_size, vocab)
-                values = state.input_weight[vocab_start:vocab_stop].to(
-                    device=queries.device, dtype=torch.float32
-                )
-                chunk_aligned += (
-                    probabilities[:, vocab_start:vocab_stop] @ values
-                )
-            aligned_chunks.append(chunk_aligned)
-        aligned = (
-            torch.cat(aligned_chunks, dim=0)
-            if aligned_chunks
-            else torch.empty(
-                (0, state.input_weight.shape[1]),
-                device=flat_hidden.device,
-                dtype=torch.float32,
-            )
-        )
+        aligned, _ = apply_soft_alignment_with_entropy(hidden, state)
+        return aligned
     elif state.method == "kernel":
         assert state.omega is not None and state.numerator is not None and state.denominator is not None
         u = positive_features(flat_hidden / state.temperature, state.omega, stabilize=True)

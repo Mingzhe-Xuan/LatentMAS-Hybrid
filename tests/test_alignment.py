@@ -7,6 +7,7 @@ import torch
 from alignment import (
     AlignmentState,
     apply_alignment,
+    apply_soft_alignment_with_entropy,
     build_kernel_state,
     build_linear_state,
     build_orf,
@@ -95,6 +96,21 @@ class KernelAlgorithmTests(unittest.TestCase):
         actual = apply_alignment(hidden, state)
         self.assertEqual(actual.shape, (2, 2, 3))
         torch.testing.assert_close(actual, expected)
+
+    def test_soft_returns_entropy_from_the_same_temperature_scaled_distribution(self) -> None:
+        hidden = torch.tensor([[0.15, -0.4], [-0.2, 0.1]], dtype=torch.float32)
+        state = build_soft_state(
+            self.w_out, self.w_in, self.bias,
+            temperature=0.8, query_chunk_size=1,
+        )
+        probabilities = torch.softmax(
+            (hidden @ self.w_out.T + self.bias) / 0.8, dim=-1
+        )
+        expected_aligned = probabilities @ self.w_in
+        expected_entropy = -(probabilities * probabilities.log()).sum(dim=-1)
+        aligned, entropy = apply_soft_alignment_with_entropy(hidden, state)
+        torch.testing.assert_close(aligned, expected_aligned)
+        torch.testing.assert_close(entropy, expected_entropy)
 
     def test_soft_query_chunking_preserves_full_vocabulary_result(self) -> None:
         hidden = torch.tensor(
