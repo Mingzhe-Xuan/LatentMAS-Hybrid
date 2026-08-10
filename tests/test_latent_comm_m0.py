@@ -90,12 +90,21 @@ class M0ContractTests(unittest.TestCase):
         self.assertIn(question, messages[1]["content"])
         self.assertIn("directly as text", messages[1]["content"])
 
+    def test_visible_latent_prompt_contains_question_and_latent_instruction(self):
+        scope = load_nodes("_visible_receiver_messages")
+        question = "Which planet is closest to the Sun?\na: Venus\nb: Mercury"
+        messages = scope["_visible_receiver_messages"]("Qwen/Qwen3-8B", question)
+        self.assertIn(question, messages[1]["content"])
+        self.assertIn("aligned hidden-state sequence", messages[1]["content"])
+        self.assertIn("both sources", messages[1]["content"])
+
     def test_source_enforces_visibility_and_transfer_protocols(self):
         source = SOURCE.read_text(encoding="utf-8")
         self.assertIn("M0 receiver prompt leaked the original question", source)
         self.assertIn("M0 direct-text receiver prompt omitted", source)
-        self.assertIn("receiver_question_visible = True", source)
-        self.assertIn("receiver_question_visible = False", source)
+        self.assertIn('("blind", "visible")', source)
+        self.assertIn('receiver_visibility != "blind"', source)
+        self.assertIn("_visible_receiver_prompt", source)
         self.assertIn("target.generate_text_batch", source)
         self.assertIn('"direct_original_text_no_agent_a"', source)
         self.assertIn("source.align_hidden_to(hidden, target)", source)
@@ -104,6 +113,15 @@ class M0ContractTests(unittest.TestCase):
         self.assertIn('return [{"role": "user", "content": question}]', source)
         self.assertIn('"prefill_hidden_states": prefill_hidden_states', source)
         self.assertNotIn("for _ in range(args.latent_steps)", source)
+
+    def test_plot_distinguishes_receiver_visibility(self):
+        source = SOURCE.read_text(encoding="utf-8")
+        self.assertIn('("blind", "visible")', source)
+        self.assertIn('hatch="///"', source)
+        self.assertIn('"text only"', source)
+        self.assertIn('"conditions_per_model_pair": 7', source)
+        self.assertIn('label="Latent; B question-blind"', source)
+        self.assertIn('label="Latent + original question"', source)
 
     def test_embedding_generation_supports_greedy_receiver_decode(self):
         source = MODEL_SOURCE.read_text(encoding="utf-8")

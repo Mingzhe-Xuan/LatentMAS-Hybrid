@@ -1,32 +1,38 @@
-# M0: prefill communication with a direct-text baseline
+# M0: prefill communication with receiver-visibility controls
 
 M0 samples a fixed 100-question ARC-Easy test subset and evaluates four ordered
 Qwen3-4B/Qwen3-8B sender-receiver pairs.
 
-For `linear`, `kernel`, and `soft`, Agent A is an encoder only. Its chat contains
-the original question as the sole user message, with no Planner instruction and
-no generated reasoning. A performs one forward prefill and caches the complete
-last-layer hidden-state sequence, one state per source prompt token. The sequence
-is aligned to B and prepended to B's constant question-blind prompt. B never sees
-the original question in these three conditions.
+Agent A is an encoder only. Its chat contains the original question as the sole
+user message, with no Planner instruction and no generated reasoning. A performs
+one forward prefill and caches the complete last-layer hidden-state sequence,
+one state per source prompt token.
 
-`text` is a direct-text upper baseline. It bypasses Agent A entirely: the
-original question and choices are inserted directly into B's normal user prompt,
-then B tokenizes, prefills, and answers. It does not apply A's LM head, argmax a
-predicted token, or consume A hidden states. Consequently B is expected to see
-the original question only for `text`; runtime and cache audits enforce this
-per-alignment visibility contract.
+For each of `linear`, `kernel`, and `soft`, M0 runs two B conditions:
 
-The ordered model-pair labels are:
+- `blind`: B receives the aligned A prefill states followed by a fixed prompt
+  that does not contain the original question;
+- `visible`: B receives the same aligned states followed by a prompt that also
+  contains the complete original question and choices.
 
-- Qwen3-4B -> Qwen3-4B
-- Qwen3-4B -> Qwen3-8B
-- Qwen3-8B -> Qwen3-4B
-- Qwen3-8B -> Qwen3-8B
+`text` remains a direct-text B-only baseline. It bypasses Agent A and inserts the
+original question directly into B's normal prompt. Therefore each ordered model
+pair has seven cells: three alignments times two visibility conditions, plus one
+direct-text baseline. With 100 questions and four pairs, a complete run contains
+2800 rows.
 
-For `text`, A is bypassed, so rows with the same B but different A labels should
-produce the same greedy answers. The duplicated pair labels are retained so the
-four-panel comparison has the same shape as the latent conditions.
+## Figure encoding
+
+Each ordered model pair gets one panel. The x-axis is `linear`, `kernel`, `soft`,
+and `text only`.
+
+- solid colored bars: aligned latent states, B question-blind;
+- hatched bars of the same alignment color: aligned latent states plus the
+  original question in B's prompt;
+- single gray `text only` bar: direct original question, no Agent A.
+
+This keeps alignment method on the x-axis and uses fill/hatching exclusively for
+question visibility, so the two experimental dimensions are not conflated.
 
 Run locally:
 
@@ -46,15 +52,15 @@ qsub -v "EXP_TARGET=latent_comm,STUDY=m0" exp.sh
 ```
 
 Stable caches live in `exp/cache/latent_comm_m0/`. Sender `.pt` prefill
-sequences remain reusable by `linear`, `kernel`, and `soft`. Existing compatible
-answer caches for those alignments remain reusable as well. The former argmax
-`text` answer cache has a different protocol identity and is not reused; the
-first run collects the new direct-text results. `--reuse_cache` requires every
-needed cache to exist, while `--force_recollect` rebuilds them.
+sequences are shared by both visibility conditions and all latent alignments.
+Existing compatible blind and direct-text answer caches remain reusable. Only
+the new `visible` cells require fresh answer rollout. `--reuse_cache` requires
+every needed cache to exist; `--force_recollect` rebuilds them.
 
 Each run writes:
 
-- `metrics/m0_answers.parquet`: 1600 per-question answer rows;
-- `summaries/m0_summary.json`: accuracy, bootstrap intervals, visibility audits, and communication lengths;
-- `figures/m0_accuracy.pdf`: one panel per ordered model pair;
+- `metrics/m0_answers.parquet`: 2800 per-question condition rows;
+- `summaries/m0_summary.json`: accuracy, bootstrap intervals, visibility audits,
+  and communication-length statistics;
+- `figures/m0_accuracy.pdf`: grouped visibility comparison in four panels;
 - `run_manifest.json`: sample identity, cache provenance, and visibility audit.

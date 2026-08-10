@@ -27,5 +27,10 @@
   "kernel_seed": 101,
   "kernel_chunk_size": 4096,
   "soft_chunk_size": 32,
-  "align_ridge": 1e-05
+  "align_ridge": 1e-05,
+  "receiver_visibility_conditions": {
+    "blind": "aligned_hidden_states_without_original_question",
+    "visible": "aligned_hidden_states_plus_original_question",
+    "direct_text": "original_question_only_no_agent_a"
+  }
 }
