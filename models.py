@@ -527,6 +527,9 @@ class ModelWrapper:
         latent_steps: int,
         past_key_values: Optional[Tuple] = None,
         step_observer: Optional[Callable[[int, torch.Tensor], None]] = None,
+        hidden_state_transform: Optional[
+            Callable[[int, torch.Tensor], torch.Tensor]
+        ] = None,
     ) -> Tuple:
         if input_ids.dim() != 2:
             raise ValueError("input_ids must be 2D with shape [batch, seq_len]")
@@ -560,6 +563,8 @@ class ModelWrapper:
         prefill_seconds = time.perf_counter() - prefill_started_at
         past = outputs.past_key_values
         last_hidden = outputs.hidden_states[-1][:, -1, :]
+        if hidden_state_transform is not None:
+            last_hidden = hidden_state_transform(0, last_hidden)
 
         alignment_timer = _AlignmentTimer(self.device)
         latent_started_at = time.perf_counter()
@@ -638,6 +643,8 @@ class ModelWrapper:
             )
             past = outputs.past_key_values
             last_hidden = outputs.hidden_states[-1][:, -1, :]
+            if hidden_state_transform is not None:
+                last_hidden = hidden_state_transform(step + 1, last_hidden)
             actual_steps += 1
             if step_observer is not None:
                 step_observer(step + 1, last_hidden)

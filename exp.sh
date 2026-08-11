@@ -120,7 +120,12 @@ case "${EXP_TARGET}" in
         STUDY="${STUDY:-c0}"; MODEL_PAIR="${MODEL_PAIR:-c0}"
         SPLIT="${SPLIT:-test}"; LATENT_STEPS="${LATENT_STEPS:-150}"
         ENTRY="exp/latent_cot/run.py"
-        if [[ "${STUDY}" == "c1" || "${STUDY}" == "c2" || "${STUDY}" == "c3" ]]; then
+        if [[ "${STUDY}" == "c4" ]]; then
+            DATASET="aime2025"; SPLIT="train"; MAX_QUESTIONS="30"
+            MODEL_NAME="Qwen/Qwen3-8B"; LATENT_STEPS="120"
+            M="${C4_KERNEL_FEATURES:-1024}"
+            ARGS=(--study c4 --model_name "${MODEL_NAME}" --dataset aime2025 --split train --max_questions 30 --latent_steps 120 --alignments linear kernel --repeat_seeds 42 43 44 45 --generate_bs 2 --max_new_tokens 20000 --temperature "${TEMPERATURE:-0.6}" --top_p "${TOP_P:-0.95}" --trust_remote_code --kernel_features "${M}" --kernel_temperature "${TAU}" --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" --align_ridge "${ALIGN_RIDGE}" --device "${DEVICE}")
+        elif [[ "${STUDY}" == "c1" || "${STUDY}" == "c2" || "${STUDY}" == "c3" ]]; then
             DATASET="${DATASET:-all}"
             MAX_QUESTIONS="${MAX_QUESTIONS:-30}"
             MODEL_NAME="${MODEL_NAME:-Qwen/Qwen3-8B}"

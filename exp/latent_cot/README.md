@@ -193,3 +193,48 @@ qsub -v "EXP_TARGET=latent_cot,STUDY=c1" exp.sh
 qsub -v "EXP_TARGET=latent_cot,STUDY=c2" exp.sh
 qsub -v "EXP_TARGET=latent_cot,STUDY=c3" exp.sh
 ```
+
+
+## C4: hierarchical random-hidden ablation
+
+C4 tests whether hierarchical LatentMAS depends on the content of its recurrent
+output hidden states. It is intentionally fixed to Qwen3-8B, the first 30
+AIME2025 questions, K=120 for each of Planner/Critic/Refiner, and the `linear`
+and `kernel` alignment methods. Four paired repetitions use generation seeds
+42, 43, 44, and 45. For every alignment and seed, C4 compares:
+
+- `clean`: the normal hierarchical rollout;
+- `random_hidden`: every latent-role prefill output (local step 0) and every
+  recurrent output (local steps 1--120) is replaced before the next alignment.
+  The replacement is independent Gaussian noise rescaled per vector to the L2
+  norm of the original hidden state. A dedicated RNG (seed `10000 + generation
+  seed`) keeps noise sampling from advancing the model-generation RNG. As in
+`run_aime2025.sh`, the kernel ORF seed follows the repetition seed; a paired
+clean/noise cell shares the same ORF map.
+
+This produces `2 alignments * 2 conditions * 4 seeds * 30 questions = 480`
+question-level rows. The summary reports seed-level and across-seed accuracy,
+paired noise-minus-clean accuracy with a two-level bootstrap interval, answer
+transitions, mean time per question, output tokens, and hidden-state checks.
+
+```bash
+python exp/latent_cot/run.py --study c4 --device cuda
+# PBS:
+qsub -v "EXP_TARGET=latent_cot,STUDY=c4" exp.sh
+```
+
+Each alignment/condition/seed cell is atomically cached under
+`exp/cache/latent_cot_c4/`. A completed cell is reused independently, so an
+interrupted job resumes from the remaining cells. A normal rerun only writes a
+new summary and figure when all 16 cells are cached. Use `--reuse_trajectory`
+to require all cells to exist, or `--force_recollect` to replace them. Cache
+identity includes the exact questions, model, prompt/K, alignment parameters,
+condition/noise policy, generation seed and decoding settings.
+
+Run-local artifacts are:
+
+- `metrics/c4_accuracy_cost_by_question.parquet`;
+- `metrics/c4_hidden_diagnostics.parquet`;
+- `summaries/c4_summary.json`;
+- `figures/c4_clean_vs_random_hidden.pdf`;
+- `run_manifest.json` with per-cell cache-hit provenance.

@@ -32,6 +32,9 @@ class LatentMASMethod:
         latent_step_observer: Optional[
             Callable[[str, int, torch.Tensor], None]
         ] = None,
+        latent_hidden_transform: Optional[
+            Callable[[str, int, torch.Tensor], torch.Tensor]
+        ] = None,
         latent_roles_only: bool = False,
     ) -> None:
         self.args = args
@@ -59,6 +62,7 @@ class LatentMASMethod:
             )
         self.task = args.task
         self.latent_step_observer = latent_step_observer
+        self.latent_hidden_transform = latent_hidden_transform
         self.latent_roles_only = bool(latent_roles_only)
 
     @staticmethod
@@ -144,6 +148,12 @@ class LatentMASMethod:
                     wrapped_tokens_batch.append(self.model.tokenizer.convert_ids_to_tokens(active_ids))
 
                 step_observer = None
+                hidden_transform = None
+                if self.latent_hidden_transform is not None:
+                    hidden_transform = (
+                        lambda step, hidden, role=agent.role:
+                        self.latent_hidden_transform(role, step, hidden)
+                    )
                 if self.latent_step_observer is not None:
                     step_observer = (
                         lambda step, hidden, role=agent.role:
@@ -155,6 +165,7 @@ class LatentMASMethod:
                     latent_steps=self.latent_steps,
                     past_key_values=past_kv,
                     step_observer=step_observer,
+                    hidden_state_transform=hidden_transform,
                 )
                 latent_metrics = self.model.last_latent_metrics
                 actual_latent_steps = max(latent_metrics["latent_output_counts"], default=0)
