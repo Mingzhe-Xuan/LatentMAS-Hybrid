@@ -316,7 +316,7 @@ class ModelWrapper:
             return build_kernel_state(
                 output_weight, input_weight, output_bias,
                 feature_count=int(getattr(self.args, "kernel_features", 1024)),
-                temperature=float(getattr(self.args, "kernel_temperature", 1.0)),
+                temperature=float(getattr(self.args, "kernel_temperature", 0.6)),
                 seed=int(getattr(self.args, "kernel_seed", getattr(self.args, "seed", 42))),
                 chunk_size=int(getattr(self.args, "kernel_chunk_size", 4096)),
             )
@@ -325,7 +325,7 @@ class ModelWrapper:
                 output_weight,
                 input_weight,
                 output_bias,
-                temperature=float(getattr(self.args, "soft_temperature", 1.0)),
+                temperature=float(getattr(self.args, "soft_temperature", 0.6)),
                 query_chunk_size=int(getattr(self.args, "soft_chunk_size", 32)),
             )
         raise ValueError(f"Unsupported align method: {self.align_method}")
@@ -356,7 +356,7 @@ class ModelWrapper:
                     hidden,
                     output_weight,
                     output_bias,
-                    temperature=float(getattr(self.args, "kernel_temperature", 1.0)),
+                    temperature=float(getattr(self.args, "kernel_temperature", 0.6)),
                     query_chunk_size=32,
                 )
             else:

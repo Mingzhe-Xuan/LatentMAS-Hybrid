@@ -52,7 +52,7 @@ def args():
         s4_text_max_new_tokens=256,
         text_mas_context_length=-1,
         kernel_features=2048,
-        kernel_temperature=1.0,
+        kernel_temperature=0.6,
         kernel_seed=101,
         kernel_chunk_size=4096,
         probe_seed=42,

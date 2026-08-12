@@ -87,7 +87,7 @@ M1 是论文主图、PCA/t-SNE 图和 `identical`/`linear`/`kernel` 三方法比
 
 ### 3.3 固定超参数、消融范围与选择规则
 
-主设置固定为：`align_method=kernel`、`kernel_features=2048`、`kernel_temperature=1.0`、`kernel_chunk_size=4096`、`kernel_seed=101`。对齐统计量与 ORF 均在 float32 构建；模型前向使用 bfloat16；exact reference 使用 float32 的稳定 log-sum-exp。每个模型组合额外随机抽取 256 个 states，用 float64 exact reference 复算；若 float32/float64 的 relative-$L_2$ 差异 p99 超过 $10^{-4}$，该组合停止并先修正数值实现。
+主设置固定为：`align_method=kernel`、`kernel_features=2048`、`kernel_temperature=0.6`、`kernel_chunk_size=4096`、`kernel_seed=101`。对齐统计量与 ORF 均在 float32 构建；模型前向使用 bfloat16；exact reference 使用 float32 的稳定 log-sum-exp。每个模型组合额外随机抽取 256 个 states，用 float64 exact reference 复算；若 float32/float64 的 relative-$L_2$ 差异 p99 超过 $10^{-4}$，该组合停止并先修正数值实现。
 
 唯一允许的 calibration 消融为：
 

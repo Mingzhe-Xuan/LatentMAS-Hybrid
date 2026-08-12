@@ -320,13 +320,13 @@ def main():
                         help="Ridge regularization for --align_method linear.")
     parser.add_argument("--kernel_features", dest="kernel_features", type=int, default=1024,
                         help="Number m of orthogonal random features for --align_method kernel.")
-    parser.add_argument("--kernel_temperature", dest="kernel_temperature", type=float, default=1.0,
+    parser.add_argument("--kernel_temperature", dest="kernel_temperature", type=float, default=0.6,
                         help="Kernel softmax temperature tau; distinct from generation temperature.")
     parser.add_argument("--kernel_seed", dest="kernel_seed", type=int, default=None,
                         help="ORF seed; defaults to --seed when omitted.")
     parser.add_argument("--kernel_chunk_size", dest="kernel_chunk_size", type=int, default=4096,
                         help="Vocabulary chunk size used to precompute kernel statistics.")
-    parser.add_argument("--soft_temperature", dest="soft_temperature", type=float, default=1.0,
+    parser.add_argument("--soft_temperature", dest="soft_temperature", type=float, default=0.6,
                         help="Exact soft-token temperature; distinct from generation and kernel temperatures.")
     parser.add_argument("--soft_chunk_size", dest="soft_chunk_size", type=int, default=32,
                         help="Number of hidden queries per exact softmax chunk.")

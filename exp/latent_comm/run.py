@@ -66,7 +66,7 @@ def parse_args(argv=None):
     parser.add_argument("--bootstrap_replicates", type=int, default=1000)
     parser.add_argument("--probe_seed", type=int, default=42)
     parser.add_argument("--kernel_features", "--m", dest="kernel_features", type=int, default=2048)
-    parser.add_argument("--kernel_temperature", "--tau", dest="kernel_temperature", type=float, default=1.0)
+    parser.add_argument("--kernel_temperature", "--tau", dest="kernel_temperature", type=float, default=0.6)
     parser.add_argument("--kernel_seed", "--orf_seed", dest="kernel_seed", type=int, default=101)
     parser.add_argument("--kernel_chunk_size", type=int, default=4096)
     parser.add_argument("--soft_chunk_size", type=int, default=32)
@@ -604,7 +604,7 @@ def _run_receiver_cell(
                 prompt_ids,
                 prompt_mask,
                 max_new_tokens=args.max_new_tokens,
-                temperature=0.0,
+                temperature=0.6,
                 top_p=1.0,
             )
             source_prefill_token_count = None
@@ -633,7 +633,7 @@ def _run_receiver_cell(
                 combined,
                 combined_mask,
                 max_new_tokens=args.max_new_tokens,
-                temperature=0.0,
+                temperature=0.6,
                 top_p=1.0,
             )
             source_prefill_token_count = int(record["sender_prompt_token_count"])

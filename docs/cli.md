@@ -131,7 +131,7 @@ qsub -v "TASK=arc_easy,MODEL_NAME=Qwen/Qwen3-8B" run.sh
 
 ```bash
 for method in identical linear kernel soft; do
-  python3 run.py --method latent_mas --align_method "${method}" --model_name Qwen/Qwen3-8B --task arc_easy --prompt sequential --max_samples 30 --split test --latent_steps 10 --kernel_features 1024 --kernel_temperature 1.0 --kernel_seed 42 --kernel_chunk_size 4096 --soft_temperature 1.0 --soft_chunk_size 32 --seed 42 --trust_remote_code
+  python3 run.py --method latent_mas --align_method "${method}" --model_name Qwen/Qwen3-8B --task arc_easy --prompt sequential --max_samples 30 --split test --latent_steps 10 --kernel_features 1024 --kernel_temperature 0.6 --kernel_seed 42 --kernel_chunk_size 4096 --soft_temperature 0.6 --soft_chunk_size 32 --seed 42 --trust_remote_code
 done
 ```
 
@@ -192,7 +192,7 @@ done
 Approximator：在 ARC-Easy 上运行 S0–S4：
 
 ```bash
-qsub -v "EXP_TARGET=approximator,STUDY=all,DATASET=arc_easy,SPLIT=test,AGENT_MODELS=Qwen/Qwen3-4B,MAX_QUESTIONS=50,MAX_STATES_PER_QUESTION=50,M=2048,TAU=1.0,ORF_SEED=101,LATENT_STEPS=50,PROBE_SEED=42" exp.sh
+qsub -v "EXP_TARGET=approximator,STUDY=all,DATASET=arc_easy,SPLIT=test,AGENT_MODELS=Qwen/Qwen3-4B,MAX_QUESTIONS=50,MAX_STATES_PER_QUESTION=50,M=2048,TAU=0.6,ORF_SEED=101,LATENT_STEPS=50,PROBE_SEED=42" exp.sh
 ```
 
 默认配置可简写为：
@@ -204,7 +204,7 @@ qsub -v "EXP_TARGET=approximator" exp.sh
 C0：自动运行 GSM8K、MBPP+、ARC-Challenge 和 AIME 2025，每个数据集均比较 identical、linear、soft、kernel、text。前三个数据集使用 `test` split；AIME 2025 自动使用其 `train` split：
 
 ```bash
-qsub -v "EXP_TARGET=latent_cot,DATASET=all,SPLIT=test,MODEL_NAME=Qwen/Qwen3-4B,MAX_QUESTIONS=50,LATENT_STEPS=150,M=2048,TAU=1.0,ORF_SEED=101,PROBE_SEED=42" exp.sh
+qsub -v "EXP_TARGET=latent_cot,DATASET=all,SPLIT=test,MODEL_NAME=Qwen/Qwen3-4B,MAX_QUESTIONS=50,LATENT_STEPS=150,M=2048,TAU=0.6,ORF_SEED=101,PROBE_SEED=42" exp.sh
 ```
 
 默认配置可简写为：
@@ -218,7 +218,7 @@ qsub -v "EXP_TARGET=latent_cot" exp.sh
 C0 的一个作业会自动运行 identical、linear、soft、kernel、text 五条独立 recurrence；当前没有单 method 参数：
 
 ```bash
-qsub -v "EXP_TARGET=latent_cot,DATASET=all,MAX_QUESTIONS=50,M=2048,TAU=1.0,ORF_SEED=101,PROBE_SEED=42" exp.sh
+qsub -v "EXP_TARGET=latent_cot,DATASET=all,MAX_QUESTIONS=50,M=2048,TAU=0.6,ORF_SEED=101,PROBE_SEED=42" exp.sh
 ```
 
 结果表中的 `alignment` 列区分五种方法，四幅数据集子图也会分别绘制五条曲线。其中 `soft` 是完整 softmax 期望 embedding，不进行 token sampling 或 argmax；`kernel` 近似的正是该映射。
@@ -226,14 +226,14 @@ qsub -v "EXP_TARGET=latent_cot,DATASET=all,MAX_QUESTIONS=50,M=2048,TAU=1.0,ORF_S
 Approximator 没有 `--method` 参数；method 相关分析由 study 决定。S4 对比 linear 与 kernel，并使用 hidden/exact 作为参照：
 
 ```bash
-qsub -v "EXP_TARGET=approximator,STUDY=s4,DATASET=arc_easy,MAX_QUESTIONS=50,M=2048,TAU=1.0,ORF_SEED=101,PROBE_SEED=42" exp.sh
+qsub -v "EXP_TARGET=approximator,STUDY=s4,DATASET=arc_easy,MAX_QUESTIONS=50,M=2048,TAU=0.6,ORF_SEED=101,PROBE_SEED=42" exp.sh
 ```
 
 S1、S2、S3 的核近似分析可分别提交：
 
 ```bash
 for study in s1 s2 s3; do
-  qsub -v "EXP_TARGET=approximator,STUDY=${study},DATASET=arc_easy,MAX_QUESTIONS=50,M=2048,TAU=1.0,ORF_SEED=101,PROBE_SEED=42" exp.sh
+  qsub -v "EXP_TARGET=approximator,STUDY=${study},DATASET=arc_easy,MAX_QUESTIONS=50,M=2048,TAU=0.6,ORF_SEED=101,PROBE_SEED=42" exp.sh
 done
 ```
 
@@ -245,7 +245,7 @@ Approximator 支持 `arc_easy`、`arc_challenge`、`gsm8k`、`medqa`、`mbppplus
 
 ```bash
 for dataset in arc_easy arc_challenge gsm8k medqa mbppplus gpqa; do
-  qsub -v "EXP_TARGET=approximator,STUDY=all,DATASET=${dataset},SPLIT=test,MAX_QUESTIONS=50,M=2048,TAU=1.0,ORF_SEED=101,PROBE_SEED=42" exp.sh
+  qsub -v "EXP_TARGET=approximator,STUDY=all,DATASET=${dataset},SPLIT=test,MAX_QUESTIONS=50,M=2048,TAU=0.6,ORF_SEED=101,PROBE_SEED=42" exp.sh
 done
 ```
 
@@ -253,7 +253,7 @@ C0 支持 `gsm8k`、`mbppplus`、`arc_challenge`、`aime2025`，也支持 `all` 
 
 ```bash
 for dataset in gsm8k mbppplus arc_challenge aime2025; do
-  qsub -v "EXP_TARGET=latent_cot,DATASET=${dataset},SPLIT=test,MAX_QUESTIONS=50,M=2048,TAU=1.0,ORF_SEED=101,PROBE_SEED=42" exp.sh
+  qsub -v "EXP_TARGET=latent_cot,DATASET=${dataset},SPLIT=test,MAX_QUESTIONS=50,M=2048,TAU=0.6,ORF_SEED=101,PROBE_SEED=42" exp.sh
 done
 ```
 
@@ -263,13 +263,13 @@ done
 
 ```bash
 for max_samples in 10 25 50 100; do
-  qsub -v "EXP_TARGET=approximator,STUDY=all,DATASET=arc_easy,MAX_QUESTIONS=${max_samples},M=2048,TAU=1.0,ORF_SEED=101,PROBE_SEED=42" exp.sh
+  qsub -v "EXP_TARGET=approximator,STUDY=all,DATASET=arc_easy,MAX_QUESTIONS=${max_samples},M=2048,TAU=0.6,ORF_SEED=101,PROBE_SEED=42" exp.sh
 done
 ```
 
 ```bash
 for max_samples in 10 25 50 100; do
-  qsub -v "EXP_TARGET=latent_cot,DATASET=all,MAX_QUESTIONS=${max_samples},M=2048,TAU=1.0,ORF_SEED=101,PROBE_SEED=42" exp.sh
+  qsub -v "EXP_TARGET=latent_cot,DATASET=all,MAX_QUESTIONS=${max_samples},M=2048,TAU=0.6,ORF_SEED=101,PROBE_SEED=42" exp.sh
 done
 ```
 
@@ -281,13 +281,13 @@ PBS 变量 `M` 对应 Python 参数 `--kernel_features`：
 
 ```bash
 for kernel_features in 256 512 1024 2048 4096; do
-  qsub -v "EXP_TARGET=approximator,STUDY=all,DATASET=arc_easy,MAX_QUESTIONS=50,M=${kernel_features},TAU=1.0,ORF_SEED=101,PROBE_SEED=42" exp.sh
+  qsub -v "EXP_TARGET=approximator,STUDY=all,DATASET=arc_easy,MAX_QUESTIONS=50,M=${kernel_features},TAU=0.6,ORF_SEED=101,PROBE_SEED=42" exp.sh
 done
 ```
 
 ```bash
 for kernel_features in 256 512 1024 2048 4096; do
-  qsub -v "EXP_TARGET=latent_cot,DATASET=all,MAX_QUESTIONS=50,M=${kernel_features},TAU=1.0,ORF_SEED=101,PROBE_SEED=42" exp.sh
+  qsub -v "EXP_TARGET=latent_cot,DATASET=all,MAX_QUESTIONS=50,M=${kernel_features},TAU=0.6,ORF_SEED=101,PROBE_SEED=42" exp.sh
 done
 ```
 

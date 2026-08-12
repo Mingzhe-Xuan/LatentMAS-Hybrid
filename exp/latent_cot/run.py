@@ -98,7 +98,7 @@ def parse_args(argv=None):
     parser.add_argument("--bootstrap_replicates", type=int, default=1000)
     parser.add_argument("--entropy_chunk_size", type=int, default=8)
     parser.add_argument("--kernel_features", type=int, default=2048)
-    parser.add_argument("--kernel_temperature", type=float, default=1.0)
+    parser.add_argument("--kernel_temperature", type=float, default=0.6)
     parser.add_argument("--kernel_seed", type=int, default=101)
     parser.add_argument("--kernel_chunk_size", type=int, default=4096)
     parser.add_argument("--soft_chunk_size", type=int, default=32)

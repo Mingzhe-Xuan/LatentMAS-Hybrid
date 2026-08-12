@@ -108,7 +108,7 @@ def build_command(
         return source_env.get(env_name) or default
 
     m = resolve("m", "M", "2048")
-    tau = resolve("tau", "TAU", "1.0")
+    tau = resolve("tau", "TAU", "0.6")
     orf_seed = resolve("orf_seed", "ORF_SEED", "101")
     probe_seed = resolve("probe_seed", "PROBE_SEED", "42")
     device = resolve("device", "DEVICE", "cuda")

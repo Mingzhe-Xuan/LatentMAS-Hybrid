@@ -227,7 +227,7 @@ def parse_args(argv=None):
     parser.add_argument("--top_p", type=float, default=0.95)
     parser.add_argument("--max_new_tokens", type=int, default=512)
     parser.add_argument("--kernel_features", type=int, default=2048)
-    parser.add_argument("--kernel_temperature", type=float, default=1.0)
+    parser.add_argument("--kernel_temperature", type=float, default=0.6)
     parser.add_argument("--kernel_seed", type=int, default=101)
     parser.add_argument("--kernel_chunk_size", type=int, default=4096)
     parser.add_argument(

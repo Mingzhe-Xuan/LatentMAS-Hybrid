@@ -36,7 +36,7 @@ python exp/latent_cot/run.py \
   --model_name Qwen/Qwen3-4B \
   --split test \
   --max_questions 50 --latent_steps 150 --probe_seed 42 \
-  --kernel_features 2048 --kernel_temperature 1.0 \
+  --kernel_features 2048 --kernel_temperature 0.6 \
   --kernel_seed 101 --kernel_chunk_size 4096 --soft_chunk_size 32 --align_ridge 1e-5
 ```
 

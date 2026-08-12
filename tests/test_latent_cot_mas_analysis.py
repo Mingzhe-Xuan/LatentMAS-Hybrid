@@ -211,7 +211,7 @@ class MasCacheTests(unittest.TestCase):
             "think": True,
             "align_ridge": 1e-5,
             "kernel_features": 2048,
-            "kernel_temperature": 1.0,
+            "kernel_temperature": 0.6,
             "kernel_seed": 101,
             "kernel_chunk_size": 4096,
             "soft_chunk_size": 32,

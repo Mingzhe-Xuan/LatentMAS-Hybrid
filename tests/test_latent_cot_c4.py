@@ -88,7 +88,7 @@ class C4ContractTests(unittest.TestCase):
             model_name="Qwen/Qwen3-8B", noise_seed_offset=10000,
             temperature=0.6, top_p=0.95, max_new_tokens=20000,
             generate_bs=2, think=True, align_ridge=1e-5,
-            kernel_features=1024, kernel_temperature=1.0,
+            kernel_features=1024, kernel_temperature=0.6,
             kernel_seed=101, kernel_chunk_size=4096,
         )
         items = [(0, {"question": "q", "gold": "1"})]

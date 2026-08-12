@@ -170,7 +170,7 @@ e_B = p_A^\top E_{\mathrm{in},B}.
 在 `run.py` 中：
 
 - `--align_method` 增加 `soft`；
-- 增加 `--soft_temperature`，默认值为 `1.0`；
+- 增加 `--soft_temperature`，默认值为 `0.6`；
 - 增加 `--soft_chunk_size`，默认值为 `32`。
 
 三个温度参数的语义必须独立：
@@ -264,7 +264,7 @@ expected = torch.softmax(
 ```json
 {
   "align_method": "soft",
-  "soft_temperature": 1.0,
+  "soft_temperature": 0.6,
   "soft_chunk_size": 32
 }
 ```

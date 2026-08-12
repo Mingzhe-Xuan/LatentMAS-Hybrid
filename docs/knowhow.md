@@ -509,10 +509,10 @@ GPU 1: HF 辅助模型（latent 推理）
 | `--align_method` | `identical`；`identical` / `linear` / `kernel` / `soft` | latent hidden→目标输入 embedding 的对齐策略。`identical` 为单位映射加范数缩放；`linear` 为岭回归线性映射加范数缩放；`kernel` 使用 ORF 正随机特征近似 soft expectation；`soft` 精确计算完整词表概率加权的目标输入 embedding，且不做范数缩放。跨模型时当前要求 token 到 ID 的词表映射完全一致。非 `identical` 的 vLLM 路径需要 HF 辅助模型。 |
 | `--align_ridge` | `1e-5` | `linear` 对齐的岭回归正则系数。 |
 | `--kernel_features` | `1024` | `kernel` 的随机特征数 $\mathit{m}$；越大通常近似越好，但预计算、显存与在线计算开销也越大。 |
-| `--kernel_temperature` | `1.0` | `kernel` 中 softmax 映射的温度 $\tau$，独立于文本生成的 `--temperature`。 |
+| `--kernel_temperature` | `0.6` | `kernel` 中 softmax 映射的温度 $\tau$，独立于文本生成的 `--temperature`。 |
 | `--kernel_seed` | 继承 `--seed` | ORF 随机方向的种子，保证离线统计量与实验可复现。 |
 | `--kernel_chunk_size` | `4096` | 构建 kernel 统计量时每次处理的词表行数，用于控制预计算峰值显存。 |
-| `--soft_temperature` | `1.0` | `soft` 中完整 output-head logits 的温度，独立于文本生成和 kernel temperature。 |
+| `--soft_temperature` | `0.6` | `soft` 中完整 output-head logits 的温度，独立于文本生成和 kernel temperature。 |
 | `--soft_chunk_size` | `32` | `soft` 每批处理的 hidden query 数；每个 query 仍对完整词表做精确 softmax。 |
 | `--agent_models` | `None` | 仅 Hybrid。按 `Planner Critic Refiner Judger` 顺序给出四个模型名；未给则全部用 `--model_name`，数量不是 4 会断言失败。应选 tokenizer 兼容的同族模型。 |
 

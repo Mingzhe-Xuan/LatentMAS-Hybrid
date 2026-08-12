@@ -96,7 +96,7 @@ if echo "${CUDA_VISIBLE_DEVICES:-}" | grep -q "GPU-"; then
 fi
 
 # plan_v2 fixed numerical settings shared by the three layers.
-M="${M:-2048}"; TAU="${TAU:-1.0}"; ORF_SEED="${ORF_SEED:-101}"
+M="${M:-2048}"; TAU="${TAU:-0.6}"; ORF_SEED="${ORF_SEED:-101}"
 PROBE_SEED="${PROBE_SEED:-42}"; DEVICE="${DEVICE:-cuda}"
 KERNEL_CHUNK_SIZE="${KERNEL_CHUNK_SIZE:-4096}"; ALIGN_RIDGE="${ALIGN_RIDGE:-1e-5}"
 MAX_STATES_PER_QUESTION="${MAX_STATES_PER_QUESTION:-50}"

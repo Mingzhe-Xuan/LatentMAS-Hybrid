@@ -250,9 +250,9 @@ THINK="${THINK:-auto}"      # auto uses the reasoning-model registry in run.py.
 ## --- Alignment settings ---
 ALIGN_RIDGE="${ALIGN_RIDGE:-1e-5}"                 # Linear ridge.
 KERNEL_FEATURES="${KERNEL_FEATURES:-1024}"         # Random-feature count.
-KERNEL_TEMPERATURE="${KERNEL_TEMPERATURE:-1.0}"   # Kernel temperature.
+KERNEL_TEMPERATURE="${KERNEL_TEMPERATURE:-0.6}"   # Kernel temperature.
 KERNEL_CHUNK_SIZE="${KERNEL_CHUNK_SIZE:-4096}"    # Kernel chunk size.
-SOFT_TEMPERATURE="${SOFT_TEMPERATURE:-1.0}"       # Exact softmax temperature.
+SOFT_TEMPERATURE="${SOFT_TEMPERATURE:-0.6}"       # Exact softmax temperature.
 SOFT_CHUNK_SIZE="${SOFT_CHUNK_SIZE:-32}"          # Hidden queries per softmax chunk.
 EARLY_STOPPING_LENGTH_THRESHOLD="${EARLY_STOPPING_LENGTH_THRESHOLD:-auto}"
 EARLY_STOPPING_ENTROPY_THRESHOLD="${EARLY_STOPPING_ENTROPY_THRESHOLD:-auto}"
@@ -288,9 +288,9 @@ COMMON=(
     # Alignment settings. --align_method is varied per LatentMAS command below.
     --align_ridge "${ALIGN_RIDGE}"           # run.py default: 1e-5; used by linear
     --kernel_features "${KERNEL_FEATURES}"   # run.py default: 1024; used by kernel
-    --kernel_temperature "${KERNEL_TEMPERATURE}" # run.py default: 1.0; used by kernel
+    --kernel_temperature "${KERNEL_TEMPERATURE}" # run.py default: 0.6; used by kernel
     --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" # run.py default: 4096; used by kernel
-    --soft_temperature "${SOFT_TEMPERATURE}" # run.py default: 1.0; used by soft
+    --soft_temperature "${SOFT_TEMPERATURE}" # run.py default: 0.6; used by soft
     --soft_chunk_size "${SOFT_CHUNK_SIZE}" # run.py default: 32; used by soft
 
     # vLLM numeric settings; ignored unless --use_vllm is enabled below.
