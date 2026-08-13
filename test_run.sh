@@ -5,7 +5,7 @@
 #PBS -l walltime=72:00:00
 #PBS -l select=1:ncpus=12:ngpus=1
 #PBS -j oe
-#PBS -o /dev/null
+# PBS keeps the outer array-job stdout/stderr as x_test.o* in PBS_O_WORKDIR.
 
 set -euo pipefail
 
