@@ -9,7 +9,7 @@ os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from tqdm import tqdm
 
@@ -159,8 +159,8 @@ def summarize_role_metrics(preds: List[Dict]) -> Tuple[Dict, Dict, Dict]:
     }
     return roles, token_summary, timing_summary
 
-def configure_run_files(args: argparse.Namespace) -> Tuple[logging.Logger, Path]:
-    """Create per-run detail and summary output files."""
+def configure_run_files(args: argparse.Namespace) -> Tuple[logging.Logger, Optional[Path]]:
+    """Configure the detail log and, unless disabled, the summary output path."""
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     # Model identifiers commonly contain path separators (for example,
     # ``Qwen/Qwen3-8B``), which cannot be used directly in a filename.
@@ -169,11 +169,6 @@ def configure_run_files(args: argparse.Namespace) -> Tuple[logging.Logger, Path]
         f"{args.task}_{args.method}_prompt_{args.prompt}_model_{model_name}_"
         f"align_{args.align_method}_{run_id}"
     )
-
-    log_dir = Path("logging")
-    result_dir = Path("result")
-    log_dir.mkdir(exist_ok=True)
-    result_dir.mkdir(exist_ok=True)
 
     logger = logging.getLogger("run_details")
     logger.setLevel(logging.INFO)
@@ -184,6 +179,8 @@ def configure_run_files(args: argparse.Namespace) -> Tuple[logging.Logger, Path]
         log_path = Path(args.log_path)
         log_path.parent.mkdir(parents=True, exist_ok=True)
     else:
+        log_dir = Path("logging")
+        log_dir.mkdir(exist_ok=True)
         log_path = log_dir / f"{run_name}.log"
 
     file_handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
@@ -191,10 +188,14 @@ def configure_run_files(args: argparse.Namespace) -> Tuple[logging.Logger, Path]
     logger.addHandler(file_handler)
     logger.info("Run configuration:\n%s", json.dumps(vars(args), ensure_ascii=False, indent=2))
 
-    if args.result_path:
+    if args.no_write_result:
+        result_path = None
+    elif args.result_path:
         result_path = Path(args.result_path)
         result_path.parent.mkdir(parents=True, exist_ok=True)
     else:
+        result_dir = Path("result")
+        result_dir.mkdir(exist_ok=True)
         result_path = result_dir / f"{run_name}.json"
 
     return logger, result_path
@@ -340,6 +341,11 @@ def main():
         type=str,
         default=None,
         help="Optional exact path for the standalone JSON summary.",
+    )
+    parser.add_argument(
+        "--no_write_result",
+        action="store_true",
+        help="Do not create or write a JSON result file; the final summary is still logged.",
     )
     parser.add_argument(
         "--log_path",
@@ -557,8 +563,11 @@ def main():
         },
     }
     summary_json = json.dumps(summary, ensure_ascii=False, indent=2)
-    result_path.write_text(summary_json + "\n", encoding="utf-8")
-    logger.info("Final summary written to %s:\n%s", result_path, summary_json)
+    if result_path is None:
+        logger.info("Final summary (result writing disabled):\n%s", summary_json)
+    else:
+        result_path.write_text(summary_json + "\n", encoding="utf-8")
+        logger.info("Final summary written to %s:\n%s", result_path, summary_json)
 
 
 if __name__ == "__main__":
