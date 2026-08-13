@@ -33,10 +33,7 @@ if [[ -n "${PBS_JOBID:-}" ]]; then
         "${PBS_JOBID}" "${PBS_ARRAY_INDEX:-unset}" "$(hostname)" "$(date --iso-8601=seconds)"
 fi
 
-DATASETS=(
-    aime2024 aime2025 arc_challenge arc_easy gpqa gsm8k
-    humanevalplus mbppplus medqa
-)
+DATASETS=(medqa)
 METHODS=(
     baseline baseline text_mas text_mas
     latent_mas latent_mas latent_mas latent_mas latent_mas
