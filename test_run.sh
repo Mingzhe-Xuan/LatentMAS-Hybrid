@@ -15,6 +15,7 @@ TASKS_PER_GPU="${TASKS_PER_GPU:-3}"
 WORKER_MODE="${WORKER_MODE:-false}"
 CONFIG_OFFSET="${CONFIG_OFFSET:-}"
 TEST_LOG="${SUBMIT_DIR}/test_result.txt"
+TEST_STATE="${SUBMIT_DIR}/test_state.txt"
 MODEL_NAME="Qwen/Qwen3-8B"
 
 KERNEL_FEATURES="${KERNEL_FEATURES:-1024}"
@@ -23,6 +24,13 @@ KERNEL_CHUNK_SIZE="${KERNEL_CHUNK_SIZE:-4096}"
 ALIGN_RIDGE="${ALIGN_RIDGE:-1e-5}"
 SOFT_TEMPERATURE="${SOFT_TEMPERATURE:-0.6}"
 SOFT_CHUNK_SIZE="${SOFT_CHUNK_SIZE:-32}"
+
+# Capture the PBS array wrapper before validation or child launch can fail.
+if [[ -n "${PBS_JOBID:-}" ]]; then
+    exec >> "${TEST_STATE}" 2>&1
+    printf '\n=== PBS ENTER job=%s array_index=%s host=%s time=%s ===\n' \
+        "${PBS_JOBID}" "${PBS_ARRAY_INDEX:-unset}" "$(hostname)" "$(date --iso-8601=seconds)"
+fi
 
 DATASETS=(
     aime2024 aime2025 arc_challenge arc_easy gpqa gsm8k
@@ -62,13 +70,15 @@ if [[ -z "${PBS_ARRAY_INDEX:-}" ]]; then
     fi
     {
         printf '\n%s\n' "================================================================================"
-        printf 'Submitted debug matrix at %s: %s configs, model=%s\n' \
+        printf 'Submitting debug matrix at %s: %s configs, model=%s\n' \
             "$(date --iso-8601=seconds)" "${TOTAL_COUNT}" "${MODEL_NAME}"
-    } >> "${TEST_LOG}"
+    } >> "${TEST_STATE}"
     VARIABLES="TASKS_PER_GPU=${TASKS_PER_GPU},KERNEL_FEATURES=${KERNEL_FEATURES},KERNEL_TEMPERATURE=${KERNEL_TEMPERATURE},KERNEL_CHUNK_SIZE=${KERNEL_CHUNK_SIZE},ALIGN_RIDGE=${ALIGN_RIDGE},SOFT_TEMPERATURE=${SOFT_TEMPERATURE},SOFT_CHUNK_SIZE=${SOFT_CHUNK_SIZE}"
     JOB_ID="$(cd "${SCRIPT_DIR}" && qsub -J "1-${ARRAY_JOB_COUNT}%3" -v "${VARIABLES}" "${BASH_SOURCE[0]}")"
+    printf 'PBS accepted job %s at %s\n' "${JOB_ID}" "$(date --iso-8601=seconds)" >> "${TEST_STATE}"
     echo "Submitted ${JOB_ID}: ${TOTAL_COUNT} debug configs in ${ARRAY_JOB_COUNT} GPU jobs, ${TASKS_PER_GPU} configs per GPU."
-    echo "Combined log: ${TEST_LOG}"
+    echo "State log: ${TEST_STATE}"
+    echo "Experiment log: ${TEST_LOG}"
     exit 0
 fi
 
@@ -87,6 +97,7 @@ if [[ "${WORKER_MODE}" != "true" ]]; then
         if (( CHILD_OFFSET >= TOTAL_COUNT )); then
             break
         fi
+        echo "Launching config offset ${CHILD_OFFSET} in slot $((slot + 1))/${TASKS_PER_GPU}."
         WORKER_MODE=true CONFIG_OFFSET="${CHILD_OFFSET}" bash "${BASH_SOURCE[0]}" &
         PIDS+=("$!")
         OFFSETS+=("${CHILD_OFFSET}")
@@ -95,9 +106,10 @@ if [[ "${WORKER_MODE}" != "true" ]]; then
     OVERALL_STATUS=0
     for i in "${!PIDS[@]}"; do
         if wait "${PIDS[${i}]}"; then
-            :
+            echo "Config offset ${OFFSETS[${i}]} finished successfully."
         else
             CHILD_STATUS=$?
+            echo "ERROR: config offset ${OFFSETS[${i}]} failed with exit ${CHILD_STATUS}." >&2
             if (( OVERALL_STATUS == 0 )); then
                 OVERALL_STATUS=${CHILD_STATUS}
             fi
@@ -118,8 +130,7 @@ METHOD="${METHODS[${CONFIG_INDEX}]}"
 PROMPT="${PROMPTS[${CONFIG_INDEX}]}"
 ALIGNMENT="${ALIGNMENTS[${CONFIG_INDEX}]}"
 
-# Capture environment setup, Python output and failures in the one shared log.
-exec >> "${TEST_LOG}" 2>&1
+# Record lifecycle in test_state.txt; Python detail output is redirected below.
 printf '\n--- START offset=%s dataset=%s method=%s prompt=%s alignment=%s job=%s[%s] ---\n' \
     "${CONFIG_OFFSET}" "${TASK}" "${METHOD}" "${PROMPT}" "${ALIGNMENT}" \
     "${PBS_JOBID:-local}" "${PBS_ARRAY_INDEX}"
@@ -191,7 +202,7 @@ printf 'Resolved debug parameters: latent_steps=%s max_new_tokens=%s generate_bs
     "${LATENT_STEPS}" "${MAX_NEW_TOKENS}" "${GENERATE_BS}"
 
 STATUS=0
-"${COMMAND[@]}" || STATUS=$?
+"${COMMAND[@]}" >> "${TEST_LOG}" 2>&1 || STATUS=$?
 
 printf '%s\n' \
     "--- END offset=${CONFIG_OFFSET} dataset=${TASK} method=${METHOD} prompt=${PROMPT} alignment=${ALIGNMENT} status=${STATUS} ---"
