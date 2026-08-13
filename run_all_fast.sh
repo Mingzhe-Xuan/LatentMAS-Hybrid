@@ -4,7 +4,7 @@
 #PBS -q gpu_ded
 #PBS -l walltime=72:00:00
 #PBS -l select=1:ncpus=12:ngpus=1
-#PBS -J 1-84%3
+#PBS -J 1-252%3
 #PBS -j oe
 
 set -euo pipefail
@@ -12,7 +12,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBMIT_DIR="${PBS_O_WORKDIR:-${SCRIPT_DIR}}"
 FORCE_ALL="${FORCE_ALL:-false}"
-TASKS_PER_GPU="${TASKS_PER_GPU:-3}"
+# TASKS_PER_GPU="${TASKS_PER_GPU:-3}"  # Disabled: do not pack multiple experiments onto one GPU.
+TASKS_PER_GPU=1
 MAX_SAMPLES="${MAX_SAMPLES:--1}"
 KERNEL_FEATURES="${KERNEL_FEATURES:-1024}"
 KERNEL_TEMPERATURE="${KERNEL_TEMPERATURE:-0.6}"
@@ -46,7 +47,7 @@ if [[ -z "${PBS_ARRAY_INDEX:-}" ]]; then
     ARRAY_JOB_COUNT=$(((252 + TASKS_PER_GPU - 1) / TASKS_PER_GPU))
     VARIABLES="FAST_ONLY=true,FORCE_ALL=${FORCE_ALL},TASKS_PER_GPU=${TASKS_PER_GPU},MAX_SAMPLES=${MAX_SAMPLES},KERNEL_FEATURES=${KERNEL_FEATURES},KERNEL_TEMPERATURE=${KERNEL_TEMPERATURE},KERNEL_CHUNK_SIZE=${KERNEL_CHUNK_SIZE},ALIGN_RIDGE=${ALIGN_RIDGE},SOFT_TEMPERATURE=${SOFT_TEMPERATURE},SOFT_CHUNK_SIZE=${SOFT_CHUNK_SIZE},EARLY_STOPPING_LENGTH_THRESHOLD=${EARLY_STOPPING_LENGTH_THRESHOLD},EARLY_STOPPING_ENTROPY_THRESHOLD=${EARLY_STOPPING_ENTROPY_THRESHOLD}"
     JOB_ID="$(cd "${SCRIPT_DIR}" && qsub -J "1-${ARRAY_JOB_COUNT}%3" -v "${VARIABLES}" "${BASH_SOURCE[0]}")"
-    echo "Submitted ${JOB_ID}: 252 fast configs in ${ARRAY_JOB_COUNT} GPU jobs, ${TASKS_PER_GPU} parallel configs per GPU, maximum 3 concurrent GPU jobs, force_all=${FORCE_ALL}."
+    echo "Submitted ${JOB_ID}: 252 fast configs in ${ARRAY_JOB_COUNT} GPU jobs, one config per GPU, maximum 3 concurrent GPU jobs, force_all=${FORCE_ALL}."
     exit 0
 fi
 

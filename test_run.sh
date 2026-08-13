@@ -11,7 +11,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBMIT_DIR="${PBS_O_WORKDIR:-${SCRIPT_DIR}}"
-TASKS_PER_GPU="${TASKS_PER_GPU:-3}"
+# TASKS_PER_GPU="${TASKS_PER_GPU:-3}"  # Disabled: do not pack multiple experiments onto one GPU.
+TASKS_PER_GPU=1
 WORKER_MODE="${WORKER_MODE:-false}"
 CONFIG_OFFSET="${CONFIG_OFFSET:-}"
 TEST_LOG="${SUBMIT_DIR}/test_result.txt"
@@ -76,7 +77,7 @@ if [[ -z "${PBS_ARRAY_INDEX:-}" ]]; then
     VARIABLES="TASKS_PER_GPU=${TASKS_PER_GPU},KERNEL_FEATURES=${KERNEL_FEATURES},KERNEL_TEMPERATURE=${KERNEL_TEMPERATURE},KERNEL_CHUNK_SIZE=${KERNEL_CHUNK_SIZE},ALIGN_RIDGE=${ALIGN_RIDGE},SOFT_TEMPERATURE=${SOFT_TEMPERATURE},SOFT_CHUNK_SIZE=${SOFT_CHUNK_SIZE}"
     JOB_ID="$(cd "${SCRIPT_DIR}" && qsub -J "1-${ARRAY_JOB_COUNT}%3" -v "${VARIABLES}" "${BASH_SOURCE[0]}")"
     printf 'PBS accepted job %s at %s\n' "${JOB_ID}" "$(date --iso-8601=seconds)" >> "${TEST_STATE}"
-    echo "Submitted ${JOB_ID}: ${TOTAL_COUNT} debug configs in ${ARRAY_JOB_COUNT} GPU jobs, ${TASKS_PER_GPU} configs per GPU."
+    echo "Submitted ${JOB_ID}: ${TOTAL_COUNT} debug configs in ${ARRAY_JOB_COUNT} GPU jobs, one config per GPU."
     echo "State log: ${TEST_STATE}"
     echo "Experiment log: ${TEST_LOG}"
     exit 0
@@ -87,7 +88,7 @@ if ! [[ "${PBS_ARRAY_INDEX}" =~ ^[0-9]+$ ]]; then
     exit 2
 fi
 
-# One array subjob owns one GPU and launches up to TASKS_PER_GPU configurations.
+# One array subjob owns one GPU and launches exactly one configuration.
 if [[ "${WORKER_MODE}" != "true" ]]; then
     FIRST_OFFSET=$(((PBS_ARRAY_INDEX - 1) * TASKS_PER_GPU))
     PIDS=()
