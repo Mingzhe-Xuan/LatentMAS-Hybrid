@@ -4,6 +4,7 @@
 #PBS -q gpu_ded
 #PBS -l walltime=72:00:00
 #PBS -l select=1:ncpus=12:ngpus=1
+#PBS -J 1-14%3
 #PBS -j oe
 # PBS keeps the outer array-job stdout/stderr as x_test.o* in PBS_O_WORKDIR.
 
