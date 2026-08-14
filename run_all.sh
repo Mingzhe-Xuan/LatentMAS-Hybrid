@@ -27,7 +27,9 @@ SOFT_TEMPERATURE="${SOFT_TEMPERATURE:-0.6}"
 SOFT_CHUNK_SIZE="${SOFT_CHUNK_SIZE:-32}"
 EARLY_STOPPING_LENGTH_THRESHOLD="${EARLY_STOPPING_LENGTH_THRESHOLD:-auto}"
 EARLY_STOPPING_ENTROPY_THRESHOLD="${EARLY_STOPPING_ENTROPY_THRESHOLD:-auto}"
-PROGRESS_FILE="${SUBMIT_DIR}/state.txt"
+# The fast/slow wrappers supply separate ledgers; a direct run retains the
+# historical root-level state.txt default.
+PROGRESS_FILE="${PROGRESS_FILE:-${SUBMIT_DIR}/state.txt}"
 
 for ARG in "$@"; do
     case "${ARG}" in
