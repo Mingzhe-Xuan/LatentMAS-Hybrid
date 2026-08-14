@@ -221,9 +221,16 @@ append_progress() {
     ) 9>> "${PROGRESS_FILE}"
 }
 
-if [[ "${FORCE_ALL}" != "true" && -e "${STATE_PATH}" ]]; then
-    append_progress SKIPPED "state file exists: ${STATE_PATH}"
-    echo "Skipped existing config: ${STATE_PATH}"
+state_file_completed() {
+    # run.sh creates the state file when it redirects stdout/stderr at startup;
+    # only its final successful-exit marker means the configuration completed.
+    [[ -f "${STATE_PATH}" ]] &&
+        [[ "$(tail -n 1 "${STATE_PATH}")" == "Exit status: 0" ]]
+}
+
+if [[ "${FORCE_ALL}" != "true" ]] && state_file_completed; then
+    append_progress SKIPPED "completed state file: ${STATE_PATH}"
+    echo "Skipped completed config: ${STATE_PATH}"
     exit 0
 fi
 

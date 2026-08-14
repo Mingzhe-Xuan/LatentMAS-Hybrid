@@ -11,3 +11,4 @@ exp/cache/
 test_result.txt
 test_state.txt
 state/
+state_*/
