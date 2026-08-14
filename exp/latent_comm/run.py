@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""M0 prefill transfer with question-blind, question-visible, and text controls."""
+"""M0 heterogeneous sender-to-receiver communication study."""
 
 from __future__ import annotations
 
@@ -26,22 +26,26 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from data import load_arc_easy
+from data import load_aime2024, load_aime2025, load_gpqa_diamond
 from models import ModelWrapper
+from prompts import (
+    build_agent_message_hierarchical_latent_mas,
+    build_agent_message_sequential_latent_mas,
+)
 from utils import extract_gsm8k_answer, normalize_answer, set_seed
 
 MODELS = ("Qwen/Qwen3-4B", "Qwen/Qwen3-8B")
 MODEL_PAIRS = tuple((source, target) for source in MODELS for target in MODELS)
 ALIGNMENTS = ("linear", "kernel", "soft", "text")
-CACHE_SCHEMA_VERSION = 2
-RESULT_CACHE_SCHEMA_VERSION = 3
-VISIBLE_RESULT_CACHE_SCHEMA_VERSION = 4
-CACHE_DIR = ROOT / "exp" / "cache" / "latent_comm_m0"
+CACHE_SCHEMA_VERSION = 5
+RESULT_CACHE_SCHEMA_VERSION = 5
+VISIBLE_RESULT_CACHE_SCHEMA_VERSION = 5
+CACHE_DIR = ROOT / "exp" / "cache" / "latent_comm_m0_v2"
 RUNS_DIR = ROOT / "exp_result" / "latent_comm" / "runs"
-RECEIVER_PROMPT_VERSION = "m0_question_blind_prefill_receiver_v2"
-DIRECT_TEXT_PROMPT_VERSION = "m0_direct_text_receiver_v1"
-VISIBLE_RECEIVER_PROMPT_VERSION = "m0_question_visible_prefill_receiver_v1"
-SENDER_PROMPT_VERSION = "m0_question_only_single_prefill_v2"
+RECEIVER_PROMPT_VERSION = "m0_visible_judger_receiver_v3"
+DIRECT_TEXT_PROMPT_VERSION = "m0_direct_text_judger_receiver_v2"
+VISIBLE_RECEIVER_PROMPT_VERSION = "m0_visible_judger_receiver_v3"
+SENDER_PROMPT_VERSION = "m0_planner_single_prefill_v3"
 ALIGNMENT_COLORS = {
     "linear": "#4c78a8",
     "kernel": "#54a24b",
@@ -53,12 +57,12 @@ ALIGNMENT_COLORS = {
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--study", choices=["m0"], default="m0")
-    parser.add_argument("--dataset", choices=["arc_easy"], default="arc_easy")
-    parser.add_argument("--split", default="test")
-    parser.add_argument("--max_questions", type=int, default=100)
+    parser.add_argument("--dataset", choices=["gpqa_diamond", "aime2024", "aime2025"], default="gpqa_diamond")
+    parser.add_argument("--split", default=None, help="Defaults to test for GPQA and train for AIME.")
+    parser.add_argument("--max_questions", type=int, default=30)
     parser.add_argument("--sample_seed", type=int, default=42)
     parser.add_argument("--generation_seed", type=int, default=77)
-    parser.add_argument("--prompt", choices=["sequential"], default="sequential")
+    parser.add_argument("--prompt", choices=["sequential", "hierarchical"], default="sequential")
     parser.add_argument("--model_pair", choices=["all"], default="all")
     parser.add_argument("--method", choices=["all"], default="all")
     parser.add_argument("--alignments", nargs="+", choices=ALIGNMENTS, default=list(ALIGNMENTS))
@@ -76,8 +80,6 @@ def parse_args(argv=None):
     parser.add_argument("--reuse_cache", action="store_true")
     parser.add_argument("--force_recollect", action="store_true")
     args = parser.parse_args(argv)
-    if args.max_questions != 100:
-        parser.error("M0 requires exactly --max_questions 100")
     if len(args.alignments) != len(ALIGNMENTS) or set(args.alignments) != set(ALIGNMENTS):
         parser.error("M0 requires --alignments linear kernel soft text")
     if args.reuse_cache and args.force_recollect:
@@ -88,6 +90,10 @@ def parse_args(argv=None):
         parser.error("alignment sizes must be positive")
     if args.kernel_temperature <= 0 or args.align_ridge < 0:
         parser.error("temperature must be positive and ridge non-negative")
+    if args.max_questions < 1:
+        parser.error("--max_questions must be positive")
+    if args.split is None:
+        args.split = "test" if args.dataset == "gpqa_diamond" else "train"
     return args
 
 
@@ -146,12 +152,17 @@ def _configure_logger():
 
 
 def sampled_items(args):
-    indexed = list(enumerate(load_arc_easy(split=args.split)))
+    loaders = {
+        "gpqa_diamond": load_gpqa_diamond,
+        "aime2024": load_aime2024,
+        "aime2025": load_aime2025,
+    }
+    indexed = list(enumerate(loaders[args.dataset](split=args.split)))
     random.Random(args.sample_seed).shuffle(indexed)
     selected = indexed[: args.max_questions]
     if len(selected) != args.max_questions:
         raise RuntimeError(
-            f"Requested {args.max_questions} ARC-Easy questions, loaded {len(selected)}"
+            f"Requested {args.max_questions} {args.dataset} questions, loaded {len(selected)}"
         )
     return selected
 
@@ -162,7 +173,7 @@ def _sample_identity(items, args):
         for item_id, item in items
     ]
     return {
-        "dataset": "arc_easy",
+        "dataset": args.dataset,
         "split": args.split,
         "selection": "seeded_without_replacement",
         "sample_seed": args.sample_seed,
@@ -176,7 +187,7 @@ def _sample_identity(items, args):
 def _model_args(args, alignment):
     return argparse.Namespace(
         **vars(args),
-        task="arc_easy",
+        task="gpqa" if args.dataset == "gpqa_diamond" else args.dataset,
         align_method=alignment,
         soft_temperature=args.kernel_temperature,
         seed=args.generation_seed,
@@ -185,65 +196,49 @@ def _model_args(args, alignment):
     )
 
 
-def _sender_messages(question, model_name):
-    del model_name
-    # Agent A is only an encoder: no Planner instruction and no generated thought.
-    return [{"role": "user", "content": question}]
-
-
-def _receiver_messages(model_name):
-    system = (
-        "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
-        if "qwen" in model_name.lower()
-        else "You are a helpful assistant."
+def _role_messages(args, model_name, role, question):
+    role_args = _model_args(args, "identical")
+    role_args.model_name = model_name
+    builder = (
+        build_agent_message_sequential_latent_mas
+        if args.prompt == "sequential"
+        else build_agent_message_hierarchical_latent_mas
     )
-    user = (
-        "You are Agent B in a two-agent system. Agent A encoded a private "
-        "four-choice science question that is not shown to you. Agent A used one "
-        "prefill pass and did not reason or "
-        "generate an answer. The aligned hidden-state sequence prepended to this "
-        "prompt is your only information about the question and its choices. "
-        "Reason from that representation and respond with exactly one final choice "
-        "inside \\boxed{A}, \\boxed{B}, \\boxed{C}, or \\boxed{D}. Do not request "
-        "or assume access to the original question."
+    return builder(
+        role=role,
+        question=question,
+        context="",
+        method="latent_mas",
+        args=role_args,
     )
-    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def _direct_text_receiver_messages(model_name, question):
-    system = (
-        "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
-        if "qwen" in model_name.lower()
-        else "You are a helpful assistant."
+def _sender_messages(question, model_name, args):
+    """Agent A is a Planner encoder; its complete prefill sequence is transmitted."""
+    return _role_messages(args, model_name, "planner", question)
+
+
+def _receiver_messages(model_name, question, args):
+    messages = _role_messages(args, model_name, "judger", question)
+    messages = [dict(message) for message in messages]
+    messages[-1]["content"] += (
+        "\n\nThe aligned hidden-state sequence prepended to this prompt is "
+        "communication from a Planner Agent. Use it as additional evidence while "
+        "solving the visible target question."
     )
-    user = (
-        "Agent A transmitted the following four-choice science question directly "
-        "as text. Solve it and respond with exactly one final choice inside "
-        "\\boxed{A}, \\boxed{B}, \\boxed{C}, or \\boxed{D}.\n\n"
-        f"Question:\n{question}"
-    )
-    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    return messages
 
 
-def _visible_receiver_messages(model_name, question):
-    system = (
-        "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
-        if "qwen" in model_name.lower()
-        else "You are a helpful assistant."
-    )
-    user = (
-        "You are Agent B in a two-agent system. Agent A encoded the four-choice "
-        "science question into the aligned hidden-state sequence prepended to this "
-        "prompt. You are also given the original question below. Use both sources "
-        "to solve it and respond with exactly one final choice inside \\boxed{A}, "
-        "\\boxed{B}, \\boxed{C}, or \\boxed{D}.\n\n"
-        f"Question:\n{question}"
-    )
-    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+def _direct_text_receiver_messages(model_name, question, args):
+    """Receiver-only text control used as the 4B/8B single-model baseline."""
+    return _role_messages(args, model_name, "judger", question)
 
 
-def _direct_text_receiver_prompt(wrapper, question):
-    messages = _direct_text_receiver_messages(wrapper.model_name, question)
+def _visible_receiver_messages(model_name, question, args):
+    return _receiver_messages(model_name, question, args)
+
+def _direct_text_receiver_prompt(wrapper, question, args):
+    messages = _direct_text_receiver_messages(wrapper.model_name, question, args)
     rendered = wrapper.render_chat(messages, add_generation_prompt=True)
     normalized_question = " ".join(question.split())
     normalized_prompt = " ".join(rendered.split())
@@ -252,8 +247,8 @@ def _direct_text_receiver_prompt(wrapper, question):
     return messages, rendered
 
 
-def _visible_receiver_prompt(wrapper, question):
-    messages = _visible_receiver_messages(wrapper.model_name, question)
+def _visible_receiver_prompt(wrapper, question, args):
+    messages = _visible_receiver_messages(wrapper.model_name, question, args)
     rendered = wrapper.render_chat(messages, add_generation_prompt=True)
     normalized_question = " ".join(question.split())
     normalized_prompt = " ".join(rendered.split())
@@ -282,6 +277,8 @@ def _trajectory_identity(args, source_model, sample_identity):
         "source_model": source_model,
         "sample": sample_identity,
         "prompt": SENDER_PROMPT_VERSION,
+        "architecture": args.prompt,
+        "dataset": args.dataset,
         "sender_operation": "single_prefill_full_last_layer_sequence",
         "trust_remote_code": bool(args.trust_remote_code),
     }
@@ -332,7 +329,7 @@ def _load_trajectory_cache(args, source_model, identity):
 def _collect_sender_trajectory(wrapper, items, args, logger):
     records = []
     for number, (item_id, item) in enumerate(items, start=1):
-        messages = _sender_messages(item["question"], wrapper.model_name)
+        messages = _sender_messages(item["question"], wrapper.model_name, args)
         rendered = wrapper.render_chat(messages, add_generation_prompt=True)
         encoded = wrapper.tokenizer(
             rendered,
@@ -429,6 +426,8 @@ def _result_identity(
         "sample": sample_identity,
         "source_trajectory_sha256": None if direct_text else trajectory_sha,
         "receiver_prompt": receiver_prompt,
+        "architecture": args.prompt,
+        "dataset": args.dataset,
         "sender_operation": (
             "direct_original_text_no_agent_a"
             if direct_text
@@ -465,7 +464,7 @@ def _result_paths(args, source_model, target_model, alignment, identity):
 def _identity_receiver_visibility(identity):
     if identity["alignment"] == "text":
         return "direct_text"
-    return identity.get("receiver_visibility", "blind")
+    return identity.get("receiver_visibility", "visible")
 
 
 def _load_result_cache(args, identity, paths):
@@ -540,15 +539,14 @@ def _aligned_message(record, source, target, alignment):
     return aligned.unsqueeze(0)
 
 
-def _parse_arc_answer(text):
+def _parse_answer(text, dataset):
     prediction = normalize_answer(extract_gsm8k_answer(text))
+    if dataset.startswith("aime"):
+        return prediction
     if prediction in {"a", "b", "c", "d"}:
         return prediction
     matches = re.findall(r"(?i)(?:\\boxed\{)?\b([ABCD])\b", text)
-    return matches[-1].lower() if matches else None
-
-
-@torch.inference_mode()
+    return matches[-1].lower() if matches else None@torch.inference_mode()
 def _run_receiver_cell(
     records,
     source,
@@ -642,11 +640,11 @@ def _run_receiver_cell(
 
         wall_seconds = time.perf_counter() - started
         raw_prediction = generated[0]
-        prediction = _parse_arc_answer(raw_prediction)
+        prediction = _parse_answer(raw_prediction, args.dataset)
         gold = normalize_answer(record["gold"])
         rows.append(
             {
-                "dataset": "arc_easy",
+                "dataset": args.dataset,
                 "split": args.split,
                 "item_id": int(record["item_id"]),
                 "source_model": source_model_name,
@@ -669,6 +667,8 @@ def _run_receiver_cell(
                 "parse_success": prediction is not None,
                 "receiver_messages": json.dumps(messages, ensure_ascii=False),
                 "receiver_prompt": receiver_prompt,
+        "architecture": args.prompt,
+        "dataset": args.dataset,
                 "receiver_prompt_sha256": _sha256_bytes(receiver_prompt.encode("utf-8")),
                 "receiver_prompt_token_count": int(prompt_mask.sum().item()),
                 "receiver_question_visible": receiver_visibility != "blind",
@@ -705,194 +705,97 @@ def _summarize(rows, args):
     for pair_index, (source, target) in enumerate(MODEL_PAIRS):
         pair = f"{source}->{target}"
         series[pair] = []
-        condition_index = 0
-        for alignment in args.alignments:
-            visibility_modes = (
-                ("direct_text",) if alignment == "text" else ("blind", "visible")
+        for condition_index, alignment in enumerate(args.alignments):
+            visibility = "direct_text" if alignment == "text" else "visible"
+            selected = [
+                row for row in rows
+                if row["model_pair"] == pair
+                and row["alignment"] == alignment
+                and row["receiver_visibility"] == visibility
+            ]
+            values = [float(row["correct"]) for row in selected]
+            low, high = _bootstrap(
+                values,
+                args.bootstrap_replicates,
+                args.probe_seed + pair_index * 100 + condition_index,
             )
-            for receiver_visibility in visibility_modes:
-                selected = [
-                    row for row in rows
-                    if row["model_pair"] == pair
-                    and row["alignment"] == alignment
-                    and row["receiver_visibility"] == receiver_visibility
-                ]
-                values = [float(row["correct"]) for row in selected]
-                low, high = _bootstrap(
-                    values,
-                    args.bootstrap_replicates,
-                    args.probe_seed + pair_index * 100 + condition_index,
-                )
-                expected_visible = receiver_visibility != "blind"
-                series[pair].append(
-                    {
-                        "alignment": alignment,
-                        "receiver_visibility": receiver_visibility,
-                        "processed": len(selected),
-                        "correct": int(sum(values)),
-                        "accuracy": float(np.mean(values)),
-                        "ci95_low": low,
-                        "ci95_high": high,
-                        "parse_success": sum(row["parse_success"] for row in selected),
-                        "question_visible_count": sum(
-                            row["receiver_question_visible"] for row in selected
-                        ),
-                        "unexpected_question_visibility_count": sum(
-                            bool(row["receiver_question_visible"]) != expected_visible
-                            for row in selected
-                        ),
-                        "mean_communication_hidden_states": float(
-                            np.mean([
-                                row["communication_hidden_state_count"]
-                                for row in selected
-                            ])
-                        ),
-                        "mean_original_question_tokens": float(
-                            np.mean([
-                                row["receiver_original_question_token_count"]
-                                for row in selected
-                            ])
-                        ),
-                    }
-                )
-                condition_index += 1
+            series[pair].append({
+                "alignment": alignment,
+                "processed": len(selected),
+                "correct": int(sum(values)),
+                "accuracy": float(np.mean(values)),
+                "ci95_low": low,
+                "ci95_high": high,
+                "parse_success": sum(row["parse_success"] for row in selected),
+                "mean_communication_hidden_states": float(np.mean([
+                    row["communication_hidden_state_count"] for row in selected
+                ])),
+            })
 
-    latent_lengths = [
-        row["communication_hidden_state_count"]
-        for row in rows
-        if row["alignment"] != "text"
-    ]
-    visible_question_lengths = [
-        row["receiver_original_question_token_count"]
-        for row in rows
-        if row["receiver_visibility"] != "blind"
-    ]
+    single_model_accuracy = {}
+    for model_index, target_model in enumerate(MODELS):
+        # The text control bypasses A; retain one deterministic copy per question.
+        selected = [
+            row for row in rows
+            if row["alignment"] == "text"
+            and row["source_model"] == MODELS[0]
+            and row["target_model"] == target_model
+        ]
+        values = [float(row["correct"]) for row in selected]
+        low, high = _bootstrap(values, args.bootstrap_replicates, args.probe_seed + 1000 + model_index)
+        single_model_accuracy[target_model] = {
+            "processed": len(selected), "correct": int(sum(values)),
+            "accuracy": float(np.mean(values)), "ci95_low": low, "ci95_high": high,
+        }
+
     return {
         "study": "m0",
-        "dataset": "arc_easy",
+        "dataset": args.dataset,
+        "split": args.split,
+        "prompt": args.prompt,
         "questions": args.max_questions,
-        "conditions_per_model_pair": 7,
+        "conditions_per_model_pair": len(args.alignments),
         "transfer_protocols": {
-            "latent": "single_prefill_full_last_layer_sequence",
-            "text": "direct_original_text_no_agent_a",
+            "text": "receiver-only original-question text baseline",
+            "latent": "Planner prefill hidden states plus visible Judger question",
         },
-        "receiver_visibility": {
-            "blind": "aligned hidden states plus a question-blind B prompt",
-            "visible": "aligned hidden states plus the original question in B prompt",
-            "direct_text": "original question only; Agent A is bypassed",
-        },
-        "communication_length": {
-            "aligned_hidden_states": {
-                "minimum": min(latent_lengths),
-                "maximum": max(latent_lengths),
-                "mean": float(np.mean(latent_lengths)),
-            },
-            "visible_original_question_tokens": {
-                "minimum": min(visible_question_lengths),
-                "maximum": max(visible_question_lengths),
-                "mean": float(np.mean(visible_question_lengths)),
-            },
-        },
+        "single_model_accuracy": single_model_accuracy,
         "series": series,
     }
 
-
 def _plot(summary, path, args):
     figure, axes = plt.subplots(2, 2, figsize=(13, 9), squeeze=False)
-    latent_alignments = [item for item in args.alignments if item != "text"]
-    width = 0.34
-
-    def point_for(points, alignment, visibility):
-        return next(
-            point for point in points
-            if point["alignment"] == alignment
-            and point["receiver_visibility"] == visibility
-        )
-
-    def add_errorbar(axis, x, point):
-        mean = point["accuracy"]
-        axis.errorbar(
-            [x],
-            [mean],
-            yerr=np.asarray([[mean - point["ci95_low"]], [point["ci95_high"] - mean]]),
-            fmt="none",
-            color="black",
-            capsize=3,
-            linewidth=1,
-        )
-
-    for axis, (source, target) in zip(
-        [item for row in axes for item in row],
-        MODEL_PAIRS,
-    ):
+    for axis, (source, target) in zip(axes.flat, MODEL_PAIRS):
         pair = f"{source}->{target}"
         points = summary["series"][pair]
-        for index, alignment in enumerate(latent_alignments):
-            color = ALIGNMENT_COLORS[alignment]
-            blind = point_for(points, alignment, "blind")
-            visible = point_for(points, alignment, "visible")
-            blind_x = index - width / 2
-            visible_x = index + width / 2
-            axis.bar(blind_x, blind["accuracy"], width=width, color=color, alpha=0.9)
-            axis.bar(
-                visible_x,
-                visible["accuracy"],
-                width=width,
-                color=color,
-                alpha=0.45,
-                edgecolor="black",
-                hatch="///",
-            )
-            add_errorbar(axis, blind_x, blind)
-            add_errorbar(axis, visible_x, visible)
-
-        text_index = len(latent_alignments)
-        text_point = point_for(points, "text", "direct_text")
-        axis.bar(
-            text_index,
-            text_point["accuracy"],
-            width=0.58,
-            color=ALIGNMENT_COLORS["text"],
-            alpha=0.85,
-        )
-        add_errorbar(axis, text_index, text_point)
-        axis.set_xticks(
-            np.arange(len(latent_alignments) + 1),
-            [*latent_alignments, "text only"],
-        )
+        xs = np.arange(len(points))
+        values = [point["accuracy"] for point in points]
+        errors = [
+            [point["accuracy"] - point["ci95_low"] for point in points],
+            [point["ci95_high"] - point["accuracy"] for point in points],
+        ]
+        axis.bar(xs, values, color=[ALIGNMENT_COLORS[point["alignment"]] for point in points])
+        axis.errorbar(xs, values, yerr=errors, fmt="none", color="black", capsize=3)
+        baseline = summary["single_model_accuracy"][target]["accuracy"]
+        axis.axhline(baseline, color="#333333", linestyle="--", linewidth=1, label="receiver text baseline")
+        axis.set_xticks(xs, [point["alignment"] for point in points])
         axis.set_ylim(0, 1)
-        axis.set_ylabel("ARC-Easy accuracy")
-        axis.set_title(
-            f"{source.rsplit('/', 1)[-1]} -> {target.rsplit('/', 1)[-1]}"
-        )
+        axis.set_ylabel("accuracy")
+        axis.set_title(f"{source.rsplit('/', 1)[-1]} -> {target.rsplit('/', 1)[-1]}")
         axis.grid(axis="y", alpha=0.2)
-
-    legend_handles = [
-        Patch(facecolor="#666666", alpha=0.9, label="Latent; B question-blind"),
-        Patch(
-            facecolor="#999999",
-            alpha=0.45,
-            edgecolor="black",
-            hatch="///",
-            label="Latent + original question",
-        ),
-        Patch(facecolor=ALIGNMENT_COLORS["text"], alpha=0.85, label="Direct text; no A"),
-    ]
-    figure.legend(handles=legend_handles, loc="lower center", ncol=3, frameon=False)
     figure.suptitle(
-        "M0: aligned Agent-A prefill states with and without B seeing the question\n"
-        "Bars=accuracy over 100 questions; error bars=question bootstrap 95% CI"
+        f"M0 heterogeneous communication: {summary['dataset']} ({summary['prompt']})\\n"
+        "Text=receiver-only baseline; latent methods=visible question + aligned Planner prefill states"
     )
-    figure.tight_layout(rect=(0, 0.07, 1, 0.94))
+    figure.tight_layout(rect=(0, 0, 1, 0.94))
     path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(path)
     plt.close(figure)
 
-
 def _run_directory(args):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     digest = _sha256_bytes(json.dumps(vars(args), sort_keys=True, default=str).encode("utf-8"))[:8]
-    path = RUNS_DIR / f"m0_arc_easy_q{args.max_questions}_prefill_{timestamp}_{digest}"
+    path = RUNS_DIR / f"m0_{args.dataset}_{args.prompt}_q{args.max_questions}_{timestamp}_{digest}"
     suffix = 1
     while path.exists():
         path = RUNS_DIR / f"{path.name}_{suffix:02d}"
@@ -974,11 +877,7 @@ def main(argv=None):
             trajectory = trajectories[source_model]
             trajectory_manifest = trajectory_manifests[source_model]
             for alignment in args.alignments:
-                visibility_modes = (
-                    ("direct_text",)
-                    if alignment == "text"
-                    else ("blind", "visible")
-                )
+                visibility_modes = ("direct_text",) if alignment == "text" else ("visible",)
                 for receiver_visibility in visibility_modes:
                     identity = _result_identity(
                         args,
@@ -1028,9 +927,7 @@ def main(argv=None):
                         "metrics_sha256": result_manifest["metrics_sha256"],
                     }
 
-        conditions_per_pair = sum(
-            1 if alignment == "text" else 2 for alignment in args.alignments
-        )
+        conditions_per_pair = len(args.alignments)
         expected = len(MODEL_PAIRS) * conditions_per_pair * args.max_questions
         if len(all_rows) != expected:
             raise RuntimeError(f"M0 row count mismatch: {len(all_rows)} != {expected}")
@@ -1056,9 +953,7 @@ def main(argv=None):
                 "sample_identity": sample_identity,
                 "row_count": len(all_rows),
                 "unexpected_receiver_question_visibility_count": 0,
-                "question_blind_row_count": sum(
-                    row["receiver_visibility"] == "blind" for row in all_rows
-                ),
+                "question_blind_row_count": 0,
                 "latent_question_visible_row_count": sum(
                     row["receiver_visibility"] == "visible" for row in all_rows
                 ),

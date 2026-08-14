@@ -1,25 +1,17 @@
 {
   "study": "m0",
-  "dataset": "arc_easy",
+  "dataset": "gpqa_diamond",
   "split": "test",
-  "max_questions": 100,
+  "max_questions": 30,
   "sample_seed": 42,
   "generation_seed": 77,
-  "transfer_protocols": {
-    "linear_kernel_soft": "single_prefill_full_last_layer_sequence",
-    "text": "direct_original_text_no_agent_a"
-  },
   "prompt": "sequential",
-  "models": [
-    "Qwen/Qwen3-4B",
-    "Qwen/Qwen3-8B"
-  ],
-  "alignments": [
-    "linear",
-    "kernel",
-    "soft",
-    "text"
-  ],
+  "models": ["Qwen/Qwen3-4B", "Qwen/Qwen3-8B"],
+  "alignments": ["text", "soft", "linear", "kernel"],
+  "transfer_protocols": {
+    "text": "receiver-only original-question baseline",
+    "soft_linear_kernel": "Planner prefill hidden states plus visible Judger question"
+  },
   "max_new_tokens": 512,
   "bootstrap_replicates": 1000,
   "kernel_features": 2048,
@@ -28,9 +20,5 @@
   "kernel_chunk_size": 4096,
   "soft_chunk_size": 32,
   "align_ridge": 1e-05,
-  "receiver_visibility_conditions": {
-    "blind": "aligned_hidden_states_without_original_question",
-    "visible": "aligned_hidden_states_plus_original_question",
-    "direct_text": "original_question_only_no_agent_a"
-  }
+  "receiver_visibility": "visible"
 }

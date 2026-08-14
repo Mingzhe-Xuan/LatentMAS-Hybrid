@@ -1,66 +1,38 @@
-# M0: prefill communication with receiver-visibility controls
+# M0: heterogeneous model communication
 
-M0 samples a fixed 100-question ARC-Easy test subset and evaluates four ordered
-Qwen3-4B/Qwen3-8B sender-receiver pairs.
+M0 measures whether a Planner prefill from one model improves a visible-question
+Judger in another model. It evaluates Qwen3-4B and Qwen3-8B in all ordered
+sender-to-receiver pairs: 4B->4B, 4B->8B, 8B->4B, and 8B->8B.
 
-Agent A is an encoder only. Its chat contains the original question as the sole
-user message, with no Planner instruction and no generated reasoning. A performs
-one forward prefill and caches the complete last-layer hidden-state sequence,
-one state per source prompt token.
+For every dataset and architecture, M0 reports:
 
-For each of `linear`, `kernel`, and `soft`, M0 runs two B conditions:
+- each receiver's `text` accuracy, which is the 4B/8B single-model baseline;
+- each ordered pair's `soft`, `linear`, and `kernel` communication accuracy;
+- question-bootstrap 95% confidence intervals and the number of transmitted
+  Planner hidden states.
 
-- `blind`: B receives the aligned A prefill states followed by a fixed prompt
-  that does not contain the original question;
-- `visible`: B receives the same aligned states followed by a prompt that also
-  contains the complete original question and choices.
+The receiver always sees the original question. The latent methods prepend the
+sender's complete single-prefill Planner hidden-state sequence, aligned to the
+receiver input-embedding space. `text` bypasses Agent A and gives the original
+question directly to the receiver, so it isolates the receiver's own task
+accuracy rather than claiming a source-dependent text transfer.
 
-`text` remains a direct-text B-only baseline. It bypasses Agent A and inserts the
-original question directly into B's normal prompt. Therefore each ordered model
-pair has seven cells: three alignments times two visibility conditions, plus one
-direct-text baseline. With 100 questions and four pairs, a complete run contains
-2800 rows.
-
-## Figure encoding
-
-Each ordered model pair gets one panel. The x-axis is `linear`, `kernel`, `soft`,
-and `text only`.
-
-- solid colored bars: aligned latent states, B question-blind;
-- hatched bars of the same alignment color: aligned latent states plus the
-  original question in B's prompt;
-- single gray `text only` bar: direct original question, no Agent A.
-
-This keeps alignment method on the x-axis and uses fill/hatching exclusively for
-question visibility, so the two experimental dimensions are not conflated.
-
-Run locally:
+Supported datasets are `gpqa_diamond` (test split), `aime2024` (train split),
+and `aime2025` (train split). Both repository prompt organizations are supported:
+`sequential` and `hierarchical`. The sender uses the corresponding Planner prompt
+and the receiver uses the corresponding Judger prompt.
 
 ```bash
 python exp/latent_comm/run.py \
-  --study m0 --dataset arc_easy --split test \
-  --max_questions 100 --prompt sequential \
-  --model_pair all --method all \
-  --alignments linear kernel soft text \
-  --device cuda
+  --study m0 --dataset gpqa_diamond --split test \
+  --prompt sequential --max_questions 30 --device cuda
+
+python exp/latent_comm/run.py \
+  --study m0 --dataset aime2025 --split train \
+  --prompt hierarchical --max_questions 30 --device cuda
 ```
 
-PBS:
-
-```bash
-qsub -v "EXP_TARGET=latent_comm,STUDY=m0" exp.sh
-```
-
-Stable caches live in `exp/cache/latent_comm_m0/`. Sender `.pt` prefill
-sequences are shared by both visibility conditions and all latent alignments.
-Existing compatible blind and direct-text answer caches remain reusable. Only
-the new `visible` cells require fresh answer rollout. `--reuse_cache` requires
-every needed cache to exist; `--force_recollect` rebuilds them.
-
-Each run writes:
-
-- `metrics/m0_answers.parquet`: 2800 per-question condition rows;
-- `summaries/m0_summary.json`: accuracy, bootstrap intervals, visibility audits,
-  and communication-length statistics;
-- `figures/m0_accuracy.pdf`: grouped visibility comparison in four panels;
-- `run_manifest.json`: sample identity, cache provenance, and visibility audit.
+Stable sender and answer caches are stored in `exp/cache/latent_comm_m0_v2/`.
+Each run writes `metrics/m0_answers.parquet`, `summaries/m0_summary.json`,
+`figures/m0_accuracy.pdf`, and `run_manifest.json` under
+`exp_result/latent_comm/runs/`.
