@@ -1,1 +1,2 @@
-test_run.sh text eol=lf
+# Keep every Git-recognized text file in Unix LF format across platforms.
+* text=auto eol=lf
