@@ -146,9 +146,21 @@ case "${EXP_TARGET}" in
     latent_comm)
         STUDY="${STUDY:-m0}"; MODEL_PAIR="${MODEL_PAIR:-all}"
         DATASET="${DATASET:-arc_easy}"; SPLIT="${SPLIT:-test}"
-        METHOD="${METHOD:-all}"; MAX_QUESTIONS="${MAX_QUESTIONS:-100}"
+        METHOD="${METHOD:-all}"
+        if [[ "${STUDY}" == "m1" ]]; then
+            MAX_QUESTIONS="${MAX_QUESTIONS:-}"
+        else
+            MAX_QUESTIONS="${MAX_QUESTIONS:-100}"
+        fi
         LATENT_STEPS="full-prefill-sequence"; ENTRY="exp/latent_comm/run.py"
-        ARGS=(--study "${STUDY}" --model_pair "${MODEL_PAIR}" --dataset "${DATASET}" --split "${SPLIT}" --method "${METHOD}" --orf_seed "${ORF_SEED}" --m "${M}" --tau "${TAU}" --max_questions "${MAX_QUESTIONS}" --max_new_tokens "${MAX_REPLY_TOKENS}" --sample_seed "${PROBE_SEED}" --probe_seed "${PROBE_SEED}" --generation_seed "${GENERATION_SEED}" --device "${DEVICE}")
+        if [[ "${STUDY}" == "m1" ]]; then
+            # Do not pass --max_questions by default: M1 uses all AIME2024 items.
+            M1_ARGS=(--study m1 --model_name Qwen/Qwen3-8B --dataset aime2024 --split train --latent_step_values 0 40 80 120 160 --m "${M}" --tau "${TAU}" --orf_seed "${ORF_SEED}" --probe_seed "${PROBE_SEED}" --generation_seed "${GENERATION_SEED}" --max_new_tokens "${LATENT_COT_MAX_NEW_TOKENS:-20000}" --device "${DEVICE}" --trust_remote_code)
+            if [[ -n "${MAX_QUESTIONS:-}" ]]; then M1_ARGS+=(--max_questions "${MAX_QUESTIONS}"); fi
+            ARGS=("${M1_ARGS[@]}")
+        else
+            ARGS=(--study "${STUDY}" --model_pair "${MODEL_PAIR}" --dataset "${DATASET}" --split "${SPLIT}" --method "${METHOD}" --orf_seed "${ORF_SEED}" --m "${M}" --tau "${TAU}" --max_questions "${MAX_QUESTIONS}" --max_new_tokens "${MAX_REPLY_TOKENS}" --sample_seed "${PROBE_SEED}" --probe_seed "${PROBE_SEED}" --generation_seed "${GENERATION_SEED}" --device "${DEVICE}")
+        fi
         ;;
 esac
 

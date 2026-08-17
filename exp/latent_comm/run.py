@@ -805,6 +805,15 @@ def _run_directory(args):
 
 
 def main(argv=None):
+    # M1 owns a separate two-role fixed-budget CLI. Route before M0's strict
+    # parser validates its heterogeneous-communication arguments.
+    raw_argv = sys.argv[1:] if argv is None else argv
+    selector = argparse.ArgumentParser(add_help=False)
+    selector.add_argument("--study", default="m0")
+    selected, _ = selector.parse_known_args(raw_argv)
+    if selected.study == "m1":
+        from m1 import main as m1_main
+        return m1_main(raw_argv)
     args = parse_args(argv)
     logger = _configure_logger()
     set_seed(args.generation_seed)
