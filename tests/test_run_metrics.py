@@ -33,7 +33,21 @@ def load_utils_function(name):
     return namespace[name]
 
 
+def load_models_function(name):
+    source = Path(__file__).parents[1].joinpath("models.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == name
+    )
+    namespace = {"KERNEL_ENTROPY_CHECK_INTERVAL": 10}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), "models.py", "exec"), namespace)
+    return namespace[name]
+
+
 build_agent_metrics = load_utils_function("build_agent_metrics")
+latent_vocab_decode_steps = load_models_function("latent_vocab_decode_steps")
 
 
 class FakeTokenizer:
@@ -99,6 +113,14 @@ class AgentMetricBuilderTests(unittest.TestCase):
         self.assertEqual(metrics["timing"]["latent_decode_seconds"], 2.0)
         self.assertEqual(metrics["timing"]["alignment_seconds"], 0.5)
         self.assertEqual(metrics["timing"]["source"], "test")
+
+
+class LatentVocabDecodeCountTests(unittest.TestCase):
+    def test_counts_only_full_vocabulary_alignment_steps(self):
+        self.assertEqual(latent_vocab_decode_steps("soft", 23), 23)
+        self.assertEqual(latent_vocab_decode_steps("kernel_early_stopping", 23), 2)
+        self.assertEqual(latent_vocab_decode_steps("kernel_early_stopping", 9), 0)
+        self.assertEqual(latent_vocab_decode_steps("kernel", 23), 0)
 
 class RoleMetricTests(unittest.TestCase):
     def test_aggregates_tokens_and_timings_by_role(self):

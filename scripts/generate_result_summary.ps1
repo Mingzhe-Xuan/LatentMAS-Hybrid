@@ -4,10 +4,10 @@ param(
 )
 
 $inv = [System.Globalization.CultureInfo]::InvariantCulture
-$taskOrder = @{ arc_challenge = 0; arc_easy = 1; gsm8k = 2; humanevalplus = 3; mbppplus = 4; medqa = 5 }
+$taskOrder = @{ arc_challenge = 0; arc_easy = 1; gsm8k = 2; humanevalplus = 3; mbppplus = 4; medqa = 5; aime2024 = 6 }
 $modelOrder = @{ "Qwen/Qwen3-8B" = 0; "Qwen/Qwen3-14B" = 1 }
 $methodOrder = @{ baseline = 0; latent_mas = 1; text_mas = 2 }
-$alignOrder = @{ identical = 0; kernel = 1; linear = 2; soft = 3 }
+$alignOrder = @{ identical = 0; kernel = 1; kernel_early_stopping = 2; linear = 3; soft = 4 }
 $topologyOrder = @{ hierarchical = 0; sequential = 1 }
 $taskNames = @{
     arc_challenge = "ARC Challenge"
@@ -16,6 +16,7 @@ $taskNames = @{
     humanevalplus = "HumanEval+"
     mbppplus = "MBPP+"
     medqa = "MedQA"
+    aime2024 = "AIME 2024"
 }
 
 $rows = foreach ($file in (Get-ChildItem -LiteralPath $ResultPath -Recurse -File -Filter summary.json)) {

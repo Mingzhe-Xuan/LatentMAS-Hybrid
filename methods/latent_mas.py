@@ -192,10 +192,7 @@ class LatentMASMethod:
                             "metrics": build_agent_metrics(
                                 text_input_tokens=total_text_tokens,
                                 latent_input_tokens=role_kv_input_tokens,
-                                text_output_tokens=(
-                                    latent_metrics["latent_output_counts"][idx]
-                                    if self.args.align_method in ("soft", "kernel_early_stopping") else 0
-                                ),
+                                text_output_tokens=latent_metrics["text_output_counts"][idx],
                                 latent_output_tokens=latent_metrics["latent_output_counts"][idx],
                                 phase_metrics=latent_metrics,
                                 batch_size=batch_size,
@@ -428,10 +425,7 @@ class LatentMASMethod:
                             "metrics": build_agent_metrics(
                                 text_input_tokens=total_text_tokens,
                                 latent_input_tokens=role_kv_input_tokens,
-                                text_output_tokens=(
-                                    latent_metrics["latent_output_counts"][idx]
-                                    if self.args.align_method in ("soft", "kernel_early_stopping") else 0
-                                ),
+                                text_output_tokens=latent_metrics["text_output_counts"][idx],
                                 latent_output_tokens=latent_metrics["latent_output_counts"][idx],
                                 phase_metrics=latent_metrics,
                                 batch_size=batch_size,

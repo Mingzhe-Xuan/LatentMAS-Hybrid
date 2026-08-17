@@ -34,6 +34,20 @@ KERNEL_STABLE_CHANGE_THRESHOLD = 0.1
 KERNEL_STABLE_CHANGE_COUNT = 4
 
 
+def latent_vocab_decode_steps(align_method: str, actual_steps: int) -> int:
+    """Count latent steps that evaluate the full vocabulary output head.
+
+    Soft alignment computes ``softmax(h @ W_out.T)`` on every latent step.
+    Kernel early stopping computes full-vocabulary logits only at its entropy
+    check interval; its other latent steps use the kernel approximation.
+    """
+    if align_method == "soft":
+        return actual_steps
+    if align_method == "kernel_early_stopping":
+        return actual_steps // KERNEL_ENTROPY_CHECK_INTERVAL
+    return 0
+
+
 def _ensure_pad_token(tokenizer: AutoTokenizer) -> None:
     if tokenizer.pad_token_id is None:
         if tokenizer.eos_token is not None:
@@ -681,6 +695,9 @@ class ModelWrapper:
             "latent_decode_seconds": latent_decode_seconds,
             "alignment_seconds": alignment_timer.seconds(),
             "latent_output_counts": [actual_steps] * input_ids.shape[0],
+            "text_output_counts": [
+                latent_vocab_decode_steps(self.align_method, actual_steps)
+            ] * input_ids.shape[0],
             "timing_source": "model_stage_boundaries",
         }
         return past
@@ -826,6 +843,9 @@ class ModelWrapper:
             "latent_decode_seconds": latent_decode_seconds,
             "alignment_seconds": alignment_timer.seconds(),
             "latent_output_counts": [actual_steps] * input_ids.shape[0],
+            "text_output_counts": [
+                latent_vocab_decode_steps(self.align_method, actual_steps)
+            ] * input_ids.shape[0],
             "timing_source": "model_stage_boundaries",
         }
         return past, torch.cat(curr_output_embedding, dim=1)
