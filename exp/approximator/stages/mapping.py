@@ -41,7 +41,7 @@ def mapping_rows(states, wo, wi, bias, kernel, args, include_s2, logger=None):
         if include_s2:
             word_features = positive_features(wo, kernel.omega)
             query_features = positive_features(
-                (state.vector.to(wo.device) / args.kernel_temperature)[None], kernel.omega
+                (state.vector.to(wo.device) / args.kernel_temperature)[None], kernel.omega, stabilize=True
             )[0]
             raw = (word_features @ query_features).clamp_min(0)
             alpha = (
