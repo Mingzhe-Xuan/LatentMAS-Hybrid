@@ -99,3 +99,39 @@ average.results.tokens.text_output.total
 - `utils.py`：将 batch 级 phase 时间均摊给单题/单角色。
 - `models.py`：HF、vLLM、latent rollout 与 alignment 的底层计时和输出 token ID 计数。
 - `aggregate_results.py`：跨重复的递归数值平均。
+
+## Linear method: cross-dataset ratios of tokens/steps to decode time
+
+Each calculation uses the `average` totals in `result/*linear*/summary.json` (the mean over repetitions for the same configuration). Text throughput is `text_output.total / text_decode_seconds.total`; latent throughput is `latent_output.total / latent_decode_seconds.total`; alignment cost per step is `alignment_seconds.total / latent_output.total`. The table pairs only counts and time from the same phase: `alignment_seconds` is not added to `latent_decode_seconds`, because it is a subset of it.
+
+| Dataset | Model | Topology | text tokens/s | text ms/token | latent steps/s | latent us/step | alignment us/step | alignment / latent decode |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| ARC-Challenge | Qwen3-14B | hierarchical | 119.49 | 8.369 | 430.69 | 2321.84 | 8.20 | 0.353% |
+| ARC-Challenge | Qwen3-8B | hierarchical | 159.38 | 6.274 | 461.14 | 2168.54 | 6.49 | 0.299% |
+| ARC-Challenge | Qwen3-14B | sequential | 98.17 | 10.187 | 471.50 | 2120.90 | 7.56 | 0.357% |
+| ARC-Challenge | Qwen3-4B | sequential | 117.34 | 8.522 | 514.37 | 1944.14 | 4.69 | 0.241% |
+| ARC-Challenge | Qwen3-8B | sequential | 151.94 | 6.582 | 491.13 | 2036.11 | 5.96 | 0.293% |
+| ARC-Easy | Qwen3-14B | hierarchical | 140.67 | 7.109 | 500.88 | 1996.47 | 8.05 | 0.403% |
+| ARC-Easy | Qwen3-8B | hierarchical | 177.39 | 5.637 | 514.75 | 1942.69 | 6.54 | 0.337% |
+| ARC-Easy | Qwen3-14B | sequential | 141.80 | 7.052 | 498.58 | 2005.69 | 8.09 | 0.403% |
+| ARC-Easy | Qwen3-8B | sequential | 189.29 | 5.283 | 535.22 | 1868.41 | 6.40 | 0.343% |
+| GSM8K | Qwen3-14B | hierarchical | 102.71 | 9.736 | 494.54 | 2022.09 | 7.52 | 0.372% |
+| GSM8K | Qwen3-8B | hierarchical | 171.31 | 5.837 | 534.94 | 1869.36 | 5.84 | 0.312% |
+| GSM8K | Qwen3-14B | sequential | 100.56 | 9.944 | 487.08 | 2053.03 | 7.65 | 0.372% |
+| GSM8K | Qwen3-8B | sequential | 162.73 | 6.145 | 520.54 | 1921.10 | 5.71 | 0.297% |
+| HumanEval+ | Qwen3-14B | hierarchical | 89.59 | 11.163 | 180.50 | 5540.27 | 12.34 | 0.223% |
+| HumanEval+ | Qwen3-8B | hierarchical | 81.53 | 12.266 | 193.22 | 5175.43 | 10.30 | 0.199% |
+| HumanEval+ | Qwen3-14B | sequential | 74.47 | 13.428 | 162.80 | 6142.36 | 13.36 | 0.217% |
+| HumanEval+ | Qwen3-8B | sequential | 79.61 | 12.562 | 175.17 | 5708.87 | 11.50 | 0.201% |
+| MBPP+ | Qwen3-14B | hierarchical | 113.98 | 8.774 | 232.74 | 4296.72 | 11.71 | 0.273% |
+| MBPP+ | Qwen3-8B | hierarchical | 60.74 | 16.464 | 251.68 | 3973.38 | 9.50 | 0.239% |
+| MBPP+ | Qwen3-14B | sequential | 65.22 | 15.334 | 162.33 | 6160.18 | 14.30 | 0.232% |
+| MBPP+ | Qwen3-8B | sequential | 70.93 | 14.097 | 173.33 | 5769.41 | 12.50 | 0.217% |
+| MedQA | Qwen3-14B | hierarchical | 55.30 | 18.083 | 164.05 | 6095.56 | 14.97 | 0.246% |
+| MedQA | Qwen3-8B | hierarchical | 83.55 | 11.968 | 176.03 | 5680.86 | 12.46 | 0.219% |
+| MedQA | Qwen3-14B | sequential | 82.75 | 12.084 | N/A | N/A | N/A | N/A |
+| MedQA | Qwen3-8B | sequential | 114.78 | 8.712 | N/A | N/A | N/A | N/A |
+
+Conclusion: there is no fixed cross-dataset ratio. Text throughput ranges from 55.30 to 189.29 tokens/s across all configurations (3.42x); even within Qwen3-8B + sequential, the six datasets range from 70.93 to 189.29 tokens/s (2.67x). For the runs with usable latent counts, latent throughput ranges from 162.33 to 535.22 steps/s (3.30x); within Qwen3-8B + sequential and excluding MedQA's missing counts, it still ranges from 173.33 to 535.22 steps/s (3.09x). Alignment costs 4.69--14.97 us/step and accounts for 0.199%--0.403% of latent decode time, so it is not a fixed proportion either.
+
+MedQA sequential has `latent_output.total = 0` and near-zero `latent_decode_seconds` in both aggregate results, indicating legacy timing/counting data are unavailable. Its latent columns are therefore marked N/A instead of incorrectly suggesting zero cost per step. These ratios are useful empirical throughput values for a particular model, topology, dataset, and runtime environment; input/cache length, output length, batch shape, and GPU scheduling can all change them.
