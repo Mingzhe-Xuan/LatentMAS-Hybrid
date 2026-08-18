@@ -536,7 +536,7 @@ def main():
             "align_method": args.align_method,
             "soft_temperature": args.soft_temperature,
             "soft_chunk_size": args.soft_chunk_size,
-            "soft_latent_max_steps": 20000,
+            "soft_latent_max_steps": 10000,
             "kernel_early_stopping_max_steps": 200,
             "kernel_entropy_check_interval": 10,
             "kernel_stable_change_threshold": 0.1,
