@@ -85,6 +85,11 @@ def parse_args(argv=None):
     parser.add_argument("--generation_seed", type=int, default=42)
     parser.add_argument("--repeat_seeds", type=int, nargs="+", default=[42, 43, 44, 45])
     parser.add_argument("--noise_seed_offset", type=int, default=10000)
+    parser.add_argument(
+        "--c4_dev_allow_override",
+        action="store_true",
+        help="Development-only: permit C4 --latent_steps overrides; formal C4 uses K=120.",
+    )
     parser.add_argument("--generate_bs", type=int, default=2)
     parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--top_p", type=float, default=0.95)
@@ -124,8 +129,9 @@ def parse_args(argv=None):
         # C4 is intentionally a fixed ablation matrix.
         args.dataset = "aime2025" if args.dataset is None else args.dataset
         args.split = "train"
-        args.latent_steps = 120
-        args.alignments = ["linear", "kernel"]
+        if not args.c4_dev_allow_override:
+            args.latent_steps = 120
+        args.alignments = ["kernel"]
         args.kernel_features = 1024
     if args.model_name is None:
         args.model_name = (
@@ -154,8 +160,8 @@ def parse_args(argv=None):
     if args.study == "c4":
         if args.model_name != "Qwen/Qwen3-8B" or args.dataset != "aime2025":
             parser.error("C4 requires Qwen/Qwen3-8B on AIME2025")
-        if len(args.repeat_seeds) != 4 or len(set(args.repeat_seeds)) != 4:
-            parser.error("C4 requires exactly four distinct --repeat_seeds")
+        if list(args.repeat_seeds) != [42, 43, 44, 45]:
+            parser.error("C4 requires --repeat_seeds 42 43 44 45")
         if args.generate_bs < 1:
             parser.error("--generate_bs must be positive")
     if args.study in {"c1", "c2", "c3"} and args.dataset not in {

@@ -544,6 +544,9 @@ class ModelWrapper:
         hidden_state_transform: Optional[
             Callable[[int, torch.Tensor], torch.Tensor]
         ] = None,
+        aligned_embedding_transform: Optional[
+            Callable[[int, torch.Tensor], torch.Tensor]
+        ] = None,
     ) -> Tuple:
         if input_ids.dim() != 2:
             raise ValueError("input_ids must be 2D with shape [batch, seq_len]")
@@ -638,6 +641,18 @@ class ModelWrapper:
                     latent_vec = alignment_timer.measure(
                         lambda: self._apply_latent_realignment(last_hidden, source_model)
                     )
+                if aligned_embedding_transform is not None:
+                    transformed = aligned_embedding_transform(step, latent_vec)
+                    if (
+                        transformed.shape != latent_vec.shape
+                        or transformed.device != latent_vec.device
+                        or transformed.dtype != latent_vec.dtype
+                    ):
+                        raise ValueError(
+                            "aligned_embedding_transform must preserve tensor shape, "
+                            "device, and dtype"
+                        )
+                    latent_vec = transformed
                 latent_embed = latent_vec.unsqueeze(1)
                 model_inputs = {"inputs_embeds": latent_embed}
                 batch_size = latent_embed.shape[0]

@@ -1,4 +1,4 @@
-"""C4: hierarchical AIME2025 clean-vs-random-hidden ablation."""
+"""C4: hierarchical AIME2025 pre-/post-alignment replacement ablation."""
 
 from __future__ import annotations
 
@@ -26,12 +26,24 @@ from utils import set_seed
 ROOT = Path(__file__).resolve().parents[2]
 RUNS_DIR = ROOT / "exp_result" / "latent_cot" / "runs"
 CACHE_DIR = ROOT / "exp" / "cache" / "latent_cot_c4"
-SCHEMA_VERSION = 1
-ALIGNMENTS = ("linear", "kernel")
-CONDITIONS = ("clean", "random_hidden")
+SCHEMA_VERSION = 2
+ALIGNMENTS = ("kernel",)
+CONDITIONS = ("clean", "pre_replace", "post_replace")
 ROLES = ("planner", "critic", "refiner")
 SAMPLED_STEPS = (0, 20, 40, 60, 80, 100, 120)
-COLORS = {"clean": "#4c78a8", "random_hidden": "#e45756"}
+COLORS = {"clean": "#4c78a8", "pre_replace": "#e45756", "post_replace": "#54a24b"}
+
+
+def _sampled_steps(latent_steps, noise_site):
+    upper_bound = latent_steps if noise_site != "post_alignment_target_embedding" else latent_steps - 1
+    return tuple(step for step in SAMPLED_STEPS if step <= upper_bound)
+
+
+NOISE_SITES = {
+    "clean": "none",
+    "pre_replace": "pre_alignment_source_hidden",
+    "post_replace": "post_alignment_target_embedding",
+}
 
 
 def _safe(value):
@@ -106,21 +118,30 @@ def _dataset_identity(indexed_items):
 
 
 def _identity(args, indexed_items, alignment, condition, seed):
+    if condition not in CONDITIONS:
+        raise ValueError(f"Unknown C4 condition: {condition}")
     return {
         "schema_version": SCHEMA_VERSION,
-        "experiment": "c4_hierarchical_random_output_hidden",
+        "experiment": "c4_hierarchical_pre_post_replace",
         "dataset": "aime2025",
         "split": "train",
         "dataset_identity": _dataset_identity(indexed_items),
         "model_name": args.model_name,
         "prompt": "hierarchical",
-        "latent_steps_per_agent": 120,
+        "latent_steps_per_agent": int(args.latent_steps),
         "latent_roles": list(ROLES),
         "alignment": alignment,
         "condition": condition,
         "generation_seed": int(seed),
         "noise": {
-            "applied_at_steps": "prefill_output_step_0_and_every_recurrent_output_step_1_to_120",
+            "site": NOISE_SITES[condition],
+            "applied_at_steps": (
+                f"prefill_output_step_0_and_recurrent_output_steps_1_to_{args.latent_steps}"
+                if condition == "pre_replace"
+                else f"aligned_latent_input_steps_0_to_{args.latent_steps - 1}"
+                if condition == "post_replace"
+                else "none"
+            ),
             "distribution": "independent_standard_gaussian_then_per_vector_l2_norm_matched",
             "noise_seed": int(args.noise_seed_offset + seed),
             "generator": "dedicated_device_torch_generator",
@@ -153,23 +174,81 @@ def _cache_paths(identity):
     )
 
 
+def _validated_cache_rows(answers_path, hidden_path, manifest_path, identity):
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if _sha(answers_path) != manifest["sha256"]["answers"] or _sha(hidden_path) != manifest["sha256"]["hidden"]:
+        raise RuntimeError(f"C4 cache integrity check failed: {manifest_path}")
+    return _read_parquet(answers_path), _read_parquet(hidden_path), manifest
+
+
+def _legacy_identity_matches(old, identity):
+    """Accept only v1 cells whose experimental settings match this C4 cell."""
+    legacy_condition = {"clean": "clean", "pre_replace": "random_hidden"}.get(identity["condition"])
+    if legacy_condition is None:
+        return False
+    if old.get("schema_version") != 1 or old.get("experiment") != "c4_hierarchical_random_output_hidden":
+        return False
+    fields = (
+        "dataset", "split", "dataset_identity", "model_name", "prompt",
+        "latent_steps_per_agent", "latent_roles", "alignment",
+        "generation_seed", "generation", "alignment_config",
+    )
+    if any(old.get(field) != identity.get(field) for field in fields):
+        return False
+    expected_noise = {
+        "applied_at_steps": "prefill_output_step_0_and_every_recurrent_output_step_1_to_120",
+        "distribution": "independent_standard_gaussian_then_per_vector_l2_norm_matched",
+        "noise_seed": identity["noise"]["noise_seed"],
+        "generator": "dedicated_device_torch_generator",
+    }
+    return old.get("condition") == legacy_condition and old.get("noise") == expected_noise
+
+
+def _legacy_rows(rows, condition):
+    site = NOISE_SITES[condition]
+    return [{**row, "condition": condition, "noise_site": site} for row in rows]
+
+
+def _load_legacy_cell(args, identity):
+    if args.force_recollect or identity["alignment"] != "kernel":
+        return None
+    legacy_condition = {"clean": "clean", "pre_replace": "random_hidden"}.get(identity["condition"])
+    if legacy_condition is None:
+        return None
+    pattern = f"c4_kernel_{legacy_condition}_seed{identity['generation_seed']}_*.manifest.json"
+    for manifest_path in sorted(CACHE_DIR.glob(pattern)):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        old_identity = manifest.get("cache_identity", {})
+        if not _legacy_identity_matches(old_identity, identity):
+            continue
+        stem = manifest_path.name.removesuffix(".manifest.json")
+        answers_path = CACHE_DIR / f"{stem}.answers.parquet"
+        hidden_path = CACHE_DIR / f"{stem}.hidden.parquet"
+        if not answers_path.exists() or not hidden_path.exists():
+            continue
+        answers, hidden, validated_manifest = _validated_cache_rows(
+            answers_path, hidden_path, manifest_path, identity
+        )
+        return _legacy_rows(answers, identity["condition"]), _legacy_rows(hidden, identity["condition"]), validated_manifest, (answers_path, hidden_path, manifest_path)
+    return None
+
+
 def _load_cell(args, identity):
     answers_path, hidden_path, manifest_path = _cache_paths(identity)
     present = [answers_path.exists(), hidden_path.exists(), manifest_path.exists()]
     if any(present) and not all(present) and not args.force_recollect:
         raise RuntimeError(f"Incomplete C4 cache cell; use --force_recollect: {manifest_path}")
-    if not all(present) or args.force_recollect:
-        if args.reuse_trajectory:
-            raise FileNotFoundError(f"--reuse_trajectory requested but C4 cache is absent: {manifest_path}")
-        return None, None, None, (answers_path, hidden_path, manifest_path)
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("cache_identity") != identity:
-        raise RuntimeError(f"C4 cache identity mismatch: {manifest_path}")
-    if _sha(answers_path) != manifest["sha256"]["answers"] or _sha(hidden_path) != manifest["sha256"]["hidden"]:
-        raise RuntimeError(f"C4 cache integrity check failed: {manifest_path}")
-    return _read_parquet(answers_path), _read_parquet(hidden_path), manifest, (answers_path, hidden_path, manifest_path)
-
-
+    if all(present) and not args.force_recollect:
+        answers, hidden, manifest = _validated_cache_rows(answers_path, hidden_path, manifest_path, identity)
+        if manifest.get("cache_identity") != identity:
+            raise RuntimeError(f"C4 cache identity mismatch: {manifest_path}")
+        return answers, hidden, manifest, (answers_path, hidden_path, manifest_path)
+    legacy = _load_legacy_cell(args, identity)
+    if legacy is not None:
+        return legacy
+    if args.reuse_trajectory:
+        raise FileNotFoundError(f"--reuse_trajectory requested but C4 cache is absent: {manifest_path}")
+    return None, None, None, (answers_path, hidden_path, manifest_path)
 def _save_cell(paths, identity, answer_rows, hidden_rows, model_info):
     answers_path, hidden_path, manifest_path = paths
     _parquet(answers_path, answer_rows)
@@ -186,14 +265,16 @@ def _save_cell(paths, identity, answer_rows, hidden_rows, model_info):
     return manifest
 
 
-class HiddenTransform:
-    """Replace latent-role outputs without advancing the generation RNG."""
+class VectorReplaceTransform:
+    """Norm-matched independent replacement at one explicitly named C4 site."""
 
-    def __init__(self, condition, noise_seed, alignment, generation_seed):
+    def __init__(self, condition, noise_seed, alignment, generation_seed, noise_site, latent_steps):
         self.condition = condition
         self.noise_seed = int(noise_seed)
         self.alignment = alignment
         self.generation_seed = int(generation_seed)
+        self.noise_site = noise_site
+        self.sampled_steps = set(_sampled_steps(latent_steps, noise_site))
         self.generator = None
         self.item_ids = []
         self.rows = []
@@ -203,32 +284,36 @@ class HiddenTransform:
         self.item_ids = [int(value) for value in item_ids]
         self.previous = {}
 
-    @torch.inference_mode()
-    def __call__(self, role, step, hidden):
-        original = hidden.detach().float()
-        if self.condition == "random_hidden":
+    def _replace(self, vector):
+        original = vector.detach().float()
+        if self.condition in {"pre_replace", "post_replace"}:
             if self.generator is None:
-                self.generator = torch.Generator(device=hidden.device)
+                self.generator = torch.Generator(device=vector.device)
                 self.generator.manual_seed(self.noise_seed)
-            noise = torch.randn(original.shape, dtype=torch.float32, device=hidden.device, generator=self.generator)
+            noise = torch.randn(
+                original.shape, dtype=torch.float32, device=vector.device,
+                generator=self.generator,
+            )
             original_norm = original.norm(dim=-1, keepdim=True)
             noise_norm = noise.norm(dim=-1, keepdim=True).clamp_min(torch.finfo(torch.float32).eps)
-            effective_float = noise * (original_norm / noise_norm)
-            effective = effective_float.to(dtype=hidden.dtype)
+            effective = (noise * (original_norm / noise_norm)).to(dtype=vector.dtype)
         else:
-            effective = hidden
-        # Diagnostics describe the tensor actually returned to the recurrence,
-        # including any BF16/FP16 cast used by the model.
-        effective_float = effective.detach().float()
+            effective = vector
+        return original, effective
 
+    @torch.inference_mode()
+    def __call__(self, role, step, vector):
+        original, effective = self._replace(vector)
+        effective_float = effective.detach().float()
         for index, item_id in enumerate(self.item_ids):
             key = (role, item_id)
             previous = self.previous.get(key)
-            if int(step) in SAMPLED_STEPS:
+            if int(step) in self.sampled_steps:
                 self.rows.append({
                     "item_id": item_id,
                     "alignment": self.alignment,
                     "condition": self.condition,
+                    "noise_site": self.noise_site,
                     "generation_seed": self.generation_seed,
                     "agent": role,
                     "local_step": int(step),
@@ -240,8 +325,6 @@ class HiddenTransform:
                 })
             self.previous[key] = effective_float[index:index+1].detach().clone()
         return effective
-
-
 def _method_args(args, alignment, seed):
     return argparse.Namespace(**{
         **vars(args),
@@ -276,8 +359,8 @@ def _answer_row(args, item_id, item, result, alignment, condition, seed, seconds
         "alignment": alignment,
         "condition": condition,
         "generation_seed": int(seed),
-        "latent_steps_per_agent": 120,
-        "total_latent_steps": 360,
+        "latent_steps_per_agent": int(args.latent_steps),
+        "total_latent_steps": int(args.latent_steps) * len(ROLES),
         "question": item["question"],
         "gold": item.get("gold", ""),
         "prediction": prediction,
@@ -310,21 +393,37 @@ def _collect_cell(args, indexed_items, wrapper, alignment, condition, seed, logg
             if key[2] != "kernel"
         }
         wrapper._c4_kernel_seed = seed
-    transform = HiddenTransform(condition, args.noise_seed_offset + seed, alignment, seed)
+    source_transform = None
+    embedding_transform = None
+    if condition in {"clean", "pre_replace"}:
+        source_transform = VectorReplaceTransform(
+            condition, args.noise_seed_offset + seed, alignment, seed,
+            NOISE_SITES[condition], args.latent_steps,
+        )
+    elif condition == "post_replace":
+        embedding_transform = VectorReplaceTransform(
+            condition, args.noise_seed_offset + seed, alignment, seed,
+            NOISE_SITES[condition], args.latent_steps,
+        )
+    else:
+        raise ValueError(f"Unknown C4 condition: {condition}")
+    transform = source_transform or embedding_transform
     method = LatentMASMethod(
         wrapper,
-        latent_steps=120,
+        latent_steps=args.latent_steps,
         judger_max_new_tokens=args.max_new_tokens,
         temperature=args.temperature,
         top_p=args.top_p,
         generate_bs=args.generate_bs,
         args=method_args,
-        latent_hidden_transform=transform,
+        latent_hidden_transform=source_transform,
+        latent_embedding_transform=embedding_transform,
     )
     answer_rows = []
     for start in range(0, len(indexed_items), args.generate_bs):
         batch = indexed_items[start:start + args.generate_bs]
-        transform.begin_batch([item_id for item_id, _ in batch])
+        if transform is not None:
+            transform.begin_batch([item_id for item_id, _ in batch])
         started = time.perf_counter()
         failure = None
         try:
@@ -380,10 +479,7 @@ def _summarize(answer_rows, hidden_rows, args):
                     "accuracy": float(np.mean([row["correct"] for row in rows])),
                     "parse_success_rate": float(np.mean([row["parse_success"] for row in rows])),
                 }
-                seed_summary.update({
-                    f"mean_{metric}": float(np.mean([row[metric] for row in rows]))
-                    for metric in mean_metrics
-                })
+                seed_summary.update({f"mean_{metric}": float(np.mean([row[metric] for row in rows])) for metric in mean_metrics})
                 seeds.append(seed_summary)
             aggregate = {
                 "seeds": seeds,
@@ -391,52 +487,49 @@ def _summarize(answer_rows, hidden_rows, args):
                 "accuracy_std": float(np.std([row["accuracy"] for row in seeds], ddof=1)),
                 "parse_success_rate_mean": float(np.mean([row["parse_success_rate"] for row in seeds])),
             }
-            aggregate.update({
-                f"{metric}_mean": float(np.mean([row[f"mean_{metric}"] for row in seeds]))
-                for metric in mean_metrics
-            })
-            # Short aliases retained for the overview plot.
+            aggregate.update({f"{metric}_mean": float(np.mean([row[f"mean_{metric}"] for row in seeds])) for metric in mean_metrics})
             aggregate["wall_seconds_mean"] = aggregate["wall_seconds_per_question_mean"]
             series[f"{alignment}.{condition}"] = aggregate
     paired = {}
     for alignment in ALIGNMENTS:
         clean = {(row["generation_seed"], row["item_id"]): float(row["correct"]) for row in answer_rows if row["alignment"] == alignment and row["condition"] == "clean"}
-        noise = {(row["generation_seed"], row["item_id"]): float(row["correct"]) for row in answer_rows if row["alignment"] == alignment and row["condition"] == "random_hidden"}
-        deltas = []
-        flips = {"clean_only_correct": 0, "noise_only_correct": 0, "both_correct": 0, "both_wrong": 0}
-        for key in clean:
-            deltas.append(noise[key] - clean[key])
-            state = (bool(clean[key]), bool(noise[key]))
-            flips[{(True, False): "clean_only_correct", (False, True): "noise_only_correct", (True, True): "both_correct", (False, False): "both_wrong"}[state]] += 1
-        paired[alignment] = {
-            "accuracy_delta_noise_minus_clean": float(np.mean(deltas)),
-            "bootstrap_95_ci": _two_level_paired_ci(clean, noise, args.bootstrap_replicates, args.probe_seed),
-            "answer_transitions": flips,
-        }
+        comparison = {}
+        for condition in ("pre_replace", "post_replace"):
+            replaced = {(row["generation_seed"], row["item_id"]): float(row["correct"]) for row in answer_rows if row["alignment"] == alignment and row["condition"] == condition}
+            deltas = [replaced[key] - clean[key] for key in clean if key in replaced]
+            flips = {"clean_only_correct": 0, "replace_only_correct": 0, "both_correct": 0, "both_wrong": 0}
+            for key in clean:
+                state = (bool(clean[key]), bool(replaced[key]))
+                flips[{(True, False): "clean_only_correct", (False, True): "replace_only_correct", (True, True): "both_correct", (False, False): "both_wrong"}[state]] += 1
+            comparison[f"{condition}_minus_clean"] = {
+                "accuracy_delta": float(np.mean(deltas)),
+                "bootstrap_95_ci": _two_level_paired_ci(clean, replaced, args.bootstrap_replicates, args.probe_seed),
+                "answer_transitions": flips,
+            }
+        paired[alignment] = comparison
     diagnostics = {}
     for condition in CONDITIONS:
         selected = [row for row in hidden_rows if row["condition"] == condition]
         diagnostics[condition] = {
+            "noise_site": NOISE_SITES[condition],
             "mean_original_effective_cosine": float(np.mean([row["original_effective_cosine"] for row in selected])),
             "mean_effective_to_original_norm_ratio": float(np.mean([row["effective_norm"] / max(row["original_norm"], 1e-12) for row in selected])),
             "finite_fraction": float(np.mean([row["finite"] for row in selected])),
         }
     return {
         "study": "c4",
-        "design": {"model": args.model_name, "dataset": "aime2025", "prompt": "hierarchical", "K": 120, "alignments": list(ALIGNMENTS), "conditions": list(CONDITIONS), "repeat_seeds": list(args.repeat_seeds), "question_count": args.max_questions},
+        "design": {"model": args.model_name, "dataset": "aime2025", "prompt": "hierarchical", "K": int(args.latent_steps), "alignments": list(ALIGNMENTS), "conditions": list(CONDITIONS), "repeat_seeds": list(args.repeat_seeds), "question_count": args.max_questions},
         "series": series,
         "paired_comparison": paired,
         "hidden_diagnostics": diagnostics,
     }
-
-
 def _plot(summary, path):
     figure, axes = plt.subplots(1, 3, figsize=(15, 4.8))
-    width = 0.34
+    width = 0.22
     x = np.arange(len(ALIGNMENTS))
     for offset, condition in enumerate(CONDITIONS):
         entries = [summary["series"][f"{alignment}.{condition}"] for alignment in ALIGNMENTS]
-        positions = x + (offset - 0.5) * width
+        positions = x + (offset - 1) * width
         axes[0].bar(positions, [entry["accuracy_mean"] for entry in entries], width, color=COLORS[condition], label=condition, alpha=0.85)
         for position, entry in zip(positions, entries):
             axes[0].scatter([position] * len(entry["seeds"]), [value["accuracy"] for value in entry["seeds"]], color="black", s=15, zorder=3)
@@ -448,17 +541,15 @@ def _plot(summary, path):
         axis.grid(axis="y", alpha=0.25)
     axes[0].set_ylim(0, 1)
     axes[0].legend()
-    figure.suptitle("C4: Qwen3-8B hierarchical AIME2025, K=120 per latent agent")
+    figure.suptitle("C4: Qwen3-8B hierarchical AIME2025, pre/post alignment replacement")
     figure.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(path)
     plt.close(figure)
-
-
 def _run_dir(args):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     digest = hashlib.sha256(json.dumps(vars(args), sort_keys=True, default=str).encode()).hexdigest()[:8]
-    path = RUNS_DIR / f"aime2025_train_c4_Qwen3-8B_k120_q{args.max_questions}_r{len(args.repeat_seeds)}_{timestamp}_{digest}"
+    path = RUNS_DIR / f"aime2025_train_c4_Qwen3-8B_k{args.latent_steps}_q{args.max_questions}_r{len(args.repeat_seeds)}_{timestamp}_{digest}"
     path.mkdir(parents=True, exist_ok=False)
     return path
 
@@ -489,7 +580,7 @@ def run_c4(args, logger: logging.Logger | None = None):
                         cached_answers, cached_hidden = _collect_cell(args, indexed_items, wrapper, alignment, condition, seed, logger)
                         if len(cached_answers) != args.max_questions:
                             raise RuntimeError("C4 answer-row invariant failed")
-                        expected_hidden = args.max_questions * len(ROLES) * len(SAMPLED_STEPS)
+                        expected_hidden = args.max_questions * len(ROLES) * len(_sampled_steps(args.latent_steps, NOISE_SITES[condition]))
                         if len(cached_hidden) != expected_hidden:
                             raise RuntimeError(f"C4 hidden-row invariant failed: {len(cached_hidden)} != {expected_hidden}")
                         cell_manifest = _save_cell(paths, identity, cached_answers, cached_hidden, model_info)
@@ -507,7 +598,7 @@ def run_c4(args, logger: logging.Logger | None = None):
         metrics_path = run_dir / "metrics" / "c4_accuracy_cost_by_question.parquet"
         hidden_path = run_dir / "metrics" / "c4_hidden_diagnostics.parquet"
         summary_path = run_dir / "summaries" / "c4_summary.json"
-        figure_path = run_dir / "figures" / "c4_clean_vs_random_hidden.pdf"
+        figure_path = run_dir / "figures" / "c4_clean_pre_post_replace.pdf"
         _parquet(metrics_path, answer_rows)
         _parquet(hidden_path, hidden_rows)
         summary = _summarize(answer_rows, hidden_rows, args)

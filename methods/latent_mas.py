@@ -35,6 +35,9 @@ class LatentMASMethod:
         latent_hidden_transform: Optional[
             Callable[[str, int, torch.Tensor], torch.Tensor]
         ] = None,
+        latent_embedding_transform: Optional[
+            Callable[[str, int, torch.Tensor], torch.Tensor]
+        ] = None,
         latent_roles_only: bool = False,
     ) -> None:
         self.args = args
@@ -63,6 +66,7 @@ class LatentMASMethod:
         self.task = args.task
         self.latent_step_observer = latent_step_observer
         self.latent_hidden_transform = latent_hidden_transform
+        self.latent_embedding_transform = latent_embedding_transform
         self.latent_roles_only = bool(latent_roles_only)
 
     @staticmethod
@@ -149,6 +153,7 @@ class LatentMASMethod:
 
                 step_observer = None
                 hidden_transform = None
+                embedding_transform = None
                 if self.latent_hidden_transform is not None:
                     hidden_transform = (
                         lambda step, hidden, role=agent.role:
@@ -159,6 +164,11 @@ class LatentMASMethod:
                         lambda step, hidden, role=agent.role:
                         self.latent_step_observer(role, step, hidden)
                     )
+                if self.latent_embedding_transform is not None:
+                    embedding_transform = (
+                        lambda step, embedding, role=agent.role:
+                        self.latent_embedding_transform(role, step, embedding)
+                    )
                 past_kv = self.model.generate_latent_batch(
                     wrapped_ids,
                     attention_mask=wrapped_mask,
@@ -166,6 +176,7 @@ class LatentMASMethod:
                     past_key_values=past_kv,
                     step_observer=step_observer,
                     hidden_state_transform=hidden_transform,
+                    aligned_embedding_transform=embedding_transform,
                 )
                 latent_metrics = self.model.last_latent_metrics
                 actual_latent_steps = max(latent_metrics["latent_output_counts"], default=0)
