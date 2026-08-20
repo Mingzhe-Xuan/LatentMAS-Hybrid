@@ -259,15 +259,6 @@ def _visible_receiver_prompt(wrapper, question, args):
     return messages, rendered
 
 
-def _receiver_prompt(wrapper, question):
-    messages = _receiver_messages(wrapper.model_name)
-    rendered = wrapper.render_chat(messages, add_generation_prompt=True)
-    normalized_question = " ".join(question.split())
-    normalized_prompt = " ".join(rendered.split())
-    leaked = bool(normalized_question) and normalized_question in normalized_prompt
-    if leaked:
-        raise RuntimeError("M0 receiver prompt leaked the original question")
-    return messages, rendered
 
 
 def _trajectory_identity(args, source_model, sample_identity):
@@ -546,7 +537,10 @@ def _parse_answer(text, dataset):
     if prediction in {"a", "b", "c", "d"}:
         return prediction
     matches = re.findall(r"(?i)(?:\\boxed\{)?\b([ABCD])\b", text)
-    return matches[-1].lower() if matches else None@torch.inference_mode()
+    return matches[-1].lower() if matches else None
+
+
+@torch.inference_mode()
 def _run_receiver_cell(
     records,
     source,
@@ -570,16 +564,14 @@ def _run_receiver_cell(
         set_seed(args.generation_seed)
         if direct_text:
             messages, receiver_prompt = _direct_text_receiver_prompt(
-                target, record["question"]
+                target, record["question"], args
             )
         elif receiver_visibility == "visible":
             messages, receiver_prompt = _visible_receiver_prompt(
-                target, record["question"]
+                target, record["question"], args
             )
         else:
-            messages, receiver_prompt = _receiver_prompt(
-                target, record["question"]
-            )
+            raise ValueError("M0 no longer runs a blind receiver condition")
 
         encoded = target.tokenizer(
             receiver_prompt,
