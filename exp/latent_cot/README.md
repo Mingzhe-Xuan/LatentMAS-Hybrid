@@ -197,10 +197,11 @@ qsub -v "EXP_TARGET=latent_cot,STUDY=c3" exp.sh
 
 ## C4: hierarchical pre-/post-alignment replacement ablation
 
-C4 is fixed to Qwen3-8B, the first 30 AIME2025 train questions, K=120 for
+C4 is fixed to Qwen3-8B and two datasets: the first 30 AIME2025 train questions
+and the first 30 GPQA-Diamond test questions. It uses K=120 for
 Planner/Critic/Refiner, `kernel` alignment with 1024 features, and paired
 generation seeds 42, 43, 44, and 45. It compares three norm-preserving
-conditions:
+conditions independently on each dataset:
 
 - `clean`: normal hierarchical rollout, `e_t=A(h_t)`;
 - `pre_replace`: replace each source hidden before alignment with independent
@@ -213,8 +214,9 @@ conditions:
 The post-alignment transform is called only on actual latent inputs, local
 steps 0--119. Each condition uses a dedicated noise RNG (`10000 + generation
 seed`), so noise sampling does not advance model generation. This produces
-`1 alignment * 3 conditions * 4 seeds * 30 questions = 360` question-level
-rows. Interpret C4 using the paired `pre_replace_minus_clean` and
+`2 datasets * 1 alignment * 3 conditions * 4 seeds * 30 questions = 720`
+question-level rows. Results and paired effects are reported separately for
+AIME2025 and GPQA-Diamond. Interpret C4 using the paired `pre_replace_minus_clean` and
 `post_replace_minus_clean` effects; it does not by itself establish that hidden
 content is important.
 
@@ -227,8 +229,9 @@ Each alignment/condition/seed cell is atomically cached under
 the cache identity. For compatibility, an intact old kernel `clean` cache is
 reused as `clean`, and an intact old kernel `random_hidden` cache is read-only
 reused in memory as `pre_replace`; the legacy cache files are never changed.
-`post_replace` always requires a new rollout. Use `--reuse_trajectory` to
-require all available compatible cells, or `--force_recollect` to ignore caches.
+These legacy cells apply only to AIME2025. GPQA-Diamond cells are collected in
+new dataset-specific caches. Use `--reuse_trajectory` to require all compatible
+cells, or `--force_recollect` to ignore caches.
 
 Run-local artifacts are:
 

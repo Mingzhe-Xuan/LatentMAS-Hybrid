@@ -127,8 +127,8 @@ def parse_args(argv=None):
     args = parser.parse_args(argv)
     if args.study == "c4":
         # C4 is intentionally a fixed ablation matrix.
-        args.dataset = "aime2025" if args.dataset is None else args.dataset
-        args.split = "train"
+        args.dataset = "all" if args.dataset is None else args.dataset
+        args.split = "dataset_specific"
         if not args.c4_dev_allow_override:
             args.latent_steps = 120
         args.alignments = ["kernel"]
@@ -158,8 +158,10 @@ def parse_args(argv=None):
     if any(value < 1 for value in args.aime_latent_step_values):
         parser.error("--aime_latent_step_values must contain positive integers")
     if args.study == "c4":
-        if args.model_name != "Qwen/Qwen3-8B" or args.dataset != "aime2025":
-            parser.error("C4 requires Qwen/Qwen3-8B on AIME2025")
+        if args.model_name != "Qwen/Qwen3-8B" or args.dataset != "all":
+            parser.error(
+                "C4 requires Qwen/Qwen3-8B with fixed AIME2025 + GPQA-Diamond datasets"
+            )
         if list(args.repeat_seeds) != [42, 43, 44, 45]:
             parser.error("C4 requires --repeat_seeds 42 43 44 45")
         if args.generate_bs < 1:
