@@ -691,27 +691,40 @@ def _run_dir(args):
 
 def run_c4(args, logger: logging.Logger | None = None):
     logger = logger or logging.getLogger("latent_cot.c4")
-    indexed_by_dataset = {
-        dataset: _items(dataset, args.max_questions) for dataset in DATASETS
-    }
     run_dir = _run_dir(args)
     manifest_path = run_dir / "run_manifest.json"
+    metrics_path = run_dir / "metrics" / "c4_accuracy_cost_by_question.parquet"
+    hidden_path = run_dir / "metrics" / "c4_hidden_diagnostics.parquet"
+    summary_path = run_dir / "summaries" / "c4_summary.json"
+    figure_path = run_dir / "figures" / "c4_clean_pre_post_replace.pdf"
     manifest = {
-        "status": "running",
+        "status": "loading_datasets",
         "study": "c4",
         "started_at": datetime.now().isoformat(timespec="seconds"),
         "args": vars(args),
-        "dataset_identity": {
-            dataset: _dataset_identity(items)
-            for dataset, items in indexed_by_dataset.items()
-        },
+        "dataset_identity": {},
         "cache_cells": [],
+        "artifacts": {
+            "metrics": str(metrics_path),
+            "hidden_diagnostics": str(hidden_path),
+            "summary": str(summary_path),
+            "figure": str(figure_path),
+        },
     }
     _json(manifest_path, manifest)
     wrapper = None
     model_info = None
     answer_rows, hidden_rows = [], []
     try:
+        indexed_by_dataset = {
+            dataset: _items(dataset, args.max_questions) for dataset in DATASETS
+        }
+        manifest["dataset_identity"] = {
+            dataset: _dataset_identity(items)
+            for dataset, items in indexed_by_dataset.items()
+        }
+        manifest["status"] = "running"
+        _json(manifest_path, manifest)
         for dataset, indexed_items in indexed_by_dataset.items():
             for seed in args.repeat_seeds:
                 for alignment in ALIGNMENTS:
@@ -771,6 +784,12 @@ def run_c4(args, logger: logging.Logger | None = None):
                             logger.info("C4 cache hit: %s", paths[2])
                         answer_rows.extend(cached_answers)
                         hidden_rows.extend(cached_hidden)
+                        _parquet(metrics_path, answer_rows)
+                        _parquet(hidden_path, hidden_rows)
+                        manifest["row_count"] = {
+                            "answers": len(answer_rows),
+                            "hidden": len(hidden_rows),
+                        }
                         manifest["cache_cells"].append({
                             "dataset": dataset,
                             "alignment": alignment,
@@ -790,10 +809,7 @@ def run_c4(args, logger: logging.Logger | None = None):
                 f"C4 total answer-row invariant failed: "
                 f"{len(answer_rows)} != {expected_answers}"
             )
-        metrics_path = run_dir / "metrics" / "c4_accuracy_cost_by_question.parquet"
-        hidden_path = run_dir / "metrics" / "c4_hidden_diagnostics.parquet"
-        summary_path = run_dir / "summaries" / "c4_summary.json"
-        figure_path = run_dir / "figures" / "c4_clean_pre_post_replace.pdf"
+
         _parquet(metrics_path, answer_rows)
         _parquet(hidden_path, hidden_rows)
         summary = _summarize(answer_rows, hidden_rows, args)
