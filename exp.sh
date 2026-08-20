@@ -145,12 +145,15 @@ case "${EXP_TARGET}" in
         ;;
     latent_comm)
         STUDY="${STUDY:-m0}"; MODEL_PAIR="${MODEL_PAIR:-all}"
-        DATASET="${DATASET:-arc_easy}"; SPLIT="${SPLIT:-test}"
+        DATASET="${DATASET:-gpqa_diamond}"
+        if [[ -z "${SPLIT}" ]]; then
+            if [[ "${DATASET}" == "gpqa_diamond" ]]; then SPLIT="test"; else SPLIT="train"; fi
+        fi
         METHOD="${METHOD:-all}"
         if [[ "${STUDY}" == "m1" ]]; then
             MAX_QUESTIONS="${MAX_QUESTIONS:-}"
         else
-            MAX_QUESTIONS="${MAX_QUESTIONS:-100}"
+            MAX_QUESTIONS="${MAX_QUESTIONS:-30}"
         fi
         LATENT_STEPS="full-prefill-sequence"; ENTRY="exp/latent_comm/run.py"
         if [[ "${STUDY}" == "m1" ]]; then
