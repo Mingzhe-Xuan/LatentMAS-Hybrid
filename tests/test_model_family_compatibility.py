@@ -13,7 +13,12 @@ from prompts import (
     build_agent_messages_sequential_text_mas,
     build_agent_messages_single_agent,
 )
-from reasoning_models import model_adds_think_tag, resolve_manual_think
+from reasoning_models import (
+    append_manual_reasoning_cue,
+    manual_reasoning_cue,
+    model_adds_think_tag,
+    resolve_manual_think,
+)
 
 try:
     import torch
@@ -64,6 +69,30 @@ class PromptModelFamilyTests(unittest.TestCase):
         for messages in cases:
             self.assertEqual(messages[0], {"role": "system", "content": "You are a helpful assistant."})
 
+    def test_mistral_is_accepted_by_all_prompt_builders(self):
+        model_name = "mistralai/Mistral-Nemo-Instruct-2407"
+        cases = (
+            build_agent_message_sequential_latent_mas(
+                "planner", "Question", method="latent_mas", args=_args(model_name, "latent_mas")
+            ),
+            build_agent_message_hierarchical_latent_mas(
+                "planner", "Question", method="latent_mas", args=_args(model_name, "latent_mas")
+            ),
+            build_agent_messages_sequential_text_mas(
+                "planner", "Question", method="text_mas", args=_args(model_name, "text_mas")
+            ),
+            build_agent_messages_hierarchical_text_mas(
+                "planner", "Question", method="text_mas", args=_args(model_name, "text_mas")
+            ),
+            build_agent_messages_single_agent(
+                "Question", args=_args(model_name, "baseline")
+            ),
+        )
+        for messages in cases:
+            self.assertEqual(
+                messages[0], {"role": "system", "content": "You are a helpful assistant."}
+            )
+
 
 class ReasoningModelTests(unittest.TestCase):
     def test_deepseek_r1_disables_manual_think_by_default(self):
@@ -77,6 +106,26 @@ class ReasoningModelTests(unittest.TestCase):
 
     def test_other_models_enable_manual_think_by_default(self):
         self.assertTrue(resolve_manual_think("Qwen/Qwen3-8B", None))
+
+    def test_mistral_uses_natural_language_reasoning_cue(self):
+        model_name = "mistralai/Mistral-Nemo-Instruct-2407"
+        self.assertTrue(resolve_manual_think(model_name, None))
+        self.assertEqual(manual_reasoning_cue(model_name), "Let's think step by step.")
+        self.assertEqual(
+            append_manual_reasoning_cue("PROMPT", model_name, True),
+            "PROMPTLet's think step by step.",
+        )
+
+    def test_local_mistral_checkpoint_uses_natural_language_reasoning_cue(self):
+        model_name = "/models/Mistral-Nemo-Instruct-2407"
+        self.assertEqual(manual_reasoning_cue(model_name), "Let's think step by step.")
+
+    def test_qwen_retains_think_tag_and_disabled_mode_adds_nothing(self):
+        model_name = "Qwen/Qwen3-8B"
+        self.assertEqual(manual_reasoning_cue(model_name), "<think>")
+        self.assertEqual(
+            append_manual_reasoning_cue("PROMPT", model_name, False), "PROMPT"
+        )
 
     def test_explicit_cli_choice_overrides_registry_default(self):
         model_name = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"

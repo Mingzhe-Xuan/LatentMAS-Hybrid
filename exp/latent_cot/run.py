@@ -104,7 +104,7 @@ def parse_args(argv=None):
         "--think",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Match run.py: auto-add <think> unless the model chat template does so.",
+        help="Match run.py: auto-add a model-aware reasoning cue when needed.",
     )
     parser.add_argument("--probe_seed", type=int, default=42)
     parser.add_argument("--bootstrap_replicates", type=int, default=1000)

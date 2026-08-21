@@ -4,7 +4,7 @@ import copy
 from . import default_agents
 from models import ModelWrapper, _AlignmentTimer, _past_length, _sync_cuda
 from prompts import build_agent_message_sequential_latent_mas, build_agent_message_hierarchical_latent_mas
-from reasoning_models import resolve_manual_think
+from reasoning_models import append_manual_reasoning_cue, resolve_manual_think
 from utils import build_agent_metrics, extract_gsm8k_answer, normalize_answer, extract_markdown_python_block, run_with_timeout
 import torch
 import argparse
@@ -372,11 +372,12 @@ class LatentMASMethod:
             prompts, _, _, _ = agent_model.prepare_chat_batch(
                 batch_messages, add_generation_prompt=True
             )
-            wrapped_prompts = (
-                [f"{prompt}<think>" for prompt in prompts]
-                if manual_think
-                else prompts
-            )
+            wrapped_prompts = [
+                append_manual_reasoning_cue(
+                    prompt, agent_model_name, manual_think
+                )
+                for prompt in prompts
+            ]
             encoded = agent_model.tokenizer(
                 wrapped_prompts,
                 return_tensors="pt",
@@ -504,10 +505,12 @@ class LatentMASMethod:
                 prev_past_len = _past_length(past_kv)
 
                 # to wrap all latent thoughts from previous agents
-                if self.args.think:
-                        wrapped_prompts = [f"{prompt}<think>" for prompt in prompts]
-                else:
-                    wrapped_prompts = prompts
+                wrapped_prompts = [
+                    append_manual_reasoning_cue(
+                        prompt, self.model.model_name, self.args.think
+                    )
+                    for prompt in prompts
+                ]
 
                 wrapped_encoded = self.model.tokenizer(
                     wrapped_prompts,
@@ -564,10 +567,12 @@ class LatentMASMethod:
                 # A stack of [B, L_i, H]
                 past_embedding = torch.cat(embedding_record, dim=1).to(self.vllm_device)
 
-                if self.args.think:
-                    judger_prompts = [f"{prompt}<think>" for prompt in prompts]
-                else:
-                    judger_prompts = prompts
+                judger_prompts = [
+                    append_manual_reasoning_cue(
+                        prompt, self.model.model_name, self.args.think
+                    )
+                    for prompt in prompts
+                ]
 
                 judger_encoded = self.model.tokenizer(
                     judger_prompts,

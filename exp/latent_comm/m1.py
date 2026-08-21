@@ -26,6 +26,7 @@ if str(ROOT) not in sys.path:
 from data import load_aime2024
 from models import ModelWrapper, _past_length
 from prompts import build_agent_message_sequential_latent_mas
+from reasoning_models import append_manual_reasoning_cue
 from utils import extract_gsm8k_answer, normalize_answer, set_seed
 
 
@@ -286,8 +287,9 @@ def _collect(args, items, logger):
     for ordinal, (item_id, item) in enumerate(items, start=1):
         sender_messages = _sender_messages(item["question"], args)
         sender_prompt = wrapper.render_chat(sender_messages, add_generation_prompt=True)
-        if args.think:
-            sender_prompt += "<think>"
+        sender_prompt = append_manual_reasoning_cue(
+            sender_prompt, args.model_name, args.think
+        )
         encoded = wrapper.tokenizer(sender_prompt, return_tensors="pt", add_special_tokens=False)
         sender_ids = encoded["input_ids"].to(wrapper.device)
         sender_mask = encoded["attention_mask"].to(wrapper.device)

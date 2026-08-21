@@ -310,9 +310,9 @@ def main():
         action=argparse.BooleanOptionalAction,
         default=None,
         help=(
-            "Whether LatentMAS manually adds <think>. By default this is disabled "
-            "for registered reasoning models whose chat template adds it, and "
-            "enabled for all other models."
+            "Whether LatentMAS manually adds a model-aware reasoning cue. By "
+            "default this is disabled for registered reasoning models whose chat "
+            "template adds one, and enabled for all other models."
         ),
     )
     parser.add_argument("--align_method", dest="align_method", choices=["identical", "linear", "kernel", "kernel_early_stopping", "soft"], default="identical",

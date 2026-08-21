@@ -14,6 +14,7 @@ from methods import default_agents
 from methods.latent_mas_hybrid import LatentMASMethod, transfer_via_realignment
 from models import ModelWrapper, _past_length
 from prompts import build_agent_message_sequential_latent_mas
+from reasoning_models import append_manual_reasoning_cue
 
 
 
@@ -331,8 +332,7 @@ def collect(
                 args=prompt_args,
             )
             prompt = wrapper.render_chat(messages, add_generation_prompt=True)
-            if args.think:
-                prompt += "<think>"
+            prompt = append_manual_reasoning_cue(prompt, model_name, args.think)
             encoded = wrapper.tokenizer(
                 prompt,
                 return_tensors="pt",

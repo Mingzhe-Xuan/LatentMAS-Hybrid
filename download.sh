@@ -19,11 +19,19 @@ MODELS=(
     Qwen/Qwen2.5-1.5B
     Qwen/Qwen2.5-1.5B-Instruct
     Qwen/Qwen2.5-7B-Instruct
+    deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+    mistralai/Mistral-Nemo-Instruct-2407
 )
 
 for model in "${MODELS[@]}"; do
     echo "Downloading ${model}..."
-    hf download "${model}"
+    if [[ "${model}" == "mistralai/Mistral-Nemo-Instruct-2407" ]]; then
+        # The repository also contains a duplicate consolidated checkpoint for
+        # mistral-inference. This project uses the Transformers shards.
+        hf download "${model}" --exclude "consolidated.safetensors"
+    else
+        hf download "${model}"
+    fi
 done
 
 python - <<'PY'

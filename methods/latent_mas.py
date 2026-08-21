@@ -3,6 +3,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from . import default_agents
 from models import ModelWrapper, _past_length, _sync_cuda, _vllm_phase_split
 from prompts import build_agent_message_sequential_latent_mas, build_agent_message_hierarchical_latent_mas
+from reasoning_models import append_manual_reasoning_cue
 from utils import build_agent_metrics, extract_gsm8k_answer, normalize_answer, extract_markdown_python_block, run_with_timeout
 import torch
 import argparse
@@ -133,10 +134,12 @@ class LatentMASMethod:
             if agent.role != "judger":
                 prev_past_len = _past_length(past_kv)
 
-                if self.args.think:
-                        wrapped_prompts = [f"{prompt}<think>" for prompt in prompts]
-                else:
-                    wrapped_prompts = prompts
+                wrapped_prompts = [
+                    append_manual_reasoning_cue(
+                        prompt, self.model.model_name, self.args.think
+                    )
+                    for prompt in prompts
+                ]
 
                 wrapped_encoded = self.model.tokenizer(
                     wrapped_prompts,
@@ -223,10 +226,12 @@ class LatentMASMethod:
                 past_for_decoding = past_kv if _past_length(past_kv) > 0 else None
                 role_kv_input_tokens = _past_length(past_for_decoding)
 
-                if self.args.think:
-                        judger_prompts = [f"{prompt}<think>" for prompt in prompts]
-                else:
-                    judger_prompts = prompts
+                judger_prompts = [
+                    append_manual_reasoning_cue(
+                        prompt, self.model.model_name, self.args.think
+                    )
+                    for prompt in prompts
+                ]
 
                 judger_encoded = self.model.tokenizer(
                     judger_prompts,
@@ -376,10 +381,12 @@ class LatentMASMethod:
                 prev_past_len = _past_length(past_kv)
 
                 # to wrap all latent thoughts from previous agents
-                if self.args.think:
-                        wrapped_prompts = [f"{prompt}<think>" for prompt in prompts]
-                else:
-                    wrapped_prompts = prompts
+                wrapped_prompts = [
+                    append_manual_reasoning_cue(
+                        prompt, self.model.model_name, self.args.think
+                    )
+                    for prompt in prompts
+                ]
 
                 wrapped_encoded = self.model.tokenizer(
                     wrapped_prompts,
@@ -458,10 +465,12 @@ class LatentMASMethod:
                 # prefetched before Judger decoding.
                 role_kv_input_tokens = past_embedding.shape[1]
 
-                if self.args.think:
-                    judger_prompts = [f"{prompt}<think>" for prompt in prompts]
-                else:
-                    judger_prompts = prompts
+                judger_prompts = [
+                    append_manual_reasoning_cue(
+                        prompt, self.model.model_name, self.args.think
+                    )
+                    for prompt in prompts
+                ]
 
                 judger_encoded = self.model.tokenizer(
                     judger_prompts,
