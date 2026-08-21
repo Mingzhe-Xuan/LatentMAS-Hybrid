@@ -240,3 +240,52 @@ Run-local artifacts are:
 - `summaries/c4_summary.json`;
 - `figures/c4_clean_pre_post_replace.pdf`;
 - `run_manifest.json` with per-cell cache-hit provenance.
+
+## C5: Planner-only additive-Gaussian robustness
+
+C5 uses Qwen3-8B with only a latent Planner followed by a text Judger. It
+compares `linear` and `kernel` under paired `clean` and `gaussian_005`
+conditions on 30 fixed questions each from GSM8K test, MBPP+ test, and
+AIME2024 train. The formal per-dataset settings come directly from
+`params_dict.json`'s `hierarchical` configuration:
+
+| dataset | Planner latent steps | Judger max tokens | batch size |
+| --- | ---: | ---: | ---: |
+| GSM8K | 20 | 2048 | 16 |
+| MBPP+ | 80 | 4096 | 8 |
+| AIME2024 | 10 | 20000 | 2 |
+
+For every causally used Planner source state, the noisy condition applies
+`h_t + delta_t` before alignment, where each coordinate of `delta_t` is
+Gaussian with standard deviation `0.05 * ||h_t||_2 / sqrt(d)`. A dedicated
+RNG keyed by dataset, item, role, step, and repeat gives linear and kernel the
+same standard-Gaussian direction without advancing the generation RNG. Eight
+paired repeats use generation seeds 42--49 and kernel seeds 101--108.
+
+```bash
+python exp/latent_cot/run.py --study c5 --device cuda
+```
+
+PBS submission:
+
+```bash
+qsub -v "EXP_TARGET=latent_cot,STUDY=c5" \
+  exp.sh
+```
+
+C5 atomically caches each dataset/alignment/condition/repeat cell under
+`exp/cache/latent_cot_c5/` and checkpoints run-local Parquet files after every
+cell. Its artifacts are:
+
+- `metrics/c5_accuracy_cost_by_question.parquet`;
+- `metrics/c5_perturbation_diagnostics.parquet`;
+- `summaries/c5_summary.json`;
+- `figures/c5_accuracy_time_tokens.pdf`;
+- `figures/c5_paired_accuracy_degradation.pdf`;
+- `run_manifest.json`.
+
+The main figure uses color for alignment and solid/hatched bars for clean/noisy.
+The primary robustness statistic is the paired accuracy change
+`noisy_minus_clean`; `kernel_minus_linear_robustness` is its
+difference-in-differences. Alignment-state construction time is recorded in
+cell manifests but excluded from the online wall-time bars.

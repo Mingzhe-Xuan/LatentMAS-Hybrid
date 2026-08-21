@@ -27,7 +27,7 @@ Usage:
   qsub -v EXP_TARGET=latent_comm[,NAME=value...] exp.sh
 
 Options override the plan_v2 main-experiment defaults for the selected target:
-  --study NAME              S0--S4, C0--C4, or M0--M4 study name
+  --study NAME              S0--S4, C0--C5, or M0--M4 study name
   --model-pair NAME         x1/x2 for operator/communication; c0/c1 for CoT
   --model-name NAME         Single model used by latent_cot C0
   --agent-models "NAMES"    One or four space-separated models for approximator
@@ -125,6 +125,11 @@ case "${EXP_TARGET}" in
             MODEL_NAME="Qwen/Qwen3-8B"; LATENT_STEPS="120"
             M="${C4_KERNEL_FEATURES:-1024}"
             ARGS=(--study c4 --model_name "${MODEL_NAME}" --dataset all --split dataset_specific --max_questions 30 --latent_steps 120 --alignments kernel --repeat_seeds 42 43 44 45 --generate_bs 2 --max_new_tokens 20000 --temperature "${TEMPERATURE:-0.6}" --top_p "${TOP_P:-0.95}" --trust_remote_code --kernel_features "${M}" --kernel_temperature "${TAU}" --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" --align_ridge "${ALIGN_RIDGE}" --device "${DEVICE}")
+        elif [[ "${STUDY}" == "c5" ]]; then
+            DATASET="all"; SPLIT="dataset_specific"; MAX_QUESTIONS="30"
+            MODEL_NAME="Qwen/Qwen3-8B"; M="${C5_KERNEL_FEATURES:-1024}"
+            LATENT_STEPS="dataset-specific: gsm8k=20 mbppplus=80 aime2024=10"
+            ARGS=(--study c5 --model_name "${MODEL_NAME}" --dataset all --split dataset_specific --max_questions 30 --alignments linear kernel --repeat_seeds 42 43 44 45 46 47 48 49 --noise_alpha 0.05 --noise_seed_offset 10000 --sample_seed 42 --temperature "${TEMPERATURE:-0.6}" --top_p "${TOP_P:-0.95}" --trust_remote_code --kernel_features "${M}" --kernel_temperature "${TAU}" --kernel_seed "${ORF_SEED}" --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" --align_ridge "${ALIGN_RIDGE}" --device "${DEVICE}")
         elif [[ "${STUDY}" == "c1" || "${STUDY}" == "c2" || "${STUDY}" == "c3" ]]; then
             DATASET="${DATASET:-all}"
             MAX_QUESTIONS="${MAX_QUESTIONS:-30}"

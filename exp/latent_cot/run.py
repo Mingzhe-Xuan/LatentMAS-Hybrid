@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Latent-CoT C0, sequential C1/C2/C3, and hierarchical C4 experiments."""
+"""Latent-CoT C0, sequential C1/C2/C3, and hierarchical C4/C5 experiments."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ TRAJECTORY_DIR = ROOT / "exp" / "cache" / "trajectories"
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--study", choices=["c0", "c1", "c2", "c3", "c4"], default="c0")
+    parser.add_argument("--study", choices=["c0", "c1", "c2", "c3", "c4", "c5"], default="c0")
     parser.add_argument("--model_name", default=None)
     parser.add_argument(
         "--dataset",
@@ -85,10 +85,17 @@ def parse_args(argv=None):
     parser.add_argument("--generation_seed", type=int, default=42)
     parser.add_argument("--repeat_seeds", type=int, nargs="+", default=[42, 43, 44, 45])
     parser.add_argument("--noise_seed_offset", type=int, default=10000)
+    parser.add_argument("--noise_alpha", type=float, default=0.05)
+    parser.add_argument("--sample_seed", type=int, default=42)
     parser.add_argument(
         "--c4_dev_allow_override",
         action="store_true",
         help="Development-only: permit C4 --latent_steps overrides; formal C4 uses K=120.",
+    )
+    parser.add_argument(
+        "--c5_dev_allow_override",
+        action="store_true",
+        help="Development-only: permit C5 question/K/token overrides; formal C5 reads params_dict.json.",
     )
     parser.add_argument("--generate_bs", type=int, default=2)
     parser.add_argument("--temperature", type=float, default=0.6)
@@ -133,6 +140,14 @@ def parse_args(argv=None):
             args.latent_steps = 120
         args.alignments = ["kernel"]
         args.kernel_features = 1024
+    if args.study == "c5":
+        args.dataset = "all"
+        args.split = "dataset_specific"
+        args.alignments = ["linear", "kernel"]
+        args.kernel_features = 1024
+        args.kernel_seed = 101
+        args.sample_seed = 42
+        args.noise_seed_offset = 10000
     if args.model_name is None:
         args.model_name = (
             "Qwen/Qwen3-4B" if args.study == "c0" else "Qwen/Qwen3-8B"
@@ -146,7 +161,7 @@ def parse_args(argv=None):
         # studies comparable to run.sh's AIME2025 configuration.
         args.max_new_tokens = 4096 if args.study == "c0" else 20000
     if args.trust_remote_code is None:
-        args.trust_remote_code = args.study in {"c1", "c2", "c3", "c4"}
+        args.trust_remote_code = args.study in {"c1", "c2", "c3", "c4", "c5"}
     args.think_requested = args.think
     args.think = resolve_manual_think(args.model_name, args.think)
     if len(set(args.latent_step_values)) != len(args.latent_step_values):
@@ -166,6 +181,16 @@ def parse_args(argv=None):
             parser.error("C4 requires --repeat_seeds 42 43 44 45")
         if args.generate_bs < 1:
             parser.error("--generate_bs must be positive")
+    if args.study == "c5":
+        if args.model_name != "Qwen/Qwen3-8B" or args.dataset != "all":
+            parser.error("C5 requires Qwen/Qwen3-8B with its fixed three-dataset matrix")
+        if not args.c5_dev_allow_override:
+            args.max_questions = 30
+            args.repeat_seeds = [42, 43, 44, 45, 46, 47, 48, 49]
+        if args.noise_alpha <= 0:
+            parser.error("C5 --noise_alpha must be positive")
+        if not args.c5_dev_allow_override and args.noise_alpha != 0.05:
+            parser.error("Formal C5 requires --noise_alpha 0.05")
     if args.study in {"c1", "c2", "c3"} and args.dataset not in {
         "all",
         "mbppplus",
@@ -788,6 +813,10 @@ def main(argv=None):
         from c4_noise_ablation import run_c4
 
         return run_c4(args, logger)
+    if args.study == "c5":
+        from c5_gaussian_robustness import run_c5
+
+        return run_c5(args, logger)
     if args.study in {"c1", "c2", "c3"}:
         from mas_analysis import run_mas_study
 
