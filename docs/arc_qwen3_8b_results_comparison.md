@@ -1,6 +1,6 @@
 # 实验结果汇总对比
 
-本文档汇总当前 `result` 目录所有子文件夹中的 `summary.json`。共收录 **106** 组结果；所有 split 均为 `test`。
+本文档汇总当前 `result` 目录所有子文件夹中的 `summary.json`。共收录 **130** 组结果；所有 split 均为 `test`。
 
 指标定义：
 
@@ -9,17 +9,6 @@
 - `Text output tokens`：`average.results.tokens.text_output.total`，越低表示文本输出开销越少。
 - 表格中的数值均来自 `average`；多次运行的结果可能带小数。
 - 粗体表示同一任务、同一模型下的单项最优值。
-
-## aime2025
-
-### Qwen/Qwen3-8B
-
-样本数：30；汇总组数：2；重复次数：8；seeds：42, 43, 44, 45, 46, 47, 48, 49。
-
-| Method | Align method | Topology | Timing (total, s) ↓ | Accuracy ↑ | Text output tokens ↓ |
-|---|---|---|---:|---:|---:|
-| Latent MAS | kernel | hierarchical | 8671.6964 | **53.3333% (0.533333)** | 336,214.25 |
-| Latent MAS | kernel | sequential | **7836.2822** | 49.5833% (0.495833) | **304,725.88** |
 
 ## ARC Challenge
 
@@ -37,7 +26,7 @@
 
 ### Qwen/Qwen3-8B
 
-样本数：1172；汇总组数：8；重复次数：1；seeds：42。
+样本数：1172；汇总组数：12；重复次数：1；seeds：42。
 
 | Method | Align method | Topology | Timing (total, s) ↓ | Accuracy ↑ | Text output tokens ↓ |
 |---|---|---|---:|---:|---:|
@@ -45,6 +34,10 @@
 | Baseline | identical | sequential | 5212.3415 | 91.4676% (0.914676) | 917,627 |
 | Latent MAS | identical | hierarchical | 4579.7108 | 94.1980% (0.941980) | 709,781 |
 | Latent MAS | identical | sequential | 4286.1966 | 94.5392% (0.945392) | 655,187 |
+| Latent MAS | kernel | hierarchical | 4418.0708 | 95.0512% (0.950512) | 707,113 |
+| Latent MAS | kernel | sequential | 4339.4907 | 94.7952% (0.947952) | 668,041 |
+| Latent MAS | kernel_early_stopping | hierarchical | 5096.3015 | 95.0512% (0.950512) | 963,472 |
+| Latent MAS | kernel_early_stopping | sequential | 5309.5628 | 95.5631% (0.955631) | 1,072,355 |
 | Latent MAS | linear | hierarchical | 4187.1180 | 94.1980% (0.941980) | 633,886 |
 | Latent MAS | linear | sequential | **4170.0498** | 92.9181% (0.929181) | **600,878** |
 | Text MAS | identical | hierarchical | 21667.3036 | **95.6485% (0.956485)** | 3,209,203 |
@@ -69,7 +62,7 @@
 
 ### Qwen/Qwen3-8B
 
-样本数：2376；汇总组数：8；重复次数：1；seeds：42。
+样本数：2376；汇总组数：12；重复次数：1；seeds：42。
 
 | Method | Align method | Topology | Timing (total, s) ↓ | Accuracy ↑ | Text output tokens ↓ |
 |---|---|---|---:|---:|---:|
@@ -77,6 +70,10 @@
 | Baseline | identical | sequential | 7483.7147 | 97.6852% (0.976852) | 1,453,956 |
 | Latent MAS | identical | hierarchical | 6083.6464 | 98.4848% (0.984848) | 1,173,125 |
 | Latent MAS | identical | sequential | 6031.3467 | 98.2744% (0.982744) | 1,112,327 |
+| Latent MAS | kernel | hierarchical | 6053.6774 | 98.2323% (0.982323) | 1,175,895 |
+| Latent MAS | kernel | sequential | 5980.2628 | 98.3165% (0.983165) | 1,122,106 |
+| Latent MAS | kernel_early_stopping | hierarchical | 7141.1219 | 98.2323% (0.982323) | 1,712,018 |
+| Latent MAS | kernel_early_stopping | sequential | 7701.4909 | 98.4007% (0.984007) | 1,952,175 |
 | Latent MAS | linear | hierarchical | 6349.6668 | 97.5589% (0.975589) | 1,069,841 |
 | Latent MAS | linear | sequential | **5808.8872** | 97.6431% (0.976431) | **1,038,856** |
 | Text MAS | identical | hierarchical | 33573.9832 | 98.4428% (0.984428) | 5,164,912 |
@@ -101,7 +98,7 @@
 
 ### Qwen/Qwen3-8B
 
-样本数：1319；汇总组数：8；重复次数：1；seeds：42。
+样本数：1319；汇总组数：12；重复次数：1；seeds：42。
 
 | Method | Align method | Topology | Timing (total, s) ↓ | Accuracy ↑ | Text output tokens ↓ |
 |---|---|---|---:|---:|---:|
@@ -109,6 +106,10 @@
 | Baseline | identical | sequential | 6179.5661 | 89.1585% (0.891585) | 1,202,688 |
 | Latent MAS | identical | hierarchical | 5394.1932 | 91.5845% (0.915845) | 907,048 |
 | Latent MAS | identical | sequential | 5473.4753 | 91.5845% (0.915845) | 828,472 |
+| Latent MAS | kernel | hierarchical | 5754.1215 | 91.2813% (0.912813) | 928,432 |
+| Latent MAS | kernel | sequential | 5444.5295 | 91.7362% (0.917362) | 846,328 |
+| Latent MAS | kernel_early_stopping | hierarchical | 6390.6677 | 92.3427% (0.923427) | 1,229,688 |
+| Latent MAS | kernel_early_stopping | sequential | 6794.5412 | 92.1911% (0.921911) | 1,357,342 |
 | Latent MAS | linear | hierarchical | 5249.0986 | 91.2055% (0.912055) | 862,365 |
 | Latent MAS | linear | sequential | **5179.9020** | 91.1296% (0.911296) | **794,843** |
 | Text MAS | identical | hierarchical | 29302.2938 | 93.4799% (0.934799) | 4,164,489 |
@@ -133,14 +134,18 @@
 
 ### Qwen/Qwen3-8B
 
-样本数：164；汇总组数：8；重复次数：4；seeds：42, 43, 44, 45。
+样本数：164；汇总组数：12；重复次数：4；seeds：42, 43, 44, 45。
 
 | Method | Align method | Topology | Timing (total, s) ↓ | Accuracy ↑ | Text output tokens ↓ |
 |---|---|---|---:|---:|---:|
 | Baseline | identical | hierarchical | 3148.1668 | 77.2866% (0.772866) | 361,720.75 |
 | Baseline | identical | sequential | 3200.1302 | 76.9817% (0.769817) | 366,481.50 |
 | Latent MAS | identical | hierarchical | 3314.5298 | 82.6219% (0.826219) | 276,880.75 |
-| Latent MAS | identical | sequential | **3104.6432** | 84.1463% (0.841463) | 273,600.75 |
+| Latent MAS | identical | sequential | 3104.6432 | 84.1463% (0.841463) | 273,600.75 |
+| Latent MAS | kernel | hierarchical | 3296.4082 | 83.8415% (0.838415) | 275,659.25 |
+| Latent MAS | kernel | sequential | **3090.9639** | 83.5366% (0.835366) | 268,388 |
+| Latent MAS | kernel_early_stopping | hierarchical | 3444.5580 | 83.2317% (0.832317) | 268,472.75 |
+| Latent MAS | kernel_early_stopping | sequential | 3519.1703 | 83.3842% (0.833842) | 278,147 |
 | Latent MAS | linear | hierarchical | 3698.6554 | 22.8659% (0.228659) | 281,938.75 |
 | Latent MAS | linear | sequential | 3492.6929 | 18.2927% (0.182927) | **261,758** |
 | Text MAS | identical | hierarchical | 13921.3377 | 85.5183% (0.855183) | 1,259,946.75 |
@@ -165,13 +170,14 @@
 
 ### Qwen/Qwen3-8B
 
-样本数：378；汇总组数：7；重复次数：4；seeds：42, 43, 44, 45。
+样本数：378；汇总组数：8；重复次数：4；seeds：42, 43, 44, 45。
 
 | Method | Align method | Topology | Timing (total, s) ↓ | Accuracy ↑ | Text output tokens ↓ |
 |---|---|---|---:|---:|---:|
 | Baseline | identical | hierarchical | **6550.2281** | 73.7434% (0.737434) | 722,646.75 |
 | Baseline | identical | sequential | 6570.0886 | 74.2063% (0.742063) | 716,459.25 |
 | Latent MAS | identical | hierarchical | 7676.6528 | 70.9656% (0.709656) | 542,623.75 |
+| Latent MAS | kernel | sequential | 6781.2262 | 75.2645% (0.752645) | 552,575 |
 | Latent MAS | linear | hierarchical | 7407.9916 | 17.5265% (0.175265) | **414,118.25** |
 | Latent MAS | linear | sequential | 7276.2998 | 29.3651% (0.293651) | 491,330.25 |
 | Text MAS | identical | hierarchical | 29595.6652 | 79.4312% (0.794312) | 2,342,089.50 |
@@ -223,6 +229,19 @@
 | Latent MAS | linear | sequential | 5904.1172 | 81.3333% (0.813333) | 484,396 |
 | Text MAS | identical | sequential | 9292.9124 | 81.3333% (0.813333) | 872,171 |
 
+## GPQA
+
+### Qwen/Qwen3-8B
+
+样本数：198；汇总组数：4；重复次数：4；seeds：42, 43, 44, 45。
+
+| Method | Align method | Topology | Timing (total, s) ↓ | Accuracy ↑ | Text output tokens ↓ |
+|---|---|---|---:|---:|---:|
+| Latent MAS | kernel | hierarchical | 11863.6871 | **51.3889% (0.513889)** | 742,890.25 |
+| Latent MAS | kernel | sequential | **11534.2195** | 48.7374% (0.487374) | **710,410.75** |
+| Latent MAS | kernel_early_stopping | hierarchical | 12177.2119 | 49.7475% (0.497475) | 784,967.50 |
+| Latent MAS | kernel_early_stopping | sequential | 11764.7404 | 48.6111% (0.486111) | 761,557 |
+
 ## AIME 2024
 
 ### Qwen/Qwen3-8B
@@ -237,4 +256,18 @@
 | Latent MAS | kernel_early_stopping | sequential | 6772.6684 | 64.1667% (0.641667) | 263,097.63 |
 | Latent MAS | soft | sequential | 16469.1103 | 63.7500% (0.637500) | 670,255 |
 
-数据快照日期：2026-08-17。仅收录实际存在且可解析的 `summary.json`。
+## AIME 2025
+
+### Qwen/Qwen3-8B
+
+样本数：30；汇总组数：5；重复次数：8；seeds：42, 43, 44, 45, 46, 47, 48, 49。
+
+| Method | Align method | Topology | Timing (total, s) ↓ | Accuracy ↑ | Text output tokens ↓ |
+|---|---|---|---:|---:|---:|
+| Latent MAS | kernel | hierarchical | 8671.6964 | **53.3333% (0.533333)** | 336,214.25 |
+| Latent MAS | kernel | sequential | 7836.2822 | 49.5833% (0.495833) | 304,725.88 |
+| Latent MAS | kernel_early_stopping | hierarchical | 8757.1673 | 52.5000% (0.525000) | 339,000.13 |
+| Latent MAS | kernel_early_stopping | sequential | **7665.8334** | 50.4167% (0.504167) | **294,907.75** |
+| Latent MAS | soft | sequential | 17908.6489 | 49.1667% (0.491667) | 736,694.75 |
+
+数据快照日期：2026-08-21。仅收录实际存在且可解析的 `summary.json`。
