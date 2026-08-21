@@ -26,7 +26,14 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from data import load_aime2024, load_aime2025, load_gpqa_diamond
+from data import (
+    load_aime2024,
+    load_aime2025,
+    load_arc_challenge,
+    load_gpqa_diamond,
+    load_gsm8k,
+    load_medqa,
+)
 from models import ModelWrapper
 from prompts import (
     build_agent_message_hierarchical_latent_mas,
@@ -37,6 +44,14 @@ from utils import extract_gsm8k_answer, normalize_answer, set_seed
 MODELS = ("Qwen/Qwen3-4B", "Qwen/Qwen3-8B")
 MODEL_PAIRS = tuple((source, target) for source in MODELS for target in MODELS)
 ALIGNMENTS = ("linear", "kernel", "soft", "text")
+DATASETS = {
+    "gpqa_diamond": {"loader": load_gpqa_diamond, "split": "test", "task": "gpqa"},
+    "aime2024": {"loader": load_aime2024, "split": "train", "task": "aime2024"},
+    "aime2025": {"loader": load_aime2025, "split": "train", "task": "aime2025"},
+    "gsm8k": {"loader": load_gsm8k, "split": "test", "task": "gsm8k"},
+    "medqa": {"loader": load_medqa, "split": "train", "task": "medqa"},
+    "arc_challenge": {"loader": load_arc_challenge, "split": "test", "task": "arc_challenge"},
+}
 CACHE_SCHEMA_VERSION = 5
 RESULT_CACHE_SCHEMA_VERSION = 5
 VISIBLE_RESULT_CACHE_SCHEMA_VERSION = 5
@@ -57,8 +72,8 @@ ALIGNMENT_COLORS = {
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--study", choices=["m0"], default="m0")
-    parser.add_argument("--dataset", choices=["gpqa_diamond", "aime2024", "aime2025"], default="gpqa_diamond")
-    parser.add_argument("--split", default=None, help="Defaults to test for GPQA and train for AIME.")
+    parser.add_argument("--dataset", choices=list(DATASETS), default="gpqa_diamond")
+    parser.add_argument("--split", default=None, help="Defaults to the dataset's evaluation split.")
     parser.add_argument("--max_questions", type=int, default=30)
     parser.add_argument("--sample_seed", type=int, default=42)
     parser.add_argument("--generation_seed", type=int, default=77)
@@ -93,7 +108,7 @@ def parse_args(argv=None):
     if args.max_questions < 1:
         parser.error("--max_questions must be positive")
     if args.split is None:
-        args.split = "test" if args.dataset == "gpqa_diamond" else "train"
+        args.split = DATASETS[args.dataset]["split"]
     return args
 
 
@@ -152,12 +167,7 @@ def _configure_logger():
 
 
 def sampled_items(args):
-    loaders = {
-        "gpqa_diamond": load_gpqa_diamond,
-        "aime2024": load_aime2024,
-        "aime2025": load_aime2025,
-    }
-    indexed = list(enumerate(loaders[args.dataset](split=args.split)))
+    indexed = list(enumerate(DATASETS[args.dataset]["loader"](split=args.split)))
     random.Random(args.sample_seed).shuffle(indexed)
     selected = indexed[: args.max_questions]
     if len(selected) != args.max_questions:
@@ -187,7 +197,7 @@ def _sample_identity(items, args):
 def _model_args(args, alignment):
     return argparse.Namespace(
         **vars(args),
-        task="gpqa" if args.dataset == "gpqa_diamond" else args.dataset,
+        task=DATASETS[args.dataset]["task"],
         align_method=alignment,
         soft_temperature=args.kernel_temperature,
         seed=args.generation_seed,
@@ -532,7 +542,7 @@ def _aligned_message(record, source, target, alignment):
 
 def _parse_answer(text, dataset):
     prediction = normalize_answer(extract_gsm8k_answer(text))
-    if dataset.startswith("aime"):
+    if dataset.startswith("aime") or dataset == "gsm8k":
         return prediction
     if prediction in {"a", "b", "c", "d"}:
         return prediction

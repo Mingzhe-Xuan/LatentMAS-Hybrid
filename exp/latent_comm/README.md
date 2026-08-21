@@ -17,8 +17,9 @@ receiver input-embedding space. `text` bypasses Agent A and gives the original
 question directly to the receiver, so it isolates the receiver's own task
 accuracy rather than claiming a source-dependent text transfer.
 
-Supported datasets are `gpqa_diamond` (test split), `aime2024` (train split),
-and `aime2025` (train split). Both repository prompt organizations are supported:
+Supported datasets are `gpqa_diamond`, `gsm8k`, and `arc_challenge` (test
+split), plus `aime2024`, `aime2025`, and `medqa` (train split). Both repository
+prompt organizations are supported:
 `sequential` and `hierarchical`. The sender uses the corresponding Planner prompt
 and the receiver uses the corresponding Judger prompt.
 
@@ -30,6 +31,18 @@ python exp/latent_comm/run.py \
 python exp/latent_comm/run.py \
   --study m0 --dataset aime2025 --split train \
   --prompt hierarchical --max_questions 30 --device cuda
+
+python exp/latent_comm/run.py \
+  --study m0 --dataset gsm8k --split test \
+  --prompt sequential --max_questions 30 --device cuda
+
+python exp/latent_comm/run.py \
+  --study m0 --dataset medqa --split train \
+  --prompt sequential --max_questions 30 --device cuda
+
+python exp/latent_comm/run.py \
+  --study m0 --dataset arc_challenge --split test \
+  --prompt sequential --max_questions 30 --device cuda
 ```
 
 Stable sender and answer caches are stored in `exp/cache/latent_comm_m0_v2/`.

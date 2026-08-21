@@ -147,7 +147,11 @@ case "${EXP_TARGET}" in
         STUDY="${STUDY:-m0}"; MODEL_PAIR="${MODEL_PAIR:-all}"
         DATASET="${DATASET:-gpqa_diamond}"
         if [[ -z "${SPLIT}" ]]; then
-            if [[ "${DATASET}" == "gpqa_diamond" ]]; then SPLIT="test"; else SPLIT="train"; fi
+            if [[ "${DATASET}" == "gpqa_diamond" || "${DATASET}" == "gsm8k" || "${DATASET}" == "arc_challenge" ]]; then
+                SPLIT="test"
+            else
+                SPLIT="train"
+            fi
         fi
         METHOD="${METHOD:-all}"
         if [[ "${STUDY}" == "m1" ]]; then
