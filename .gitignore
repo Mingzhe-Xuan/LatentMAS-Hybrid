@@ -12,3 +12,4 @@ test_result.txt
 test_state.txt
 state/
 state_*/
+*plot*/
