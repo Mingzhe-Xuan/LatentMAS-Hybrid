@@ -30,6 +30,9 @@
 FULL_EXP="${FULL_EXP:-false}"
 TASK_ONLY="${TASK_ONLY:-false}"
 STATE_FILE="${STATE_FILE:-state/run_state.txt}"
+RUN_SCRIPT="${RUN_SCRIPT:-run.py}"
+RESULT_ROOT="${RESULT_ROOT:-result}"
+LOG_ROOT="${LOG_ROOT:-logging}"
 SINGLE_CONFIG="${SINGLE_CONFIG:-false}"
 CONFIG_METHOD="${CONFIG_METHOD:-}"
 CONFIG_PROMPT="${CONFIG_PROMPT:-}"
@@ -74,7 +77,8 @@ fi
 # deliberately runs before the redirection creates that file.
 if [ "${CAPTURE_ALL_OUTPUT}" = true ] && [ "${RUN_OUTPUT_WRAPPED}" != true ]; then
     mkdir -p "$(dirname "${STATE_FILE}")"
-    export FULL_EXP TASK_ONLY STATE_FILE SINGLE_CONFIG CONFIG_METHOD CONFIG_PROMPT CONFIG_ALIGNMENT
+    export FULL_EXP TASK_ONLY STATE_FILE RUN_SCRIPT RESULT_ROOT LOG_ROOT
+    export SINGLE_CONFIG CONFIG_METHOD CONFIG_PROMPT CONFIG_ALIGNMENT
     export CAPTURE_ALL_OUTPUT RUN_OUTPUT_WRAPPED=true
     exec bash "${BASH_SOURCE[0]}" "$@" > "${STATE_FILE}" 2>&1
 fi
@@ -93,11 +97,11 @@ module load python/3.12.13
 source /home/n2501945g/LatentMAS-Hybrid/.venv/bin/activate
 
 cd "${PBS_O_WORKDIR}" || exit 1
-if [ ! -f run.py ] && [ -f LatentMAS/run.py ]; then
+if [ ! -f "${RUN_SCRIPT}" ] && [ -f "LatentMAS/${RUN_SCRIPT}" ]; then
     cd LatentMAS || exit 1
 fi
-if [ ! -f run.py ]; then
-    echo "ERROR: run.py not found. Submit from the LatentMAS directory or its parent."
+if [ ! -f "${RUN_SCRIPT}" ]; then
+    echo "ERROR: ${RUN_SCRIPT} not found. Submit from the LatentMAS directory or its parent."
     exit 1
 fi
 export PYTHONUNBUFFERED=1
@@ -354,8 +358,8 @@ run_repeated() {
         method_slug="${method}_${align_method}"
     fi
     config_name="${TASK}_${method_slug}_${prompt}_${MODEL_SLUG}_${RUN_TIME}"
-    result_dir="result/${config_name}"
-    log_dir="logging/${config_name}"
+    result_dir="${RESULT_ROOT}/${config_name}"
+    log_dir="${LOG_ROOT}/${config_name}"
     mkdir -p "${result_dir}" "${log_dir}"
 
     result_paths=()
@@ -368,7 +372,7 @@ run_repeated() {
         : > "${log_path}"
 
         echo "Running ${method}/${prompt}/${align_method}, repeat ${repeat_index}/${RESOLVED_TIMES}, seed=${run_seed}"
-        command=(python3 run.py --method "${method}" --prompt "${prompt}" \
+        command=(python3 "${RUN_SCRIPT}" --method "${method}" --prompt "${prompt}" \
             --result_path "${result_path}" --log_path "${log_path}" "${COMMON[@]}")
         if [ "${method}" = "latent_mas" ]; then
             command+=(--align_method "${align_method}" "${LATENT_CACHE_ARGS[@]}")
