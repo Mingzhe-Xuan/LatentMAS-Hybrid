@@ -1,6 +1,6 @@
 # 实验结果汇总对比
 
-本文档汇总当前 `result` 目录所有子文件夹中的 `summary.json`。共收录 **130** 组结果；所有 split 均为 `test`。
+本文档汇总当前 `result` 目录所有子文件夹中的 `summary.json`。共收录 **142** 组结果；所有 split 均为 `test`。
 
 指标定义：
 
@@ -134,7 +134,7 @@
 
 ### Qwen/Qwen3-8B
 
-样本数：164；汇总组数：12；重复次数：4；seeds：42, 43, 44, 45。
+样本数：164；汇总组数：13；重复次数：4；seeds：42, 43, 44, 45。
 
 | Method | Align method | Topology | Timing (total, s) ↓ | Accuracy ↑ | Text output tokens ↓ |
 |---|---|---|---:|---:|---:|
@@ -148,6 +148,7 @@
 | Latent MAS | kernel_early_stopping | sequential | 3519.1703 | 83.3842% (0.833842) | 278,147 |
 | Latent MAS | linear | hierarchical | 3698.6554 | 22.8659% (0.228659) | 281,938.75 |
 | Latent MAS | linear | sequential | 3492.6929 | 18.2927% (0.182927) | **261,758** |
+| Latent MAS | soft | sequential | 18429.5337 | 82.6219% (0.826219) | 2,469,034.75 |
 | Text MAS | identical | hierarchical | 13921.3377 | 85.5183% (0.855183) | 1,259,946.75 |
 | Text MAS | identical | sequential | 8666.9324 | **89.6342% (0.896342)** | 669,085.25 |
 
@@ -170,16 +171,21 @@
 
 ### Qwen/Qwen3-8B
 
-样本数：378；汇总组数：8；重复次数：4；seeds：42, 43, 44, 45。
+样本数：378；汇总组数：13；重复次数：4；seeds：42, 43, 44, 45。
 
 | Method | Align method | Topology | Timing (total, s) ↓ | Accuracy ↑ | Text output tokens ↓ |
 |---|---|---|---:|---:|---:|
 | Baseline | identical | hierarchical | **6550.2281** | 73.7434% (0.737434) | 722,646.75 |
 | Baseline | identical | sequential | 6570.0886 | 74.2063% (0.742063) | 716,459.25 |
 | Latent MAS | identical | hierarchical | 7676.6528 | 70.9656% (0.709656) | 542,623.75 |
+| Latent MAS | kernel | hierarchical | 7599.0738 | 72.7514% (0.727514) | 567,826 |
 | Latent MAS | kernel | sequential | 6781.2262 | 75.2645% (0.752645) | 552,575 |
+| Latent MAS | kernel_early_stopping | hierarchical | 7640.8815 | 72.1561% (0.721561) | 551,998 |
+| Latent MAS | kernel_early_stopping | sequential | 7401.6131 | 75.1984% (0.751984) | 577,527.75 |
 | Latent MAS | linear | hierarchical | 7407.9916 | 17.5265% (0.175265) | **414,118.25** |
 | Latent MAS | linear | sequential | 7276.2998 | 29.3651% (0.293651) | 491,330.25 |
+| Latent MAS | soft | hierarchical | 34864.3366 | 73.2143% (0.732143) | 4,826,442.50 |
+| Latent MAS | soft | sequential | 38387.1590 | 73.1482% (0.731482) | 5,438,771.50 |
 | Text MAS | identical | hierarchical | 29595.6652 | 79.4312% (0.794312) | 2,342,089.50 |
 | Text MAS | identical | sequential | 19895.1947 | **79.8941% (0.798941)** | 1,399,429 |
 
@@ -202,16 +208,21 @@
 
 ### Qwen/Qwen3-8B
 
-样本数：300；汇总组数：8；重复次数：1；seeds：42。
+样本数：300；汇总组数：13；重复次数：1；seeds：42。
 
 | Method | Align method | Topology | Timing (total, s) ↓ | Accuracy ↑ | Text output tokens ↓ |
 |---|---|---|---:|---:|---:|
 | Baseline | identical | hierarchical | 5161.2272 | 76.6667% (0.766667) | 559,782 |
 | Baseline | identical | sequential | 5009.3528 | 75.3333% (0.753333) | 551,843 |
-| Latent MAS | identical | hierarchical | **4660.1764** | 75.3333% (0.753333) | 417,209 |
+| Latent MAS | identical | hierarchical | 4660.1764 | 75.3333% (0.753333) | 417,209 |
 | Latent MAS | identical | sequential | 5107.5381 | 76.3333% (0.763333) | 561,562 |
-| Latent MAS | linear | hierarchical | 4725.4246 | 65.3333% (0.653333) | **387,280** |
+| Latent MAS | kernel | hierarchical | 4713.8600 | 73.3333% (0.733333) | 405,393 |
+| Latent MAS | kernel | sequential | **3744.6138** | 73.6667% (0.736667) | **341,569** |
+| Latent MAS | kernel_early_stopping | hierarchical | 4438.8190 | 72.6667% (0.726667) | 400,776 |
+| Latent MAS | kernel_early_stopping | sequential | 4066.8033 | 72.0000% (0.720000) | 346,273 |
+| Latent MAS | linear | hierarchical | 4725.4246 | 65.3333% (0.653333) | 387,280 |
 | Latent MAS | linear | sequential | 5094.4982 | 75.0000% (0.750000) | 580,086 |
+| Latent MAS | soft | sequential | 33334.8013 | 66.6667% (0.666667) | 4,791,457 |
 | Text MAS | identical | hierarchical | 19572.9969 | **78.6667% (0.786667)** | 1,922,939 |
 | Text MAS | identical | sequential | 9187.7308 | 75.6667% (0.756667) | 1,020,685 |
 
@@ -256,6 +267,14 @@
 | Latent MAS | kernel_early_stopping | sequential | 6772.6684 | 64.1667% (0.641667) | 263,097.63 |
 | Latent MAS | soft | sequential | 16469.1103 | 63.7500% (0.637500) | 670,255 |
 
+### Qwen/Qwen3-14B
+
+样本数：30；汇总组数：1；重复次数：8；seeds：42, 43, 44, 45, 46, 47, 48, 49。
+
+| Method | Align method | Topology | Timing (total, s) ↓ | Accuracy ↑ | Text output tokens ↓ |
+|---|---|---|---:|---:|---:|
+| Latent MAS | kernel | sequential | **7668.5074** | **72.0833% (0.720833)** | **247,758.75** |
+
 ## AIME 2025
 
 ### Qwen/Qwen3-8B
@@ -270,4 +289,4 @@
 | Latent MAS | kernel_early_stopping | sequential | **7665.8334** | 50.4167% (0.504167) | **294,907.75** |
 | Latent MAS | soft | sequential | 17908.6489 | 49.1667% (0.491667) | 736,694.75 |
 
-数据快照日期：2026-08-21。仅收录实际存在且可解析的 `summary.json`。
+数据快照日期：2026-08-24。仅收录实际存在且可解析的 `summary.json`。

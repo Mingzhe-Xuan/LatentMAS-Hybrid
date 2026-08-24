@@ -169,8 +169,8 @@ except (OSError, json.JSONDecodeError):
     print(fallback)
 PY
 }
-TEMPERATURE=0.6       # Sampling temperature.
-TOP_P=0.95            # Nucleus-sampling probability threshold.
+TEMPERATURE="${TEMPERATURE:-0.6}" # Sampling temperature; model wrappers may override.
+TOP_P="${TOP_P:-0.95}"             # Nucleus-sampling threshold; model wrappers may override.
 # Empty means use params_dict.json[TASK].generation_bs; fallback: 10.
 GENERATE_BS="${GENERATE_BS:-}"
 resolve_generate_bs() {

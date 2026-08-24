@@ -16,6 +16,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBMIT_DIR="${PBS_O_WORKDIR:-${SCRIPT_DIR}}"
 
 export EXPERIMENT_MODEL="mistralai/Mistral-Nemo-Instruct-2407"
+export TEMPERATURE="${TEMPERATURE:-0.3}"
+export TOP_P="${TOP_P:-0.95}"
 export LOG_ROOT="${LOG_ROOT:-${SUBMIT_DIR}/logging_mistral}"
 export RESULT_ROOT="${RESULT_ROOT:-${SUBMIT_DIR}/result_mistral}"
 export PROGRESS_FILE="${PROGRESS_FILE:-${SUBMIT_DIR}/state_mistral.txt}"

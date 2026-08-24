@@ -16,6 +16,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBMIT_DIR="${PBS_O_WORKDIR:-${SCRIPT_DIR}}"
 
 export EXPERIMENT_MODEL="deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
+export TEMPERATURE="${TEMPERATURE:-0.6}"
+export TOP_P="${TOP_P:-0.95}"
 export LOG_ROOT="${LOG_ROOT:-${SUBMIT_DIR}/logging_ds}"
 export RESULT_ROOT="${RESULT_ROOT:-${SUBMIT_DIR}/result_ds}"
 export PROGRESS_FILE="${PROGRESS_FILE:-${SUBMIT_DIR}/state_ds.txt}"
