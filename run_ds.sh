@@ -21,4 +21,10 @@ export RESULT_ROOT="${RESULT_ROOT:-${SUBMIT_DIR}/result_ds}"
 export PROGRESS_FILE="${PROGRESS_FILE:-${SUBMIT_DIR}/state_ds.txt}"
 export STATE_ROOT="${STATE_ROOT:-${SUBMIT_DIR}/state_ds}"
 
-exec bash "${SCRIPT_DIR}/run_model_array.sh" "$@"
+ARRAY_RUNNER="${SUBMIT_DIR}/run_model_array.sh"
+if [[ ! -f "${ARRAY_RUNNER}" ]]; then
+    echo "ERROR: missing array runner: ${ARRAY_RUNNER}" >&2
+    exit 2
+fi
+
+exec bash "${ARRAY_RUNNER}" "$@"
