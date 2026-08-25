@@ -1,12 +1,12 @@
 # M0: heterogeneous model communication
 
 M0 measures whether a Planner prefill from one model improves a visible-question
-Judger in another model. It evaluates Qwen3-4B and Qwen3-8B in all ordered
-sender-to-receiver pairs: 4B->4B, 4B->8B, 8B->4B, and 8B->8B.
+Judger in another model. It evaluates Qwen3-14B and Qwen3-8B in all ordered
+sender-to-receiver pairs: 14B->14B, 14B->8B, 8B->14B, and 8B->8B.
 
 For every dataset and architecture, M0 reports:
 
-- each receiver's `text` accuracy, which is the 4B/8B single-model baseline;
+- each receiver's `text` accuracy, which is the 14B/8B single-model baseline;
 - each ordered pair's `soft`, `linear`, and `kernel` communication accuracy;
 - question-bootstrap 95% confidence intervals and the number of transmitted
   Planner hidden states.

@@ -41,7 +41,7 @@ from prompts import (
 )
 from utils import extract_gsm8k_answer, normalize_answer, set_seed
 
-MODELS = ("Qwen/Qwen3-4B", "Qwen/Qwen3-8B")
+MODELS = ("Qwen/Qwen3-14B", "Qwen/Qwen3-8B")
 MODEL_PAIRS = tuple((source, target) for source in MODELS for target in MODELS)
 ALIGNMENTS = ("linear", "kernel", "soft", "text")
 DATASETS = {
@@ -240,7 +240,7 @@ def _receiver_messages(model_name, question, args):
 
 
 def _direct_text_receiver_messages(model_name, question, args):
-    """Receiver-only text control used as the 4B/8B single-model baseline."""
+    """Receiver-only text control used as the 14B/8B single-model baseline."""
     return _role_messages(args, model_name, "judger", question)
 
 

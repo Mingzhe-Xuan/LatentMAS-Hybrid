@@ -654,8 +654,8 @@ A 看到 `entity / attribute / value`，B 只看到 entity/attribute query。比
 
 对应 G0，用一个紧凑 forest plot 或表格复现：
 
-- 4B→4B 与 8B→8B；
-- 4B→8B 与 8B→4B；
+- 14B→14B 与 8B→8B；
+- 14B→8B 与 8B→14B；
 - Refiner→Judger 与 Planner→Critic；
 - ARC-Challenge 与 GSM8K。
 

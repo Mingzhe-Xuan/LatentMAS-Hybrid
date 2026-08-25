@@ -31,9 +31,9 @@ class M0ContractTests(unittest.TestCase):
         self.assertEqual(
             scope["MODEL_PAIRS"],
             (
-                ("Qwen/Qwen3-4B", "Qwen/Qwen3-4B"),
-                ("Qwen/Qwen3-4B", "Qwen/Qwen3-8B"),
-                ("Qwen/Qwen3-8B", "Qwen/Qwen3-4B"),
+                ("Qwen/Qwen3-14B", "Qwen/Qwen3-14B"),
+                ("Qwen/Qwen3-14B", "Qwen/Qwen3-8B"),
+                ("Qwen/Qwen3-8B", "Qwen/Qwen3-14B"),
                 ("Qwen/Qwen3-8B", "Qwen/Qwen3-8B"),
             ),
         )

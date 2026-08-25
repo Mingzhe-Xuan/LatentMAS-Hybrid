@@ -6,7 +6,7 @@
   "sample_seed": 42,
   "generation_seed": 77,
   "prompt": "sequential",
-  "models": ["Qwen/Qwen3-4B", "Qwen/Qwen3-8B"],
+  "models": ["Qwen/Qwen3-14B", "Qwen/Qwen3-8B"],
   "alignments": ["text", "soft", "linear", "kernel"],
   "transfer_protocols": {
     "text": "receiver-only original-question baseline",
