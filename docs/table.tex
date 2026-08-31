@@ -1,0 +1,319 @@
+\documentclass{article}
+
+% Packages already used by paper_v1.tex: booktabs, multirow, adjustbox.
+% Add xcolor with the table option to enable \cellcolor.
+\usepackage[margin=0.6in]{geometry}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{adjustbox}
+\usepackage[table]{xcolor}
+
+% Colors close to those in ref/*.png.
+\definecolor{settinggray}{RGB}{242,242,242}
+\definecolor{taskpink}{RGB}{252,241,241}
+\definecolor{taskcream}{RGB}{252,247,239}
+\definecolor{taskblue}{RGB}{243,243,253}
+\definecolor{kernelgreen}{RGB}{211,239,211}
+
+% Reusable formatting helpers.
+\newcommand{\best}[1]{\textbf{#1}}
+\newcommand{\highlight}[1]{\cellcolor{kernelgreen}#1}
+\newcommand{\gain}[1]{\cellcolor{kernelgreen}\textbf{#1}}
+\newcommand{\experimentnote}{%
+  \par\smallskip
+  \parbox{\textwidth}{\footnotesize\raggedright
+    \textit{Note.} MedQA may be removed. Repetition rule: datasets with
+    1--100 problems are repeated 8 times; those with 101--1000 problems,
+    4 times; and those with more than 1000 problems, once.}}
+% Draw the multirow label on the last row. This prevents the background colors
+% of later rows from painting over the task name.
+\newcommand{\taskstart}[2]{\cellcolor{#1} & #2}
+\newcommand{\taskend}[3]{%
+  \cellcolor{#1}\multirow{-3}{*}{\textbf{#2}} & #3}
+
+\begin{document}
+
+% Accuracy values for Single and TextMAS come from ref/*.png. LatentMAS in
+% those figures maps to Linear here. Other values come from ref_table.tex.
+% Figure Token values populate Single/TextMAS/Linear; their Time values use
+% Single/TextMAS/Linear Time is converted to Kernel scale using
+% T_m^(K) = N_m * rho_K, with rho_K from time_token_ratios.md.
+% For Qwen3-14B datasets without a Kernel ratio, the available H200 Identical
+% ratio is used instead. If neither H200 ratio exists, Time remains missing.
+% Improve uses the better of Kernel and Kernel-ES relative to TextMAS.
+\begin{table*}[p]
+  \centering
+  \caption{Sequential MAS results for Qwen3-8B. Acc. is accuracy (\%),
+  Token values for Single, TextMAS, and Linear are taken from the reference figures. Time for $m\in\{\mathrm{Single},\mathrm{TextMAS},\mathrm{Linear}\}$ is converted to the H200 scale by $T_m^{(H)}=N_m\rho_H$. We use the same-dataset Kernel time-per-token ratio when available and otherwise the H200 Identical ratio. Entries without either H200 ratio are denoted by $-$.
+  Best results in each row are bold. Kernel and Kernel-ES are highlighted.
+  Improve compares the better of Kernel and Kernel-ES with TextMAS.
+  Missing experiment combinations are denoted by $-$.}
+  \label{tab:seq-8b-all-latentmas}
+  \begin{adjustbox}{max width=\textwidth}
+  \begingroup
+  \setlength{\tabcolsep}{3.8pt}
+  \renewcommand{\arraystretch}{0.94}
+  \begin{tabular}{@{}l|l|cc|ccccc|c@{}}
+    \toprule
+    \multirow{2}{*}{\textbf{Tasks}} & \multirow{2}{*}{\textbf{Metrics}}
+      & \multicolumn{2}{c|}{\textbf{Baselines}}
+      & \multicolumn{5}{c|}{\textbf{LatentMAS variants}}
+      & \multirow{2}{*}{\textbf{Improve}} \\
+    \cmidrule(lr){3-4}\cmidrule(lr){5-9}
+      & & Single & TextMAS & Identical & Linear
+      & \cellcolor{kernelgreen}\textbf{Kernel}
+      & \cellcolor{kernelgreen}\textbf{Kernel-ES} & Soft & \\
+    \midrule
+    \multicolumn{10}{c}{\cellcolor{settinggray}
+      \textbf{\textit{Sequential MAS Setting}}} \\
+    \midrule
+    \taskstart{taskpink}{Acc.} & 50.0 & 53.3 & $-$ & 56.7 & \highlight{\best{66.25}} & \highlight{64.17} & 63.75 & \gain{$\uparrow$ 13.0} \\
+    \cellcolor{taskpink} & Token & 12891 & 38596 & $-$ & 8953 & \highlight{\best{8548}} & \highlight{8770} & 22342 & \gain{$\downarrow$ 77.9\%} \\
+    \taskend{taskpink}{AIME24}{Time} & 340.2 & 1018.5 & $-$ & 236.3 & \highlight{\best{225.6}} & \highlight{225.8} & 549.0 & \gain{$\times$ 4.5} \\
+    \midrule
+    \taskstart{taskcream}{Acc.} & 46.7 & \best{53.3} & $-$ & \best{53.3} & \highlight{49.58} & \highlight{50.42} & 49.17 & $\downarrow$ 2.9 \\
+    \cellcolor{taskcream} & Token & 14692 & 45088 & $-$ & \best{8699} & \highlight{10158} & \highlight{9830} & 24557 & \gain{$\downarrow$ 78.2\%} \\
+    \taskend{taskcream}{AIME25}{Time} & 377.8 & 1159.5 & $-$ & \best{223.7} & \highlight{261.2} & \highlight{255.5} & 597.0 & \gain{$\times$ 4.5} \\
+    \midrule
+    \taskstart{taskblue}{Acc.} & 91.0 & 94.6 & 94.54 & 94.4 & \highlight{94.80} & \highlight{\best{95.56}} & $-$ & \gain{$\uparrow$ 1.0} \\
+    \cellcolor{taskblue} & Token & 846 & 2252 & 559 & \best{529} & \highlight{570} & \highlight{915} & $-$ & \gain{$\downarrow$ 74.7\%} \\
+    \taskend{taskblue}{ARC-C}{Time} & 5.5 & 14.6 & 3.7 & \best{3.4} & \highlight{3.7} & \highlight{4.5} & $-$ & \gain{$\times$ 3.9} \\
+    \midrule
+    \taskstart{taskpink}{Acc.} & 95.6 & \best{99.1} & 98.27 & 98.8 & \highlight{98.32} & \highlight{98.40} & $-$ & $\downarrow$ 0.7 \\
+    \cellcolor{taskpink} & Token & 656 & 2085 & \best{468} & 490 & \highlight{472} & \highlight{822} & $-$ & \gain{$\downarrow$ 77.4\%} \\
+    \taskend{taskpink}{ARC-E}{Time} & 3.5 & 11.1 & \best{2.5} & 2.6 & \highlight{\best{2.5}} & \highlight{3.2} & $-$ & \gain{$\times$ 4.4} \\
+    \midrule
+    \taskstart{taskcream}{Acc.} & 39.9 & 43.4 & $-$ & 45.5 & \highlight{\best{48.74}} & \highlight{48.61} & $-$ & \gain{$\uparrow$ 5.3} \\
+    \cellcolor{taskcream} & Token & 6435 & 17986 & $-$ & 4571 & \highlight{\best{3588}} & \highlight{3846} & $-$ & \gain{$\downarrow$ 80.1\%} \\
+    \taskend{taskcream}{GPQA}{Time} & 104.5 & 292.0 & $-$ & 74.2 & \highlight{\best{58.3}} & \highlight{59.4} & $-$ & \gain{$\times$ 5.0} \\
+    \midrule
+    \taskstart{taskblue}{Acc.} & 81.1 & 92.3 & 91.58 & \best{93.8} & \highlight{91.74} & \highlight{92.19} & $-$ & $\downarrow$ 0.1 \\
+    \cellcolor{taskblue} & Token & 1280 & 2324 & \best{628} & 860 & \highlight{642} & \highlight{1029} & $-$ & \gain{$\downarrow$ 72.4\%} \\
+    \taskend{taskblue}{GSM8K}{Time} & 8.2 & 15.0 & \best{4.1} & 5.5 & \highlight{\best{4.1}} & \highlight{5.2} & $-$ & \gain{$\times$ 3.7} \\
+    \midrule
+    \taskstart{taskpink}{Acc.} & 74.4 & 80.5 & \best{84.15} & 80.5 & \highlight{83.54} & \highlight{83.38} & 82.62 & \gain{$\uparrow$ 3.0} \\
+    \cellcolor{taskpink} & Token & 2507 & 4593 & 1668 & 1866 & \highlight{\best{1637}} & \highlight{1696} & 15055 & \gain{$\downarrow$ 64.4\%} \\
+    \taskend{taskpink}{HumanEval+}{Time} & 28.9 & 52.9 & 18.9 & 21.5 & \highlight{\best{18.8}} & \highlight{21.5} & 112.4 & \gain{$\times$ 2.8} \\
+    \midrule
+    \taskstart{taskcream}{Acc.} & 64.8 & 69.5 & $-$ & 74.6 & \highlight{\best{75.26}} & \highlight{75.20} & 73.15 & \gain{$\uparrow$ 5.8} \\
+    \cellcolor{taskcream} & Token & 2053 & 3695 & $-$ & \best{1164} & \highlight{1462} & \highlight{1528} & 14388 & \gain{$\downarrow$ 60.4\%} \\
+    \taskend{taskcream}{MBPP+}{Time} & 25.2 & 45.3 & $-$ & \best{14.3} & \highlight{17.9} & \highlight{19.6} & 101.6 & \gain{$\times$ 2.5} \\
+    \midrule
+    \taskstart{taskblue}{Acc.} & 53.0 & 75.0 & \best{76.33} & 75.3 & \highlight{73.67} & \highlight{72.00} & 66.67 & $\downarrow$ 1.3 \\
+    \cellcolor{taskblue} & Token & 2098 & 4260 & 1872 & 1555 & \highlight{\best{1139}} & \highlight{1154} & 15972 & \gain{$\downarrow$ 73.3\%} \\
+    \taskend{taskblue}{MedQA}{Time} & 23.0 & 46.7 & 17.0 & 17.0 & \highlight{\best{12.5}} & \highlight{13.6} & 111.1 & \gain{$\times$ 3.7} \\
+    \bottomrule
+  \end{tabular}
+  \endgroup
+  \end{adjustbox}
+  \experimentnote
+\end{table*}
+
+\clearpage
+\begin{table*}[p]
+  \centering
+  \caption{Hierarchical MAS results for Qwen3-8B. Acc. is accuracy (\%),
+  Token values for Single, TextMAS, and Linear are taken from the reference figures. Time for $m\in\{\mathrm{Single},\mathrm{TextMAS},\mathrm{Linear}\}$ is converted to the H200 scale by $T_m^{(H)}=N_m\rho_H$. We use the same-dataset Kernel time-per-token ratio when available and otherwise the H200 Identical ratio. Entries without either H200 ratio are denoted by $-$.
+  Best results in each row are bold. Kernel and Kernel-ES are highlighted.
+  Improve compares the better of Kernel and Kernel-ES with TextMAS.
+  Missing experiment combinations are denoted by $-$.}
+  \label{tab:hier-8b-all-latentmas}
+  \begin{adjustbox}{max width=\textwidth}
+  \begingroup
+  \setlength{\tabcolsep}{3.8pt}
+  \renewcommand{\arraystretch}{0.94}
+  \begin{tabular}{@{}l|l|cc|ccccc|c@{}}
+    \toprule
+    \multirow{2}{*}{\textbf{Tasks}} & \multirow{2}{*}{\textbf{Metrics}}
+      & \multicolumn{2}{c|}{\textbf{Baselines}}
+      & \multicolumn{5}{c|}{\textbf{LatentMAS variants}}
+      & \multirow{2}{*}{\textbf{Improve}} \\
+    \cmidrule(lr){3-4}\cmidrule(lr){5-9}
+      & & Single & TextMAS & Identical & Linear
+      & \cellcolor{kernelgreen}\textbf{Kernel}
+      & \cellcolor{kernelgreen}\textbf{Kernel-ES} & Soft & \\
+    \midrule
+    \multicolumn{10}{c}{\cellcolor{settinggray}
+      \textbf{\textit{Hierarchical MAS Setting}}} \\
+    \midrule
+    \taskstart{taskpink}{Acc.} & 50.0 & 53.3 & $-$ & 53.3 & \highlight{60.00} & \highlight{\best{65.83}} & $-$ & \gain{$\uparrow$ 12.5} \\
+    \cellcolor{taskpink} & Token & 12891 & 42629 & $-$ & \best{7526} & \highlight{9926} & \highlight{9898} & $-$ & \gain{$\downarrow$ 76.8\%} \\
+    \taskend{taskpink}{AIME24}{Time} & 335.6 & 1109.8 & $-$ & \best{195.9} & \highlight{258.4} & \highlight{257.9} & $-$ & \gain{$\times$ 4.3} \\
+    \midrule
+    \taskstart{taskcream}{Acc.} & 46.7 & 50.0 & $-$ & 50.0 & \highlight{\best{53.33}} & \highlight{52.50} & $-$ & \gain{$\uparrow$ 3.3} \\
+    \cellcolor{taskcream} & Token & 14692 & 53929 & $-$ & 13230 & \highlight{\best{11207}} & \highlight{11300} & $-$ & \gain{$\downarrow$ 79.2\%} \\
+    \taskend{taskcream}{AIME25}{Time} & 378.9 & 1390.9 & $-$ & 341.2 & \highlight{\best{289.1}} & \highlight{291.9} & $-$ & \gain{$\times$ 4.8} \\
+    \midrule
+    \taskstart{taskblue}{Acc.} & 91.0 & 93.3 & 94.20 & 93.9 & \highlight{\best{95.05}} & \highlight{\best{95.05}} & $-$ & \gain{$\uparrow$ 1.8} \\
+    \cellcolor{taskblue} & Token & 846 & 2854 & 606 & \best{344} & \highlight{603} & \highlight{822} & $-$ & \gain{$\downarrow$ 78.9\%} \\
+    \taskend{taskblue}{ARC-C}{Time} & 5.3 & 17.8 & 3.9 & \best{2.1} & \highlight{3.8} & \highlight{4.3} & $-$ & \gain{$\times$ 4.7} \\
+    \midrule
+    \taskstart{taskpink}{Acc.} & 95.6 & 98.2 & \best{98.48} & 98.3 & \highlight{98.23} & \highlight{98.23} & $-$ & \gain{$\uparrow$ 0.0} \\
+    \cellcolor{taskpink} & Token & 656 & 2237 & 494 & \best{308} & \highlight{495} & \highlight{721} & $-$ & \gain{$\downarrow$ 77.9\%} \\
+    \taskend{taskpink}{ARC-E}{Time} & 3.4 & 11.5 & 2.6 & \best{1.6} & \highlight{2.5} & \highlight{3.0} & $-$ & \gain{$\times$ 4.6} \\
+    \midrule
+    \taskstart{taskcream}{Acc.} & 39.9 & 43.0 & $-$ & 46.9 & \highlight{\best{51.39}} & \highlight{49.75} & $-$ & \gain{$\uparrow$ 8.4} \\
+    \cellcolor{taskcream} & Token & 6435 & 22450 & $-$ & \best{3395} & \highlight{3752} & \highlight{3964} & $-$ & \gain{$\downarrow$ 83.3\%} \\
+    \taskend{taskcream}{GPQA}{Time} & 102.8 & 358.5 & $-$ & \best{54.2} & \highlight{59.9} & \highlight{61.5} & $-$ & \gain{$\times$ 6.0} \\
+    \midrule
+    \taskstart{taskblue}{Acc.} & 81.1 & 90.4 & 91.58 & 89.5 & \highlight{91.28} & \highlight{\best{92.34}} & $-$ & \gain{$\uparrow$ 1.9} \\
+    \cellcolor{taskblue} & Token & 1280 & 2370 & 688 & \best{353} & \highlight{704} & \highlight{932} & $-$ & \gain{$\downarrow$ 70.3\%} \\
+    \taskend{taskblue}{GSM8K}{Time} & 7.9 & 14.7 & 4.1 & \best{2.2} & \highlight{4.4} & \highlight{4.8} & $-$ & \gain{$\times$ 3.3} \\
+    \midrule
+    \taskstart{taskpink}{Acc.} & 74.4 & 76.8 & 82.62 & 78.0 & \highlight{\best{83.84}} & \highlight{83.23} & $-$ & \gain{$\uparrow$ 7.0} \\
+    \cellcolor{taskpink} & Token & 2507 & 8768 & 1688 & \best{1274} & \highlight{1681} & \highlight{1637} & $-$ & \gain{$\downarrow$ 81.3\%} \\
+    \taskend{taskpink}{HumanEval+}{Time} & 30.0 & 104.8 & 20.2 & \best{15.2} & \highlight{20.1} & \highlight{21.0} & $-$ & \gain{$\times$ 5.2} \\
+    \midrule
+    \taskstart{taskcream}{Acc.} & 64.8 & 71.9 & 70.97 & 72.2 & \highlight{72.75} & \highlight{72.16} & \best{73.21} & \gain{$\uparrow$ 0.8} \\
+    \cellcolor{taskcream} & Token & 2053 & 7703 & 1436 & \best{1264} & \highlight{1502} & \highlight{1460} & 12768 & \gain{$\downarrow$ 81.0\%} \\
+    \taskend{taskcream}{MBPP+}{Time} & 27.5 & 103.1 & 20.3 & \best{16.9} & \highlight{20.1} & \highlight{20.2} & 92.2 & \gain{$\times$ 5.1} \\
+    \midrule
+    \taskstart{taskblue}{Acc.} & 53.0 & 76.3 & 75.33 & \best{77.0} & \highlight{73.33} & \highlight{72.67} & $-$ & $\downarrow$ 3.0 \\
+    \cellcolor{taskblue} & Token & 2098 & 6893 & 1391 & \best{1007} & \highlight{1351} & \highlight{1336} & $-$ & \gain{$\downarrow$ 80.6\%} \\
+    \taskend{taskblue}{MedQA}{Time} & 24.4 & 80.2 & 15.5 & \best{11.7} & \highlight{15.7} & \highlight{14.8} & $-$ & \gain{$\times$ 5.4} \\
+    \bottomrule
+  \end{tabular}
+  \endgroup
+  \end{adjustbox}
+  \experimentnote
+\end{table*}
+
+\clearpage
+\begin{table*}[p]
+  \centering
+  \caption{Sequential MAS results for Qwen3-14B. Acc. is accuracy (\%),
+  Token values for Single, TextMAS, and Linear are taken from the reference figures. Time for $m\in\{\mathrm{Single},\mathrm{TextMAS},\mathrm{Linear}\}$ is converted to the H200 scale by $T_m^{(H)}=N_m\rho_H$. We use the same-dataset Kernel time-per-token ratio when available and otherwise the H200 Identical ratio. Entries without either H200 ratio are denoted by $-$.
+  Best results in each row are bold. Kernel and Kernel-ES are highlighted.
+  Improve compares the better of Kernel and Kernel-ES with TextMAS.
+  Missing experiment combinations are denoted by $-$.}
+  \label{tab:seq-14b-all-latentmas}
+  \begin{adjustbox}{max width=\textwidth}
+  \begingroup
+  \setlength{\tabcolsep}{3.8pt}
+  \renewcommand{\arraystretch}{0.94}
+  \begin{tabular}{@{}l|l|cc|ccccc|c@{}}
+    \toprule
+    \multirow{2}{*}{\textbf{Tasks}} & \multirow{2}{*}{\textbf{Metrics}}
+      & \multicolumn{2}{c|}{\textbf{Baselines}}
+      & \multicolumn{5}{c|}{\textbf{LatentMAS variants}}
+      & \multirow{2}{*}{\textbf{Improve}} \\
+    \cmidrule(lr){3-4}\cmidrule(lr){5-9}
+      & & Single & TextMAS & Identical & Linear
+      & \cellcolor{kernelgreen}\textbf{Kernel}
+      & \cellcolor{kernelgreen}\textbf{Kernel-ES} & Soft & \\
+    \midrule
+    \multicolumn{10}{c}{\cellcolor{settinggray}
+      \textbf{\textit{Sequential MAS Setting}}} \\
+    \midrule
+    \taskstart{taskpink}{Acc.} & 63.3 & 63.3 & $-$ & 66.7 & \highlight{\best{72.08}} & \highlight{69.58} & $-$ & \gain{$\uparrow$ 8.8} \\
+    \cellcolor{taskpink} & Token & 11263 & 32092 & $-$ & 10593 & \highlight{\best{8259}} & \highlight{8489} & $-$ & \gain{$\downarrow$ 74.3\%} \\
+    \taskend{taskpink}{AIME24}{Time} & 348.6 & 993.3 & $-$ & 327.9 & \highlight{\best{255.6}} & \highlight{283.4} & $-$ & \gain{$\times$ 3.9} \\
+    \midrule
+    \taskstart{taskcream}{Acc.} & 56.7 & 60.0 & $-$ & \best{63.3} & \highlight{56.67} & \highlight{60.00} & 49.58 & \gain{$\uparrow$ 0.0} \\
+    \cellcolor{taskcream} & Token & 11298 & 44618 & $-$ & 11402 & \highlight{\best{10266}} & \highlight{10402} & 21403 & \gain{$\downarrow$ 77.0\%} \\
+    \taskend{taskcream}{AIME25}{Time} & 369.3 & 1458.3 & $-$ & 372.7 & \highlight{\best{335.5}} & \highlight{350.6} & 575.5 & \gain{$\times$ 4.3} \\
+    \midrule
+    \taskstart{taskblue}{Acc.} & 92.6 & 95.9 & \best{95.99} & 95.6 & \highlight{95.48} & \highlight{95.73} & $-$ & $\downarrow$ 0.2 \\
+    \cellcolor{taskblue} & Token & 773 & 2985 & 463 & \best{426} & \highlight{461} & \highlight{544} & $-$ & \gain{$\downarrow$ 84.6\%} \\
+    \taskend{taskblue}{ARC-C}{Time} & 7.2 & 27.7 & 4.3 & \best{4.0} & \highlight{4.3} & \highlight{6.0} & $-$ & \gain{$\times$ 6.5} \\
+    \midrule
+    \taskstart{taskpink}{Acc.} & 97.2 & 99.0 & 98.48 & \best{99.4} & \highlight{98.82} & \highlight{98.57} & $-$ & $\downarrow$ 0.2 \\
+    \cellcolor{taskpink} & Token & 608 & 1670 & 379 & \best{224} & \highlight{380} & \highlight{462} & $-$ & \gain{$\downarrow$ 77.3\%} \\
+    \taskend{taskpink}{ARC-E}{Time} & 4.3 & 11.8 & 2.8 & \best{1.6} & \highlight{2.7} & \highlight{4.5} & $-$ & \gain{$\times$ 4.4} \\
+    \midrule
+    \taskstart{taskcream}{Acc.} & 48.5 & 51.5 & $-$ & \best{52.0} & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \cellcolor{taskcream} & Token & 5547 & 12676 & $-$ & \best{5454} & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \taskend{taskcream}{GPQA}{Time} & $-$ & $-$ & $-$ & $-$ & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \midrule
+    \taskstart{taskblue}{Acc.} & 83.7 & 93.8 & 92.12 & \best{95.2} & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \cellcolor{taskblue} & Token & 1118 & 3324 & \best{577} & 644 & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \taskend{taskblue}{GSM8K}{Time} & 9.8 & 29.0 & \best{5.0} & 5.6 & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \midrule
+    \taskstart{taskpink}{Acc.} & 76.8 & 81.1 & \best{86.89} & 86.5 & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \cellcolor{taskpink} & Token & 2366 & 5934 & \best{1590} & 2042 & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \taskend{taskpink}{HumanEval+}{Time} & 35.9 & 90.0 & \best{24.1} & 31.0 & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \midrule
+    \taskstart{taskcream}{Acc.} & 68.5 & 72.8 & \best{78.17} & 75.7 & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \cellcolor{taskcream} & Token & 1858 & 4971 & \best{1345} & 1621 & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \taskend{taskcream}{MBPP+}{Time} & 30.2 & 80.8 & \best{21.9} & 26.3 & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \midrule
+    \taskstart{taskblue}{Acc.} & 64.7 & 80.3 & \best{81.00} & 80.7 & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \cellcolor{taskblue} & Token & 1746 & 3444 & \best{1616} & 1841 & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \taskend{taskblue}{MedQA}{Time} & 20.6 & 40.6 & \best{19.0} & 21.7 & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \bottomrule
+  \end{tabular}
+  \endgroup
+  \end{adjustbox}
+  \experimentnote
+\end{table*}
+
+\clearpage
+\begin{table*}[p]
+  \centering
+  \caption{Hierarchical MAS results for Qwen3-14B. Acc. is accuracy (\%),
+  Token values for Single, TextMAS, and Linear are taken from the reference figures. Time for $m\in\{\mathrm{Single},\mathrm{TextMAS},\mathrm{Linear}\}$ is converted to the H200 scale by $T_m^{(H)}=N_m\rho_H$. We use the same-dataset Kernel time-per-token ratio when available and otherwise the H200 Identical ratio. Entries without either H200 ratio are denoted by $-$.
+  Best results in each row are bold. Kernel and Kernel-ES are highlighted.
+  Improve compares the better of Kernel and Kernel-ES with TextMAS.
+  Missing experiment combinations are denoted by $-$.}
+  \label{tab:hier-14b-all-latentmas}
+  \begin{adjustbox}{max width=\textwidth}
+  \begingroup
+  \setlength{\tabcolsep}{3.8pt}
+  \renewcommand{\arraystretch}{0.94}
+  \begin{tabular}{@{}l|l|cc|ccccc|c@{}}
+    \toprule
+    \multirow{2}{*}{\textbf{Tasks}} & \multirow{2}{*}{\textbf{Metrics}}
+      & \multicolumn{2}{c|}{\textbf{Baselines}}
+      & \multicolumn{5}{c|}{\textbf{LatentMAS variants}}
+      & \multirow{2}{*}{\textbf{Improve}} \\
+    \cmidrule(lr){3-4}\cmidrule(lr){5-9}
+      & & Single & TextMAS & Identical & Linear
+      & \cellcolor{kernelgreen}\textbf{Kernel}
+      & \cellcolor{kernelgreen}\textbf{Kernel-ES} & Soft & \\
+    \midrule
+    \multicolumn{10}{c}{\cellcolor{settinggray}
+      \textbf{\textit{Hierarchical MAS Setting}}} \\
+    \midrule
+    \taskstart{taskpink}{Acc.} & 63.3 & 70.0 & $-$ & \best{73.3} & \highlight{69.17} & \highlight{69.58} & 71.25 & $\downarrow$ 0.4 \\
+    \cellcolor{taskpink} & Token & 11263 & 29025 & $-$ & 10230 & \highlight{\best{8947}} & \highlight{9017} & 23924 & \gain{$\downarrow$ 69.2\%} \\
+    \taskend{taskpink}{AIME24}{Time} & 357.6 & 921.7 & $-$ & 324.8 & \highlight{\best{284.1}} & \highlight{291.0} & 639.9 & \gain{$\times$ 3.2} \\
+    \midrule
+    \taskstart{taskcream}{Acc.} & 56.7 & \best{66.7} & $-$ & \best{66.7} & \highlight{59.17} & \highlight{57.92} & $-$ & $\downarrow$ 7.5 \\
+    \cellcolor{taskcream} & Token & 11298 & 50003 & $-$ & \best{9527} & \highlight{10755} & \highlight{11122} & $-$ & \gain{$\downarrow$ 78.5\%} \\
+    \taskend{taskcream}{AIME25}{Time} & 364.4 & 1612.8 & $-$ & \best{307.3} & \highlight{346.9} & \highlight{365.7} & $-$ & \gain{$\times$ 4.6} \\
+    \midrule
+    \taskstart{taskblue}{Acc.} & 92.6 & 95.3 & 95.65 & 95.5 & \highlight{\best{95.99}} & \highlight{95.65} & $-$ & \gain{$\uparrow$ 0.7} \\
+    \cellcolor{taskblue} & Token & 773 & 2167 & 434 & \best{295} & \highlight{424} & \highlight{477} & $-$ & \gain{$\downarrow$ 80.4\%} \\
+    \taskend{taskblue}{ARC-C}{Time} & 6.7 & 18.8 & 4.0 & \best{2.6} & \highlight{3.7} & \highlight{5.4} & $-$ & \gain{$\times$ 5.1} \\
+    \midrule
+    \taskstart{taskpink}{Acc.} & 97.2 & 98.3 & 98.70 & 98.7 & \highlight{\best{98.78}} & \highlight{98.23} & $-$ & \gain{$\uparrow$ 0.5} \\
+    \cellcolor{taskpink} & Token & 608 & 2752 & 344 & 619 & \highlight{\best{337}} & \highlight{402} & $-$ & \gain{$\downarrow$ 87.8\%} \\
+    \taskend{taskpink}{ARC-E}{Time} & 4.4 & 19.7 & 2.5 & 4.4 & \highlight{\best{2.4}} & \highlight{4.0} & $-$ & \gain{$\times$ 8.2} \\
+    \midrule
+    \taskstart{taskcream}{Acc.} & 48.5 & 52.0 & $-$ & \best{53.0} & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \cellcolor{taskcream} & Token & 5547 & 20931 & $-$ & \best{3606} & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \taskend{taskcream}{GPQA}{Time} & $-$ & $-$ & $-$ & $-$ & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \midrule
+    \taskstart{taskblue}{Acc.} & 83.7 & 90.8 & \best{91.96} & 91.6 & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \cellcolor{taskblue} & Token & 1118 & 3021 & 574 & \best{495} & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \taskend{taskblue}{GSM8K}{Time} & 9.0 & 24.4 & 4.6 & \best{4.0} & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \midrule
+    \taskstart{taskpink}{Acc.} & 76.8 & 84.1 & \best{88.41} & 86.6 & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \cellcolor{taskpink} & Token & 2366 & 8114 & \best{1473} & 1512 & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \taskend{taskpink}{HumanEval+}{Time} & 38.2 & 131.1 & \best{23.8} & 24.4 & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \midrule
+    \taskstart{taskcream}{Acc.} & 68.5 & 73.0 & \best{76.92} & 73.8 & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \cellcolor{taskcream} & Token & 1858 & 7458 & 1209 & \best{1187} & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \taskend{taskcream}{MBPP+}{Time} & 35.8 & 143.7 & 23.3 & \best{22.9} & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \midrule
+    \taskstart{taskblue}{Acc.} & 64.7 & 78.0 & \best{81.33} & 78.3 & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \cellcolor{taskblue} & Token & 1746 & 5473 & \best{870} & 899 & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \taskend{taskblue}{MedQA}{Time} & 24.3 & 76.3 & \best{12.1} & 12.5 & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \bottomrule
+  \end{tabular}
+  \endgroup
+  \end{adjustbox}
+  \experimentnote
+\end{table*}
+
+\end{document}
