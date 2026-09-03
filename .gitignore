@@ -13,3 +13,7 @@ test_state.txt
 state/
 state_*/
 *plot*/
+analysis_cache/
+analysis_result/
+analysis/jobs/
+state/analysis/
