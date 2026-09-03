@@ -19,3 +19,4 @@ analysis_cache/
 analysis_result/
 analysis/jobs/
 state/analysis/
+slurm-*.out
