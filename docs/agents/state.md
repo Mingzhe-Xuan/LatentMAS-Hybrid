@@ -18,3 +18,4 @@
 - 2026-09-03：用户明确授权 GPU smoke 与 Git 操作；恢复远程验证流程，下一步推送独立验证分支。
 - 2026-09-03：远端仓库实际路径为 `/home/xmz/LatentMAS-Hybrid`，仅有 Slurm `sbatch`（compute partition, `gpu:1`），没有 PBS `qsub`；远端原有 README、已跟踪 pyc 与 state.txt 修改均予以保留。开始增加不改变正式 PBS 契约的 Slurm 适配目录。
 - 2026-09-03：Slurm worker/submitter 已实现并通过本地语法、静态契约与 AIME2024 smoke dry-run；下一步提交增量验证 commit 并在 Guqq 运行轻量环境检查。
+- 2026-09-03：首次 Sender smoke 提交在创建作业前失败：Guqq 非交互登录环境没有全局 `python` 命令。调整 submitter，使其自动回退到仓库 `.venv/bin/python` 后重试。

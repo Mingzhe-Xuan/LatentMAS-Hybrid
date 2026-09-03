@@ -21,10 +21,18 @@ if ! command -v sbatch >/dev/null 2>&1 && [[ "${DRY_RUN}" != true ]]; then
   exit 127
 fi
 
+PYTHON_BIN="${ANALYSIS_PYTHON:-}"
+if [[ -z "${PYTHON_BIN}" ]]; then
+  if command -v python >/dev/null 2>&1; then PYTHON_BIN="$(command -v python)"
+  elif [[ -x .venv/bin/python ]]; then PYTHON_BIN=".venv/bin/python"
+  else echo "ERROR: no Python interpreter; set ANALYSIS_PYTHON" >&2; exit 127
+  fi
+fi
+
 WORKER="analysis/slurm/analysis_job.slurm"
 CONFIG_PATH="analysis/configs/kernel_analysis.yaml"
 mkdir -p state/analysis
-BUILD=(python analysis/pbs/build_job_matrix.py --config "${CONFIG_PATH}" --output analysis/jobs)
+BUILD=("${PYTHON_BIN}" analysis/pbs/build_job_matrix.py --config "${CONFIG_PATH}" --output analysis/jobs)
 [[ -n "${DATASET}" ]] && BUILD+=(--dataset "${DATASET}")
 [[ "${SMOKE}" == true ]] && BUILD+=(--smoke)
 "${BUILD[@]}"

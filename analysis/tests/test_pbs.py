@@ -42,3 +42,4 @@ def test_slurm_worker_preserves_validation_and_status_contract() -> None:
     assert "SLURM_ARRAY_TASK_ID" in worker and "analysis/jobs/*" in worker
     assert "STATUS == 10" in worker and "SKIPPED" in worker and "FAILED" in worker
     assert "--gres" in submitter and "afterok:" in submitter and "SLURM_MAX_RUNNING:-1" in submitter
+    assert ".venv/bin/python" in submitter and "ANALYSIS_PYTHON" in submitter
