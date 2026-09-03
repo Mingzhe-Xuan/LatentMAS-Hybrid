@@ -25,6 +25,8 @@ def test_pbs_scripts_have_valid_shell_syntax() -> None:
         return
     for script in ("analysis_job.pbs", "submit_analysis.sh"):
         subprocess.run([bash, "-n", str(ROOT / "analysis/pbs" / script)], check=True)
+    for script in ("analysis_job.slurm", "submit_analysis.sh"):
+        subprocess.run([bash, "-n", str(ROOT / "analysis/slurm" / script)], check=True)
 
 
 def test_worker_contains_required_validation_and_status_contract() -> None:
@@ -32,3 +34,11 @@ def test_worker_contains_required_validation_and_status_contract() -> None:
     assert "analysis/jobs/*" in text and "analysis/configs/*" in text
     assert "STATUS == 10" in text and "SKIPPED" in text and "FAILED" in text
     assert "#PBS -l select=1:ncpus=12:ngpus=1" in text
+
+
+def test_slurm_worker_preserves_validation_and_status_contract() -> None:
+    worker = (ROOT / "analysis/slurm/analysis_job.slurm").read_text(encoding="utf-8")
+    submitter = (ROOT / "analysis/slurm/submit_analysis.sh").read_text(encoding="utf-8")
+    assert "SLURM_ARRAY_TASK_ID" in worker and "analysis/jobs/*" in worker
+    assert "STATUS == 10" in worker and "SKIPPED" in worker and "FAILED" in worker
+    assert "--gres" in submitter and "afterok:" in submitter and "SLURM_MAX_RUNNING:-1" in submitter

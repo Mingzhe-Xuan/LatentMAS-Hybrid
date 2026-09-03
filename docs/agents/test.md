@@ -25,3 +25,11 @@
 - 排除环境探针 `tests/test_libs.py` 后：114 passed、13 failed。失败全部位于任务开始前已有且本次未修改的 `exp/`/`run_all.sh` 行为与其历史测试不一致（S3 1项、latent_comm M0 7项、latent_cot C4 4项、run_all 1项）；analysis 的 20 项测试仍全部通过。
 - 真实 Qwen/PBS smoke：未运行。按 `analysis/AGENTS.md`，源码必须先经本地 Git 提交并由服务器 `git pull` 同步；本轮没有擅自 push 到远程 main。
 - 远程预检：审批拒绝，未连接或修改服务器。需要用户明确授权 `ssh Guqq` 与远程 `git pull --ff-only`。
+
+## 2026-09-03 Slurm 适配测试计划
+
+- 对 Slurm worker/submitter 执行 `bash -n`，并静态验证 array index、路径白名单、exit-10/SKIPPED、FAILED、flock ledger 和 afterok 依赖。
+- 本地 dry-run 必须生成独立 smoke cache IDs，输出完整 `sbatch` 命令且不实际提交。
+- 推送后先在 Guqq 虚拟环境执行轻量 import/config/matrix 检查，再通过 `sbatch` 提交 AIME2024 first-1/Kmax=4 smoke；不得在登录节点运行模型。
+
+实际：21 项 analysis tests passed；PBS/Slurm 两套 shell 均通过 `bash -n`；Slurm AIME2024 smoke dry-run 正确生成 2/9/42/12 个 Sender/scaling/perturbation/model-pair array rows 和完整 afterok 链，未提交作业。
