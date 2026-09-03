@@ -15,3 +15,7 @@ state/
 state_*/
 *plot*/
 data/
+analysis_cache/
+analysis_result/
+analysis/jobs/
+state/analysis/

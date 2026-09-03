@@ -1,0 +1,89 @@
+#!/bin/bash
+#PBS -N xmz_analysis
+#PBS -P ds_ccds_wei.lu
+#PBS -q gpu_ded
+#PBS -l walltime=72:00:00
+#PBS -l select=1:ncpus=12:ngpus=1
+#PBS -j oe
+set -euo pipefail
+
+TASK_NAME="${TASK_NAME:-}"
+JOB_MATRIX="${JOB_MATRIX:-}"
+CONFIG_PATH="${CONFIG_PATH:-analysis/configs/kernel_analysis.yaml}"
+CACHE_MODE="${CACHE_MODE:-reuse}"
+ANALYSIS_CACHE_ROOT="${ANALYSIS_CACHE_ROOT:-analysis_cache}"
+ANALYSIS_RESULT_ROOT="${ANALYSIS_RESULT_ROOT:-analysis_result}"
+STATE_ROOT="${STATE_ROOT:-state/analysis}"
+LEDGER_PATH="${LEDGER_PATH:-${STATE_ROOT}/progress.tsv}"
+DEVICE="${DEVICE:-cuda}"
+PBS_ARRAY_INDEX="${PBS_ARRAY_INDEX:-0}"
+
+case "${TASK_NAME}" in
+  collect_sender_trajectories|evaluate_kernel_scaling|evaluate_perturbation_stability|evaluate_sender_receiver_performance|analyze_logit_entropy|analyze_kernel_scaling|analyze_aligned_state_variance|analyze_perturbation_stability|analyze_sender_receiver_performance|build_kernel_analysis_report) ;;
+  *) echo "ERROR: unknown TASK_NAME=${TASK_NAME}" >&2; exit 2 ;;
+esac
+case "${CACHE_MODE}" in reuse|cache-only|force) ;; *) echo "ERROR: invalid CACHE_MODE" >&2; exit 2 ;; esac
+if ! [[ "${PBS_ARRAY_INDEX}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: PBS_ARRAY_INDEX must be a positive integer" >&2; exit 2
+fi
+
+module purge
+# module load vllm/0.19.0
+module load python/3.12.13
+source /home/n2501945g/LatentMAS-Hybrid/.venv/bin/activate
+cd "${PBS_O_WORKDIR}" || exit 1
+if [ ! -d analysis ] && [ -d LatentMAS/analysis ]; then cd LatentMAS || exit 1; fi
+if [ ! -d analysis ]; then echo "ERROR: analysis directory not found" >&2; exit 1; fi
+export PYTHONUNBUFFERED=1
+export HF_HOME=/home/n2501945g/.cache/huggingface
+export HF_HUB_CACHE="${HF_HOME}/hub"
+export HF_DATASETS_CACHE="${HF_HOME}/datasets"
+
+echo "PBS_NODEFILE: ${PBS_NODEFILE}"
+cat "${PBS_NODEFILE}"
+echo "hostname: $(hostname)"
+echo "working directory: $(pwd)"
+echo "date: $(date)"
+nvidia-smi -L || { echo "ERROR: nvidia-smi failed"; exit 1; }
+if echo "${CUDA_VISIBLE_DEVICES:-}" | grep -q "GPU-"; then
+  GPU_COUNT=$(echo "${CUDA_VISIBLE_DEVICES}" | tr ',' '\n' | wc -l)
+  CUDA_VISIBLE_DEVICES=$(seq -s, 0 $((GPU_COUNT - 1)))
+  export CUDA_VISIBLE_DEVICES
+fi
+
+REPO_ROOT="$(pwd -P)"
+MATRIX_ABS="$(realpath -e "${JOB_MATRIX}")" || { echo "ERROR: matrix not found" >&2; exit 2; }
+CONFIG_ABS="$(realpath -e "${CONFIG_PATH}")" || { echo "ERROR: config not found" >&2; exit 2; }
+case "${MATRIX_ABS}" in "${REPO_ROOT}"/analysis/jobs/*) ;; *) echo "ERROR: JOB_MATRIX must be under analysis/jobs/." >&2; exit 2 ;; esac
+case "${CONFIG_ABS}" in "${REPO_ROOT}"/analysis/configs/*) ;; *) echo "ERROR: CONFIG_PATH must be under analysis/configs/." >&2; exit 2 ;; esac
+ROW_COUNT="$(python3 -c 'from pathlib import Path; import sys; p=Path(sys.argv[1]); lines=p.read_text(encoding="utf-8").splitlines(); assert all(lines), "blank matrix line"; print(len(lines))' "${MATRIX_ABS}")"
+if (( PBS_ARRAY_INDEX > ROW_COUNT )); then echo "ERROR: PBS_ARRAY_INDEX=${PBS_ARRAY_INDEX} exceeds ${ROW_COUNT} rows." >&2; exit 2; fi
+
+ENTRY="analysis/tasks/${TASK_NAME}.py"
+if [ ! -f "${ENTRY}" ]; then echo "ERROR: missing task entry ${ENTRY}" >&2; exit 2; fi
+JOB_SLUG="$(printf '%s' "${PBS_JOBID:-local}" | tr -c 'A-Za-z0-9._-' '_')"
+STATE_DIR="${STATE_ROOT}/${TASK_NAME}"
+STATE_PATH="${STATE_DIR}/${JOB_SLUG}_${PBS_ARRAY_INDEX}.log"
+mkdir -p "${STATE_DIR}" "$(dirname "${LEDGER_PATH}")"
+
+append_progress() {
+  local status="$1" detail="${2//$'\t'/ }"
+  detail="${detail//$'\n'/ }"
+  ( flock -x 9
+    if [[ ! -s "${LEDGER_PATH}" ]]; then printf 'timestamp\tjob_id\tarray_index\ttask\tstatus\tdetail\n' >&9; fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date --iso-8601=seconds)" "${PBS_JOBID:-local}" "${PBS_ARRAY_INDEX}" "${TASK_NAME}" "${status}" "${detail}" >&9
+  ) 9>> "${LEDGER_PATH}"
+}
+
+ARGS=(--config "${CONFIG_ABS}" --job-matrix "${MATRIX_ABS}" --job-index "${PBS_ARRAY_INDEX}" --cache-root "${ANALYSIS_CACHE_ROOT}" --result-root "${ANALYSIS_RESULT_ROOT}" --device "${DEVICE}")
+case "${CACHE_MODE}" in cache-only) ARGS+=(--cache-only) ;; force) ARGS+=(--force) ;; esac
+append_progress STARTED "state=${STATE_PATH}"
+set +e
+python3 "${ENTRY}" "${ARGS[@]}" > "${STATE_PATH}" 2>&1
+STATUS=$?
+set -e
+if (( STATUS == 0 )); then append_progress COMPLETED "state=${STATE_PATH}"
+elif (( STATUS == 10 )); then append_progress SKIPPED "validated cache hit; state=${STATE_PATH}"; STATUS=0
+else append_progress FAILED "exit=${STATUS}; state=${STATE_PATH}"; fi
+echo "Finished: $(date --iso-8601=seconds); exit=${STATUS}" >> "${STATE_PATH}"
+exit "${STATUS}"

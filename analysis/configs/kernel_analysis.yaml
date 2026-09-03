@@ -1,0 +1,27 @@
+{
+  "protocol_version": "kernel-analysis-v1",
+  "models": ["Qwen/Qwen3-8B", "Qwen/Qwen3-14B"],
+  "datasets": {
+    "aime2024": {"split": "train", "family": "math", "max_new_tokens": 20000, "generation_batch_size": 2},
+    "aime2025": {"split": "train", "family": "math", "max_new_tokens": 20000, "generation_batch_size": 2},
+    "arc_challenge": {"split": "test", "family": "multiple_choice", "max_new_tokens": 2048, "generation_batch_size": 16},
+    "arc_easy": {"split": "test", "family": "multiple_choice", "max_new_tokens": 2048, "generation_batch_size": 16},
+    "gpqa": {"split": "test", "family": "general_qa", "max_new_tokens": 8000, "generation_batch_size": 5},
+    "gsm8k": {"split": "test", "family": "math", "max_new_tokens": 2048, "generation_batch_size": 16},
+    "humanevalplus": {"split": "test", "family": "code", "max_new_tokens": 4096, "generation_batch_size": 8},
+    "mbppplus": {"split": "test", "family": "code", "max_new_tokens": 4096, "generation_batch_size": 8},
+    "medqa": {"split": "train", "family": "multiple_choice", "max_new_tokens": 4096, "generation_batch_size": 8}
+  },
+  "generation": {"seeds": [42, 43, 44], "temperature": 0.6, "top_p": 0.95},
+  "kernel": {"features": 2048, "temperature": 0.6, "seed": 101, "chunk_size": 4096},
+  "experiments": {
+    "primary_datasets": ["aime2024", "humanevalplus", "arc_challenge"],
+    "scaling_k": [0, 10, 20, 40, 80, 160],
+    "stability_k": 40,
+    "perturbation_alpha": [0, 0.01, 0.025, 0.05, 0.10],
+    "perturbation_alignments": ["kernel", "soft", "linear"],
+    "variance_features": [256, 512, 1024, 2048, 4096],
+    "variance_seeds": 32,
+    "model_pair_k": 40
+  }
+}

@@ -26,3 +26,4 @@ tqdm==4.69.0
 matplotlib==3.9.0
 pyarrow==17.0.0
 scikit-learn==1.5.1
+safetensors==0.7.0
