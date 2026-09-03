@@ -200,7 +200,10 @@ def compute_logits_entropy(
         if entropy_chunks
         else torch.empty(0, device=flat_hidden.device, dtype=torch.float32)
     )
-    return entropy.reshape(*hidden.shape[:-1])
+    # Passing an empty prefix via ``reshape(*())`` calls reshape with no
+    # arguments for a single hidden vector.  The tuple form handles both the
+    # scalar result and arbitrary leading dimensions.
+    return entropy.reshape(hidden.shape[:-1])
 
 def apply_soft_alignment_with_entropy(
     hidden: torch.Tensor, state: AlignmentState

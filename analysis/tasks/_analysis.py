@@ -323,6 +323,7 @@ def analyze_entropy(args) -> int:
 
 
 def analyze_variance(args) -> int:
+    import gc
     import torch
     from alignment import apply_alignment, build_kernel_state, build_soft_state
     from analysis.core.cache import CacheHandle, SenderTrajectoryStore
@@ -346,13 +347,31 @@ def analyze_variance(args) -> int:
                            model_args({"dataset": job["dataset"], "sender_model": "Qwen/Qwen3-8B"}, alignment="kernel"))
     base = getattr(wrapper, "HF_model", getattr(wrapper, "model", None))
     output_weight, input_weight, bias = wrapper._embedding_weights(base, base)
+    # Variance needs only the tied vocabulary projections.  Keeping the full
+    # causal LM resident leaves virtually no workspace on a 32 GiB GPU (the
+    # 8B checkpoint is loaded in fp32 by the production wrapper).  Stage the
+    # two projections through host memory, release the model, and put only the
+    # required tensors back on the requested analysis device.
+    output_weight_host = output_weight.detach().cpu().clone()
+    input_weight_host = input_weight.detach().cpu().clone()
+    bias_host = None if bias is None else bias.detach().cpu().clone()
+    del output_weight, input_weight, bias, base, wrapper
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    analysis_device = torch.device(args.device)
+    output_weight = output_weight_host.to(analysis_device)
+    input_weight = input_weight_host.to(analysis_device)
+    bias = None if bias_host is None else bias_host.to(analysis_device)
+    del output_weight_host, input_weight_host, bias_host
     soft = build_soft_state(output_weight, input_weight, bias, temperature=.6, query_chunk_size=32)
     store, handle = SenderTrajectoryStore(args.cache_root), CacheHandle(manifest["cache_id"], path.parent, manifest["identity_hash"])
     hidden = torch.cat([store.read_item(handle, i).hidden.float() for i in manifest["expected_item_ids"]])
     chunk_size = 32
     oracle_parts = []
     for start in range(0, hidden.shape[0], chunk_size):
-        oracle_parts.append(apply_alignment(hidden[start:start + chunk_size].to(output_weight.device), soft).float().cpu())
+        with torch.inference_mode():
+            oracle_parts.append(apply_alignment(hidden[start:start + chunk_size].to(output_weight.device), soft).float().cpu())
     oracle = torch.cat(oracle_parts)
     rows = []
     for features in config["experiments"]["variance_features"]:
@@ -364,11 +383,13 @@ def analyze_variance(args) -> int:
         tail_count = 0
         observation_count = 0
         for seed in range(config["experiments"]["variance_seeds"]):
-            state = build_kernel_state(output_weight, input_weight, bias, feature_count=features,
-                                       temperature=.6, seed=seed, chunk_size=4096)
+            with torch.inference_mode():
+                state = build_kernel_state(output_weight, input_weight, bias, feature_count=features,
+                                           temperature=.6, seed=seed, chunk_size=4096)
             for start in range(0, hidden.shape[0], chunk_size):
                 stop = min(start + chunk_size, hidden.shape[0])
-                estimate = apply_alignment(hidden[start:stop].to(output_weight.device), state).float().cpu()
+                with torch.inference_mode():
+                    estimate = apply_alignment(hidden[start:stop].to(output_weight.device), state).float().cpu()
                 target = oracle[start:stop]
                 difference = estimate - target
                 relative = difference.norm(dim=-1) / target.norm(dim=-1).clamp_min(1e-12)

@@ -116,6 +116,11 @@ class KernelAlgorithmTests(unittest.TestCase):
             hidden, self.w_out, self.bias, temperature=0.8, query_chunk_size=1
         )
         torch.testing.assert_close(direct_entropy, expected_entropy)
+        scalar_entropy = compute_logits_entropy(
+            hidden[0], self.w_out, self.bias, temperature=0.8, query_chunk_size=1
+        )
+        self.assertEqual(scalar_entropy.shape, torch.Size([]))
+        torch.testing.assert_close(scalar_entropy, expected_entropy[0])
 
     def test_soft_query_chunking_preserves_full_vocabulary_result(self) -> None:
         hidden = torch.tensor(
