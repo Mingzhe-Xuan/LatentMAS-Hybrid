@@ -33,3 +33,5 @@
 - 推送后先在 Guqq 虚拟环境执行轻量 import/config/matrix 检查，再通过 `sbatch` 提交 AIME2024 first-1/Kmax=4 smoke；不得在登录节点运行模型。
 
 实际：21 项 analysis tests passed；PBS/Slurm 两套 shell 均通过 `bash -n`；Slurm AIME2024 smoke dry-run 正确生成 2/9/42/12 个 Sender/scaling/perturbation/model-pair array rows 和完整 afterok 链，未提交作业。
+
+- Guqq 首次 `--stage collect`：提交前失败（exit 1），原因是 login shell 无全局 `python`；未创建 Slurm job。新增 `.venv/bin/python` fallback 回归测试后重试。
