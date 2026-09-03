@@ -44,6 +44,12 @@ export PYTHONUNBUFFERED=1
 export HF_HOME="${HF_HOME:-${HOME}/.cache/huggingface}"
 export HF_HUB_CACHE="${HF_HUB_CACHE:-${HF_HOME}/hub}"
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${HF_HOME}/datasets}"
+# Guqq compute nodes are intentionally offline.  Prefer their populated caches
+# and fail immediately for a genuinely missing artifact instead of spending
+# minutes in Hugging Face network retries.  Callers may explicitly override.
+export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+export HF_DATASETS_OFFLINE="${HF_DATASETS_OFFLINE:-1}"
+export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
 
 MATRIX_ABS="$(realpath -e "${JOB_MATRIX}")" || { echo "ERROR: matrix not found" >&2; exit 2; }
 CONFIG_ABS="$(realpath -e "${CONFIG_PATH}")" || { echo "ERROR: config not found" >&2; exit 2; }
