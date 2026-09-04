@@ -139,6 +139,8 @@ def run(args) -> int:
         artifact_target_fingerprint=artifact_target_fingerprint,
         artifact_source_name=artifact_source_name, artifact_target_name=artifact_target_name,
         tau=float(job["tau"]), sender_budget=int(config["generation"]["sender_budget"]),
+        position_chunk_size=int(config["transport"]["position_chunk_size"]),
+        target_chunk_size=int(config["transport"]["target_chunk_size"]),
         code_revision=code_revision,
     )
     store = ReceiverEvaluationStore(args.cache_root, namespace="stt_receiver_evaluations")
@@ -163,6 +165,7 @@ def run(args) -> int:
                 max_new_tokens=int(job["max_new_tokens"]), planner=planner,
                 sender=sender, artifact=artifact, tau=float(job["tau"]),
                 position_chunk_size=int(config["transport"]["position_chunk_size"]),
+                target_chunk_size=int(config["transport"]["target_chunk_size"]),
             )
             row.diagnostics["peak_gpu_memory_bytes"] = (
                 int(torch.cuda.max_memory_allocated(torch.device(args.device)))

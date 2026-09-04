@@ -76,6 +76,9 @@ class STTAnalysisConfig:
         if (transport.get("tau"), transport.get("causal_shift"),
                 transport.get("accumulation_dtype")) != (0.6, False, "float32"):
             raise ValueError("STT transport parameters do not match the formal protocol")
+        if (int(transport.get("position_chunk_size", 0)) <= 0
+                or int(transport.get("target_chunk_size", 0)) <= 0):
+            raise ValueError("STT position and target chunk sizes must be positive")
         artifacts = transport.get("artifacts")
         if not isinstance(artifacts, dict) or set(artifacts) != {"qwen_to_mistral", "mistral_to_qwen"}:
             raise ValueError("STT requires both directed transport artifacts")

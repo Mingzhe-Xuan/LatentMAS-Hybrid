@@ -174,11 +174,13 @@ class STTReceiverCondition:
     causal_shift: bool = False
     do_sample: bool = False
     accumulation_dtype: str = "float32"
+    position_chunk_size: int = 32
+    target_chunk_size: int = 8192
     context_scope: str = "full-prompt-plus-plan"
     prefix_order: str = "aligned-sender-then-native-judger"
     evaluator_version: str = "task-evaluator-v1"
     code_revision: str = "unknown"
-    schema_version: str = "stt-receiver-v1"
+    schema_version: str = "stt-receiver-v2"
 
     def __post_init__(self) -> None:
         cross = "_to_" in self.system
@@ -188,6 +190,8 @@ class STTReceiverCondition:
             raise ValueError("STT receiver protocol must use tau=0.6, no shift and greedy decoding")
         if self.accumulation_dtype != "float32":
             raise ValueError("STT transport accumulation must use float32")
+        if self.position_chunk_size <= 0 or self.target_chunk_size <= 0:
+            raise ValueError("STT chunk sizes must be positive")
         if (self.context_scope, self.prefix_order) != (
                 "full-prompt-plus-plan", "aligned-sender-then-native-judger"):
             raise ValueError("STT context scope or prefix order is invalid")

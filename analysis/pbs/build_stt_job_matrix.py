@@ -65,6 +65,8 @@ def evaluation_cache_id(config: dict[str, Any], dataset: str, system: str,
         "receiver": config["models"][receiver_key],
         "max_new_tokens": config["datasets"][dataset]["max_new_tokens"],
         "do_sample": False,
+        "position_chunk_size": config["transport"]["position_chunk_size"],
+        "target_chunk_size": config["transport"]["target_chunk_size"],
         "code_revision": _code_revision(),
     }
     if "_to_" in system:

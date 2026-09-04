@@ -282,7 +282,7 @@ Receiver cache identity 必须包含：
 5. receiver 完成 prefill、greedy decode 和任务评测；
 6. 原子写入 planner context、receiver result、计时和 provenance cache。
 
-position chunk 或 target-vocabulary chunk 仍可用于提高吞吐和进行 chunk-invariance 验证，但它们只是数学等价的可选实现优化。不得因为显存充足而 dense 化完整 `T`，也不得改变完整 vocabulary softmax、全部稀疏边或 prefix 顺序。
+正式配置使用 32-position chunk 和 8192-target-vocabulary chunk；二者都只用于等价的 FP32 分块累加，并已纳入 receiver cache identity。不同 chunk size 必须通过 dense oracle 的 chunk-invariance 验证。不得因为显存充足而 dense 化完整 `T`，也不得改变完整 vocabulary softmax、全部稀疏边或 prefix 顺序。
 
 Stage A 的 planner cache 仍然保留，用于确保确定性 trajectory 可复查、可复现；Stage A/Stage B 的逻辑边界是缓存与 provenance 边界，不代表必须卸载模型或使用不同 GPU 作业。
 

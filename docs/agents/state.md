@@ -2,7 +2,7 @@
 
 ## 2026-09-04 双向 Exact STT goal
 
-- 当前状态：本地 cross-vocab STT 配置/schema/cache/runtime、四个 task、6/12/3/1 matrix、Slurm 链与 cache-only 统计报告均已实现；干净 `origin/main` 基线上 `analysis/tests` 35 项全部通过。两个 runtime-v3 artifacts 均已按 `ModelWrapper` tokenizer 归一化策略通过 strict gate，正反向 source support 都完整。
+- 当前状态：本地 cross-vocab STT 配置/schema/cache/runtime、四个 task、6/12/3/1 matrix、Slurm 链与 cache-only 统计报告均已实现；干净 `origin/main` 基线上 `analysis/tests` 36 项全部通过。两个 runtime-v3 artifacts 均已按 `ModelWrapper` tokenizer 归一化策略通过 strict gate，正反向 source support 都完整。
 - 当前计划：推送 runtime-v3 配置更新；通过 SFTP 将两个 Git-ignored 大 artifact 放到 Guqq，在远端 pull 成功后通过 Slurm 依次运行双向 smoke、三数据集 integration smoke、12 个正式单元和最终报告。
 - 边界：保留 kernel-analysis-v1 的配置校验、矩阵计数、cache identity 与现有结果；STT 不导入 `exp/`，并沿用 analysis 的 dataset、prompt、CLI、cache/result 和 scheduler contracts。
 

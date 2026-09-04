@@ -15,6 +15,7 @@
     "causal_shift": false,
     "accumulation_dtype": "float32",
     "position_chunk_size": 32,
+    "target_chunk_size": 8192,
     "artifacts": {
       "qwen_to_mistral": {
         "path": "analysis/transport/qwen3_8b_to_mistral_nemo_openhermes_500k_runtime_v3.npz",

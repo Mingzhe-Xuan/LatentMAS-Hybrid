@@ -12,7 +12,8 @@ import torch
 
 from analysis.core.cache import CacheError, STTPlannerContextStore
 from analysis.core.config import load_config, load_stt_config
-from analysis.core.schemas import AnalysisItem, STTPlannerCacheIdentity, STTPlannerItemContext
+from analysis.core.schemas import (AnalysisItem, STTPlannerCacheIdentity,
+                                   STTPlannerItemContext, STTReceiverCondition)
 from analysis.core.stt import (STTArtifactError, STTArtifactSpec, exact_stt,
                                collect_stt_planner_item, evaluate_stt_item,
                                load_stt_artifact, pack_stt_prefix)
@@ -60,7 +61,19 @@ def test_stt_config_is_separate_from_kernel_config() -> None:
     assert stt.raw["systems"] == [
         "qwen_only", "mistral_only", "qwen_to_mistral", "mistral_to_qwen"
     ]
+    assert stt.raw["transport"]["target_chunk_size"] == 8192
     assert load_config("analysis/configs/kernel_analysis.yaml").raw["protocol_version"] == "kernel-analysis-v1"
+
+
+def test_stt_receiver_identity_is_chunk_sensitive() -> None:
+    condition = STTReceiverCondition(
+        dataset="aime2024", split="train", dataset_fingerprint="dataset",
+        selection_policy="first-1", system="qwen_only", receiver_model_id="qwen",
+        receiver_revision="revision", receiver_tokenizer_fingerprint="tokenizer",
+        receiver_prompt_hash="prompt", max_new_tokens=32,
+    )
+    assert condition.cache_id != dataclasses.replace(condition, target_chunk_size=1).cache_id
+    assert condition.cache_id != dataclasses.replace(condition, position_chunk_size=1).cache_id
 
 
 def test_load_stt_artifact_validates_csc_and_revisions(tmp_path: Path) -> None:
@@ -93,7 +106,7 @@ def test_exact_stt_matches_dense_oracle_and_chunks(tmp_path: Path) -> None:
     ])
     actual, diagnostics = exact_stt(hidden, lm_head, embeddings, artifact, tau=0.6)
     chunked, _ = exact_stt(hidden, lm_head, embeddings, artifact, tau=0.6,
-                           position_chunk_size=1)
+                           position_chunk_size=1, target_chunk_size=1)
 
     logits = lm_head(hidden).float()
     full = torch.softmax(logits / 0.6, dim=-1)

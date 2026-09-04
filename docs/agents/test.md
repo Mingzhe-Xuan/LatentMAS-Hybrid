@@ -20,13 +20,14 @@
 - 真实正向 artifact 静态 gate：通过；shape `[131069,151669]`，最大 source-column mass error `1.2299050666797484e-12`。
 - 真实反向 artifact 静态 gate：按预期 fail closed；source IDs 为 `3..131071`，缺少 Mistral IDs `0,1,2`，不满足完整 sender vocabulary。修复 artifact 前不能完成反向 GPU smoke 或 12 个正式单元。
 - Guqq 只读 tokenizer 预检：连接后的首个 `git pull --ff-only` 再次受 GitHub 网络阻塞，命令被中止，未绕过 pull 执行后续检查。
-- 干净 `origin/main` worktree回归：`35 passed`；早先全局 `%TEMP%` 权限导致 fixture setup error，改用 workspace 内显式 `--basetemp` 后全部通过。
+- 干净 `origin/main` worktree 回归：`36 passed`；早先全局 `%TEMP%` 权限导致 fixture setup error，改用 workspace 内显式 `--basetemp` 后全部通过。
 - 锁定 revision 的真实 tokenizer 已下载并离线加载：Mistral vocab 131072，Qwen vocab 151669。旧 builder fingerprints 为 opaque scheme，因此生成保留父 provenance 的 runtime-v2 artifacts，并改用 analysis 可重算的 token mapping + special IDs 指纹。
 - 正向 runtime-v2 strict gate：SHA `04b8c1e2a553eb61233fb71dfcea692a471fab14ac204359fab484a0c42d6944`，shape `[131069,151669]`，source IDs 完整，最大列质量误差 `1.2299050666797484e-12`。
 - 反向 runtime-v2 strict gate：SHA `9880bb4885dc792e3d61786b8dad5531cea70c796c578191c9fd0724e8b92b2c`，shape `[151643,131072]`，source IDs `0..131071` 完整，最大列质量误差 `7.178257988016412e-12`。
 - 运行时 tokenizer 策略回归：新增测试确认 artifact 工具复现 `ModelWrapper` 的 `pad=eos` 与 left-padding 行为。
 - 正向 runtime-v3 strict gate：SHA `b7ce13823f3a09750aa944dbe7f6a419df2d9c7987883a20be854d32be857e17`，shape `[131069,151669]`，Qwen source vocab 151669 完整，最大列质量误差 `1.2299050666797484e-12`。
 - 反向 runtime-v3 strict gate：SHA `257c46a67c2e68c7888cca5ae32e6f2d89afcd68c0faa8eeae386225bb30cd32`，shape `[151643,131072]`，Mistral source vocab 131072 完整且运行时 pad ID 为 2，最大列质量误差 `7.178257988016412e-12`。
+- Exact STT dense oracle：未分块输出与 position-size=1、target-size=1 的双重分块输出均在 `atol=1e-6` 内等于显式 dense 公式；正式 chunk sizes 已进入 receiver cache identity。
 
 ## 2026-09-04 perturbation 强度调整
 
