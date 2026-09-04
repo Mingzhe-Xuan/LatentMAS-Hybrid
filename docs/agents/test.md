@@ -31,6 +31,7 @@
 - Cache-only 依赖隔离：matrix 显式绑定每个 dataset 的四个 receiver cache IDs 及 report 所需的三个 analysis IDs；测试注入同 dataset/system 的 stale cache 后，analysis 只读取 job 声明的四个已验证 cache。
 - 结果报告：每个 dataset/system 明确输出 score、无法解析率、HumanEvalPlus 代码执行失败率和总错误率；两个预注册方向效应在 Markdown 与 JSON 中都报告 10,000 次 paired-bootstrap 95% CI、exact McNemar p 值与 discordant 数。
 - 模型版本一致性：Qwen/Mistral 的 40 位 commit hash 在正式配置中逐模型锁定，并写入全部 planner/baseline/cross job 与 cache identity；wrapper 将 revision 传给 tokenizer/model loader，任务在加载后再次 fail-closed 比较解析 revision。
+- Guqq 同步 gate：标准 HTTPS `git pull --ff-only` 在 30/45 秒窗口内重复返回 124；GitHub SSH Git remote 返回 `Permission denied (publickey)`。因此尚无可证明的 runtime-v3 远端工作树、双向 GPU smoke 或正式结果，goal 保持未完成。
 
 ## 2026-09-04 perturbation 强度调整
 
