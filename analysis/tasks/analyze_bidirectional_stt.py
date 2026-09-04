@@ -90,10 +90,16 @@ def run(args) -> int:
     cells = []
     for system in SYSTEMS:
         selected = grouped[system]
+        code_execution_failures = (
+            sum(row.get("prediction") is not None and row.get("error") is not None
+                for row in selected) / len(selected)
+            if job["dataset"] == "humanevalplus" else None
+        )
         cells.append({
             "system": system, "questions": len(selected),
             "accuracy": sum(bool(row["correct"]) for row in selected) / len(selected),
             "unparseable_rate": sum(row.get("prediction") is None for row in selected) / len(selected),
+            "code_execution_failure_rate": code_execution_failures,
             "error_rate": sum(row.get("error") is not None for row in selected) / len(selected),
         })
     effects = []

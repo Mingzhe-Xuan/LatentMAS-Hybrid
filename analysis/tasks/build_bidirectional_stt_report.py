@@ -90,7 +90,31 @@ def run(args) -> int:
     lines.extend(["", "## Paired effect macro averages", "",
                   "| Effect | Macro difference |", "|---|---:|"])
     lines.extend(f"| `{row['effect']}` | {row['macro_average']:+.6f} |" for row in macro_effects)
-    lines.extend(["", "Per-dataset 95% paired-bootstrap confidence intervals and exact McNemar tests are stored in `summaries/combined.json`.", ""])
+    lines.extend(["", "## Per-dataset system metrics", "",
+                  "| Dataset | System | Score | Unparseable | Code execution failure | Error |",
+                  "|---|---|---:|---:|---:|---:|"])
+    for dataset in expected_datasets:
+        for cell in summaries[dataset]["systems"]:
+            code_rate = cell.get("code_execution_failure_rate")
+            rendered_code_rate = "—" if code_rate is None else f"{float(code_rate):.6f}"
+            lines.append(
+                f"| `{dataset}` | `{cell['system']}` | {float(cell['accuracy']):.6f} | "
+                f"{float(cell['unparseable_rate']):.6f} | {rendered_code_rate} | "
+                f"{float(cell['error_rate']):.6f} |"
+            )
+    lines.extend(["", "## Per-dataset paired effects", "",
+                  "| Dataset | Effect | Difference | 95% paired-bootstrap CI | McNemar p | Discordant |",
+                  "|---|---|---:|---:|---:|---:|"])
+    for dataset in expected_datasets:
+        for effect in summaries[dataset]["effects"]:
+            bootstrap = effect["paired_bootstrap"]
+            mcnemar = effect["exact_mcnemar"]
+            lines.append(
+                f"| `{dataset}` | `{effect['effect']}` | {float(bootstrap['estimate']):+.6f} | "
+                f"[{float(bootstrap['ci_low']):+.6f}, {float(bootstrap['ci_high']):+.6f}] | "
+                f"{float(mcnemar['p_value']):.6g} | {int(mcnemar['discordant'])} |"
+            )
+    lines.extend(["", "Machine-readable per-dataset statistics and provenance are stored in `summaries/combined.json`.", ""])
     atomic_write_bytes(destination / "summaries" / "report.md", "\n".join(lines).encode("utf-8"))
     atomic_write_json(destination / "provenance" / "analysis_manifests.json", provenance)
     _finalize_result(destination, job, provenance)

@@ -6,6 +6,7 @@
 - 2026-09-04: Corrected artifact fingerprint generation to mirror `ModelWrapper` tokenizer normalization (`pad=eos` when absent and left padding), added a regression test, and generated runtime-v3 artifacts from commit `210e75f`. Both directions pass the production strict loader against the normalized real tokenizers; all 35 analysis tests pass.
 - 2026-09-04: Closed the target-vocabulary chunk acceptance gap with exact FP32 chunked embedding accumulation. Position and target chunk sizes are validated and included in receiver cache identity; the dense oracle now exercises both dimensions simultaneously.
 - 2026-09-04: Replaced cache-directory discovery in STT analysis/report with matrix-bound dependency IDs. New results now remain isolated from stale caches produced by earlier commits or smoke runs while retaining manifest/hash validation.
+- 2026-09-04: Expanded the unified report to expose every preregistered task metric and paired test directly, including HumanEvalPlus code-execution failure rate, 95% paired-bootstrap intervals, exact McNemar p-values, and discordant counts.
 
 - 2026-09-04: Removed `alpha=0.025` from the authorized formal perturbation grid. The perturbation matrix now has 99 rows and the three Receiver arrays have 297 unique cells; six targeted tests, matrix dry-run, and `git diff --check` pass.
 

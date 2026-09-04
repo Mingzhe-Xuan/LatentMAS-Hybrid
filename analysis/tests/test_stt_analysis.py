@@ -68,4 +68,7 @@ def test_stt_cache_only_analysis_and_report(tmp_path: Path) -> None:
     args.job_spec = json.dumps(report_job)
     assert run_report(args) == 0
     report = tmp_path / "result/build_bidirectional_stt_report/report-smoke/summaries/report.md"
-    assert "mistral_to_qwen_minus_qwen_only" in report.read_text()
+    rendered = report.read_text(encoding="utf-8")
+    assert "mistral_to_qwen_minus_qwen_only" in rendered
+    assert "95% paired-bootstrap CI" in rendered
+    assert "McNemar p" in rendered
