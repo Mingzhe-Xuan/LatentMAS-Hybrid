@@ -24,3 +24,8 @@ The matrix files are experiment inputs, not generated result caches. Planner
 contexts belong under `analysis_cache/stt_planner_contexts/`, receiver results
 under `analysis_cache/stt_receiver_evaluations/`, and summaries under
 `analysis_result/`.
+
+After transferring the ignored matrix files, run
+`python analysis/transport/validate_runtime_artifacts.py`. It performs the full
+tokenizer/revision/fingerprint, support, CSC, column-mass, and file-hash gate
+without loading model weights.

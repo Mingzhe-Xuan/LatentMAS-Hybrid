@@ -147,6 +147,8 @@ loader 必须使用 `allow_pickle=False`，并在加载模型后逐项检查：
 
 正式 runtime-v3 artifacts 已在上述锁定 revision 的实际 Mistral/Qwen tokenizer 上完成 fingerprint normalization 与 full-source-support 检查，其中 Mistral 按模型运行时策略将缺失的 pad token 绑定为 EOS（ID 2）。父 artifact 的 opaque builder fingerprint 仍保留在 `runtime_tokenizer_validation.parent_*_fingerprint`；运行时 gate 比较的是可由当前 `analysis` 独立重算的 `analysis-tokenizer-mapping-plus-special-ids-sha256-v1` 指纹。大文件不进入普通 Git，必须通过受控数据传输放入配置声明的路径，并在运行前再次校验配置 SHA-256。
 
+部署到计算环境后，先运行 `python analysis/transport/validate_runtime_artifacts.py --config analysis/configs/bidirectional_stt.yaml`。该命令不加载模型权重，但必须对两个方向执行与 evaluation 相同的 tokenizer normalization 和 strict artifact gate，并输出机器可读的通过记录。
+
 ## 5. Prompt 与生成协议
 
 不得为 STT 实验硬编码新的 system/user 文本。每道题必须直接调用现有 `analysis` prompt API：
