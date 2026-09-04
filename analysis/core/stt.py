@@ -73,7 +73,9 @@ class STTChunkDiagnostics:
 def transport_tokenizer_fingerprint(tokenizer: Any) -> str:
     """Canonical token-ID mapping fingerprint used at the runtime artifact gate."""
     rows = sorted((int(token_id), str(token)) for token, token_id in tokenizer.get_vocab().items())
-    return hashlib.sha256(canonical_json(rows).encode("utf-8")).hexdigest()
+    special = {name: getattr(tokenizer, name, None) for name in
+               ("bos_token_id", "eos_token_id", "pad_token_id", "unk_token_id")}
+    return hashlib.sha256(canonical_json({"rows": rows, "special": special}).encode("utf-8")).hexdigest()
 
 
 def _base_model(wrapper: Any) -> Any:

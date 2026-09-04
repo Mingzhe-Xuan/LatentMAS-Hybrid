@@ -11,6 +11,15 @@ bounds, tokenizer fingerprints, model revisions, finite non-negative weights,
 and unit source-column mass. It must never infer a missing direction by
 transposing another artifact.
 
+`complete_reverse_support.py` deterministically upgrades a Bayes-reversed
+ordinary-only sender support by encoding each missing source special token's
+literal representation with the target tokenizer. The same tool normalizes a
+full-support parent without adding columns. It preserves all parent
+columns, adds normalized fallback columns, records the exact tokens/weights and
+parent hash in provenance, binds both loaded tokenizer mappings and special IDs
+to a new runtime fingerprint while retaining the opaque parent fingerprints,
+and refuses to overwrite an output artifact.
+
 The matrix files are experiment inputs, not generated result caches. Planner
 contexts belong under `analysis_cache/stt_planner_contexts/`, receiver results
 under `analysis_cache/stt_receiver_evaluations/`, and summaries under

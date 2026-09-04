@@ -17,6 +17,7 @@ from analysis.core.stt import (STTArtifactError, STTArtifactSpec, exact_stt,
                                collect_stt_planner_item, evaluate_stt_item,
                                load_stt_artifact, pack_stt_prefix)
 from analysis.core.statistics import exact_mcnemar
+from analysis.transport.complete_reverse_support import complete_csc_source_support
 
 
 def _artifact(path: Path, *, source_ids: np.ndarray | None = None) -> STTArtifactSpec:
@@ -214,3 +215,26 @@ def test_planner_collection_and_stt_receiver_runtime(tmp_path: Path) -> None:
 def test_exact_mcnemar_counts_discordant_pairs() -> None:
     result = exact_mcnemar([1, 1, 0, 0], [1, 0, 1, 0])
     assert result == {"left_only": 1, "right_only": 1, "discordant": 2, "p_value": 1.0}
+
+
+def test_reverse_support_completion_adds_literal_special_columns() -> None:
+    class Source:
+        def __len__(self): return 4
+        def decode(self, ids, **kwargs): return "special-zero"
+        def convert_ids_to_tokens(self, token_id): return f"source-{token_id}"
+
+    class Target:
+        def __len__(self): return 4
+        def __call__(self, text, add_special_tokens=False): return {"input_ids": [2, 3, 2]}
+
+    completed, records = complete_csc_source_support(
+        indptr=np.array([0, 1, 2, 3]), indices=np.array([0, 1, 0]),
+        data=np.ones(3), source_token_ids=np.array([1, 2, 3]),
+        target_token_ids=np.arange(4), source_tokenizer=Source(), target_tokenizer=Target(),
+    )
+    assert completed["source_token_ids"].tolist() == [0, 1, 2, 3]
+    assert completed["indptr"].tolist() == [0, 2, 3, 4, 5]
+    assert completed["indices"][:2].tolist() == [2, 3]
+    assert completed["data"][:2].tolist() == pytest.approx([2 / 3, 1 / 3])
+    assert records == [{"source_token_id": 0, "literal": "special-zero",
+                        "target_token_ids": [2, 3], "weights": pytest.approx([2 / 3, 1 / 3])}]

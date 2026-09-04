@@ -18,5 +18,4 @@ analysis_result/
 analysis/jobs/
 state/analysis/
 slurm-*.out
-analysis/transport/qwen3_8b_to_mistral_nemo_openhermes_500k.npz
-analysis/transport/mistral_nemo_to_qwen3_8b_openhermes_500k.npz
+analysis/transport/*.npz
