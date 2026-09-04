@@ -20,6 +20,10 @@
 - 真实正向 artifact 静态 gate：通过；shape `[131069,151669]`，最大 source-column mass error `1.2299050666797484e-12`。
 - 真实反向 artifact 静态 gate：按预期 fail closed；source IDs 为 `3..131071`，缺少 Mistral IDs `0,1,2`，不满足完整 sender vocabulary。修复 artifact 前不能完成反向 GPU smoke 或 12 个正式单元。
 - Guqq 只读 tokenizer 预检：连接后的首个 `git pull --ff-only` 再次受 GitHub 网络阻塞，命令被中止，未绕过 pull 执行后续检查。
+- 干净 `origin/main` worktree 最终回归：`34 passed`；早先全局 `%TEMP%` 权限导致 fixture setup error，改用 workspace 内显式 `--basetemp` 后全部通过。
+- 锁定 revision 的真实 tokenizer 已下载并离线加载：Mistral vocab 131072，Qwen vocab 151669。旧 builder fingerprints 为 opaque scheme，因此生成保留父 provenance 的 runtime-v2 artifacts，并改用 analysis 可重算的 token mapping + special IDs 指纹。
+- 正向 runtime-v2 strict gate：SHA `04b8c1e2a553eb61233fb71dfcea692a471fab14ac204359fab484a0c42d6944`，shape `[131069,151669]`，source IDs 完整，最大列质量误差 `1.2299050666797484e-12`。
+- 反向 runtime-v2 strict gate：SHA `9880bb4885dc792e3d61786b8dad5531cea70c796c578191c9fd0724e8b92b2c`，shape `[151643,131072]`，source IDs `0..131071` 完整，最大列质量误差 `7.178257988016412e-12`。
 
 ## 2026-09-04 perturbation 强度调整
 

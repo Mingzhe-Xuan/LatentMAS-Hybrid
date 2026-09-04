@@ -108,17 +108,18 @@ OpenHermes-2.5 是 transport matrix 的构建语料，不是下游评测集，�
 
 | 方向 | 文件 | Shape `[target, source]` | NNZ | SHA-256 |
 |---|---|---:|---:|---|
-| Qwen3-8B → Mistral-Nemo | `analysis/transport/qwen3_8b_to_mistral_nemo_openhermes_500k.npz` | `[131069, 151669]` | 2,733,518 | `1495d5224aa83d979134fb7a225989af724753d9c9a0e7d755012d9b0b0aba97` |
-| Mistral-Nemo → Qwen3-8B | `analysis/transport/mistral_nemo_to_qwen3_8b_openhermes_500k.npz` | `[151669, 131069]` | 2,733,518 | `77905324ee9e063aef33c0e01a73c26bf4ac7907c8a48f972c463f5af3eb486f` |
+| Qwen3-8B → Mistral-Nemo | `analysis/transport/qwen3_8b_to_mistral_nemo_openhermes_500k_runtime_v2.npz` | `[131069, 151669]` | 2,733,518 | `04b8c1e2a553eb61233fb71dfcea692a471fab14ac204359fab484a0c42d6944` |
+| Mistral-Nemo → Qwen3-8B | `analysis/transport/mistral_nemo_to_qwen3_8b_openhermes_500k_full_vocab_runtime_v2.npz` | `[151643, 131072]` | 2,693,524 | `9880bb4885dc792e3d61786b8dad5531cea70c796c578191c9fd0724e8b92b2c` |
 
 已完成的静态检查：
 
 - 两个矩阵均为 CSC，`indptr` 长度分别等于 source support size 加一；
 - 所有 transport 权重均有限且非负；
 - 正向矩阵最大列质量误差约为 `1.23e-12`；
-- 反向矩阵最大列质量误差约为 `4.91e-14`；
-- 反向 artifact 的 source/target fingerprints 与正向 artifact 恰好互换；
-- 反向 artifact 标记为 `bayes-joint-reversal-v1`，不是直接把正向条件矩阵转置后使用。
+- 反向矩阵最大列质量误差约为 `7.18e-12`；
+- 两个正式 runtime-v2 artifacts 的 source support 都覆盖对应 sender tokenizer 的完整词表；target support 是对应 receiver 的 ordinary-token 子集；
+- 正反向矩阵分别独立构建，反向不是正向条件矩阵的转置；
+- runtime-v2 派生过程不改变已有 transport 数值边，只使用锁定 revision 的真实 tokenizer 将运行时 token→ID 映射与 special IDs 重新指纹化，并保留 parent SHA-256、原始 fingerprints 和构建 provenance。
 
 正向 artifact 记录的 revision 是：
 
@@ -142,10 +143,7 @@ loader 必须使用 `allow_pickle=False`，并在加载模型后逐项检查：
 
 任何检查失败都必须立即停止，不能自动转置矩阵、删除 fingerprint 检查或退化成 hard mapping。
 
-反向 artifact 当前还需要特别处理两个 provenance 问题：
-
-- metadata 标记了 `derivation.fingerprint_validation = "not-performed"`；正式实验前必须对实际 Mistral/Qwen tokenizer 执行验证并记录结果；
-- 反向 source support 继承自正向 target 的 `ordinary-only` support，而主协议要求完整 sender vocabulary。必须核对 Mistral tokenizer 的实际长度和缺失 token IDs。如果没有完整覆盖，应重新构建或补齐满足 full-source-support 的反向 artifact；在此之前只能作为明确标注的 provisional protocol，不能与正向 strict-exact 结果等价表述。
+正式 runtime-v2 artifacts 已在上述锁定 revision 的实际 Mistral/Qwen tokenizer 上完成 fingerprint normalization 与 full-source-support 检查。父 artifact 的 opaque builder fingerprint 仍保留在 `runtime_tokenizer_validation.parent_*_fingerprint`；运行时 gate 比较的是可由当前 `analysis` 独立重算的 `analysis-tokenizer-mapping-plus-special-ids-sha256-v1` 指纹。大文件不进入普通 Git，必须通过受控数据传输放入配置声明的路径，并在运行前再次校验配置 SHA-256。
 
 ## 5. Prompt 与生成协议
 

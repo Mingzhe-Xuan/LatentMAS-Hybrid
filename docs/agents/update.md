@@ -2,6 +2,7 @@
 
 - 2026-09-04: Started the bidirectional Exact STT goal from `analysis/transport/bidirectional_stt_analysis.md`. Audited the existing analysis architecture and confirmed it supports cross-model hidden alignment only when tokenizer mappings are identical; implementation now proceeds through a separate versioned cross-vocabulary STT runtime while preserving shared analysis contracts.
 - 2026-09-04: Implemented the local bidirectional Exact STT stack: strict config and directed CSC gate, full-context planner caches, FP32 sparse transport with dense-oracle/chunk tests, explicit prefix packing/positions/greedy decoding, four-system evaluation, paired cache-only statistics/report, exact 6/12/3/1 matrices, and Slurm orchestration. All 33 analysis tests pass. The forward artifact passes its static gate; the reverse artifact is correctly rejected because its source support omits Mistral token IDs 0, 1, and 2.
+- 2026-09-04: Re-audited a concurrently rebuilt reverse artifact, which now has complete Mistral source support. Generated runtime-v2 artifacts against the locked real tokenizers, preserving parent hashes/fingerprints while binding reproducible analysis mapping+special-ID fingerprints. Both directions pass the strict local gate; the clean-origin regression now passes 34 tests.
 
 - 2026-09-04: Removed `alpha=0.025` from the authorized formal perturbation grid. The perturbation matrix now has 99 rows and the three Receiver arrays have 297 unique cells; six targeted tests, matrix dry-run, and `git diff --check` pass.
 

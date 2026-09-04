@@ -8,3 +8,4 @@
 - 2026-09-03：远程预检未执行。安全审批要求用户明确授权连接该远程并执行 `git pull` 后方可继续；未尝试绕过审批。
 - 2026-09-03：用户已明确授权提交 GPU smoke 和 Git 操作。计划将本地验收版本推送到独立验证分支，连接后先 `git pull --ff-only`，再只做调度器检查与 scheduler submission。
 - 2026-09-04：计划连接 `Guqq` 做双向 Exact STT 的只读 artifact gate 预检：确认 Qwen3-8B 与 Mistral-Nemo tokenizer cache、真实 vocabulary 长度，并识别 artifact fingerprint scheme。连接后首先在 `/home/xmz/LatentMAS-Hybrid` 执行 `git pull --ff-only`；本次不在登录节点加载模型或执行推理，仅查看 tokenizer/config 缓存元数据。GPU smoke 仍须在本地源码提交推送并由服务器 pull 后通过 Slurm 提交。
+- 2026-09-04：两次 Guqq 预检连接均停在首个 `git pull --ff-only` 的 GitHub 网络等待中并被有界中止，因此没有绕过 pull 查看远端缓存。改在本地下载锁定 revision 的 tokenizer 完成 artifact normalization；待 main 更新推送后再次尝试 pull，成功后才上传 Git-ignored runtime-v2 matrices 并提交 Slurm smoke。

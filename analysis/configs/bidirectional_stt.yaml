@@ -17,16 +17,16 @@
     "position_chunk_size": 32,
     "artifacts": {
       "qwen_to_mistral": {
-        "path": "analysis/transport/qwen3_8b_to_mistral_nemo_openhermes_500k.npz",
-        "sha256": "1495d5224aa83d979134fb7a225989af724753d9c9a0e7d755012d9b0b0aba97",
+        "path": "analysis/transport/qwen3_8b_to_mistral_nemo_openhermes_500k_runtime_v2.npz",
+        "sha256": "04b8c1e2a553eb61233fb71dfcea692a471fab14ac204359fab484a0c42d6944",
         "source": "qwen",
         "target": "mistral",
         "source_revision": "b968826d9c46dd6066d109eabc6255188de91218",
         "target_revision": "04d8a90549d23fc6bd7f642064003592df51e9b3"
       },
       "mistral_to_qwen": {
-        "path": "analysis/transport/mistral_nemo_to_qwen3_8b_openhermes_500k.npz",
-        "sha256": "77905324ee9e063aef33c0e01a73c26bf4ac7907c8a48f972c463f5af3eb486f",
+        "path": "analysis/transport/mistral_nemo_to_qwen3_8b_openhermes_500k_full_vocab_runtime_v2.npz",
+        "sha256": "9880bb4885dc792e3d61786b8dad5531cea70c796c578191c9fd0724e8b92b2c",
         "source": "mistral",
         "target": "qwen",
         "source_revision": "04d8a90549d23fc6bd7f642064003592df51e9b3",
