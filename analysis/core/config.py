@@ -41,7 +41,7 @@ class AnalysisConfig:
             raise ValueError("canonical Kernel parameters do not match the protocol")
         if tuple(self.raw["experiments"]["scaling_k"]) != (0, 10, 20, 40, 80, 160):
             raise ValueError("invalid scaling grid")
-        if tuple(self.raw["experiments"]["perturbation_alpha"]) != (0, .01, .05, .1):
+        if tuple(self.raw["experiments"]["perturbation_alpha"]) != (0, .01, .025, .05, .1):
             raise ValueError("invalid perturbation grid")
         return self
 
