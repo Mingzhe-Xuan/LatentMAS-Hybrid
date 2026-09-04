@@ -148,6 +148,73 @@ class ReceiverCondition:
         return f"receiver-{stable_hash(self.identity_payload)[:24]}"
 
 
+@dataclass(frozen=True)
+class STTReceiverCondition:
+    dataset: str
+    split: str
+    dataset_fingerprint: str
+    selection_policy: str
+    system: Literal["qwen_only", "mistral_only", "qwen_to_mistral", "mistral_to_qwen"]
+    receiver_model_id: str
+    receiver_revision: str
+    receiver_tokenizer_fingerprint: str
+    receiver_prompt_hash: str
+    max_new_tokens: int
+    sender_manifest_hash: str = "receiver-only"
+    sender_model_id: str = "receiver-only"
+    sender_revision: str = "receiver-only"
+    sender_tokenizer_fingerprint: str = "receiver-only"
+    artifact_sha256: str = "none"
+    artifact_source_fingerprint: str = "none"
+    artifact_target_fingerprint: str = "none"
+    artifact_source_name: str = "none"
+    artifact_target_name: str = "none"
+    tau: float = 0.6
+    sender_budget: int = 1024
+    causal_shift: bool = False
+    do_sample: bool = False
+    accumulation_dtype: str = "float32"
+    context_scope: str = "full-prompt-plus-plan"
+    prefix_order: str = "aligned-sender-then-native-judger"
+    evaluator_version: str = "task-evaluator-v1"
+    code_revision: str = "unknown"
+    schema_version: str = "stt-receiver-v1"
+
+    def __post_init__(self) -> None:
+        cross = "_to_" in self.system
+        if self.max_new_tokens <= 0 or self.sender_budget != 1024:
+            raise ValueError("invalid STT generation budgets")
+        if self.tau != 0.6 or self.causal_shift or self.do_sample:
+            raise ValueError("STT receiver protocol must use tau=0.6, no shift and greedy decoding")
+        if self.accumulation_dtype != "float32":
+            raise ValueError("STT transport accumulation must use float32")
+        if (self.context_scope, self.prefix_order) != (
+                "full-prompt-plus-plan", "aligned-sender-then-native-judger"):
+            raise ValueError("STT context scope or prefix order is invalid")
+        if cross and any(value in {"receiver-only", "none", ""} for value in (
+                self.sender_manifest_hash, self.sender_model_id, self.sender_revision,
+                self.sender_tokenizer_fingerprint, self.artifact_sha256,
+                self.artifact_source_fingerprint, self.artifact_target_fingerprint)):
+            raise ValueError("cross-model STT condition has incomplete sender/artifact identity")
+
+    @property
+    def identity_payload(self) -> dict[str, Any]:
+        payload = dataclasses.asdict(self)
+        if "_to_" not in self.system:
+            payload.update(
+                sender_manifest_hash="receiver-only", sender_model_id="receiver-only",
+                sender_revision="receiver-only", sender_tokenizer_fingerprint="receiver-only",
+                artifact_sha256="none", artifact_source_fingerprint="none",
+                artifact_target_fingerprint="none", artifact_source_name="none",
+                artifact_target_name="none",
+            )
+        return payload
+
+    @property
+    def cache_id(self) -> str:
+        return f"stt-receiver-{stable_hash(self.identity_payload)[:24]}"
+
+
 @dataclass
 class SenderItemTrajectory:
     item_id: int
@@ -166,6 +233,68 @@ class SenderItemTrajectory:
             raise ValueError("one cumulative time is required per stored state")
         if any(b < a for a, b in zip(self.cumulative_sender_seconds, self.cumulative_sender_seconds[1:])):
             raise ValueError("cumulative sender times must be monotonic")
+
+
+@dataclass(frozen=True)
+class STTPlannerCacheIdentity:
+    dataset: str
+    split: str
+    dataset_fingerprint: str
+    selection_policy: str
+    model_id: str
+    model_revision: str
+    tokenizer_fingerprint: str
+    prompt_hash: str
+    sender_budget: int
+    code_revision: str = "unknown"
+    do_sample: bool = False
+    dtype: str = "bfloat16"
+    hidden_semantics: str = "final_layer_all_valid_positions_full_prompt_plus_plan_no_shift"
+    schema_version: str = "stt-planner-context-v1"
+
+    def __post_init__(self) -> None:
+        if self.sender_budget <= 0:
+            raise ValueError("sender_budget must be positive")
+        if self.do_sample:
+            raise ValueError("formal STT planner decoding must be greedy")
+
+    @property
+    def cache_id(self) -> str:
+        return f"stt-planner-{stable_hash(self)[:24]}"
+
+
+@dataclass
+class STTPlannerItemContext:
+    item_id: int
+    question_hash: str
+    hidden: torch.Tensor
+    input_ids: torch.Tensor
+    attention_mask: torch.Tensor
+    prompt_text: str
+    prompt_hash: str
+    messages_hash: str
+    plan_text: str
+    prompt_token_count: int
+    plan_token_count: int
+    generation_seconds: float
+    full_forward_seconds: float
+    hidden_semantics: str = "final_layer_all_valid_positions_full_prompt_plus_plan_no_shift"
+
+    def __post_init__(self) -> None:
+        if self.hidden.ndim != 2:
+            raise ValueError("STT hidden must have shape [sequence, hidden_dim]")
+        if self.input_ids.ndim != 1 or self.attention_mask.ndim != 1:
+            raise ValueError("STT token IDs and mask must be one-dimensional")
+        if self.hidden.shape[0] != len(self.input_ids) or len(self.input_ids) != len(self.attention_mask):
+            raise ValueError("STT hidden, token IDs and mask lengths must match")
+        if int(self.attention_mask.sum()) != len(self.attention_mask):
+            raise ValueError("stored STT planner contexts must not contain padding")
+        if self.prompt_token_count + self.plan_token_count != len(self.input_ids):
+            raise ValueError("STT full context must equal prompt plus plan")
+        if self.plan_token_count <= 0:
+            raise ValueError("STT planner output must be non-empty")
+        if self.generation_seconds < 0 or self.full_forward_seconds < 0:
+            raise ValueError("STT timings must be non-negative")
 
 
 @dataclass

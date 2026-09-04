@@ -1,5 +1,22 @@
 # Agent state
 
+## 2026-09-04 双向 Exact STT goal
+
+- 当前状态：本地 cross-vocab STT 配置/schema/cache/runtime、四个 task、6/12/3/1 matrix、Slurm 链与 cache-only 统计报告均已实现；`analysis/tests` 33 项全部通过。正向 artifact 通过静态 strict gate，反向 artifact 因缺少 Mistral source IDs `0,1,2` 被正确拒绝。
+- 当前计划：完成实现审计与提交同步；获得 full-source-support 的反向 artifact 后，在真实 tokenizer 上验证 fingerprint/revision，再通过 Slurm 依次运行双向 smoke、三数据集 integration smoke、12 个正式单元和最终报告。
+- 边界：保留 kernel-analysis-v1 的配置校验、矩阵计数、cache identity 与现有结果；STT 不导入 `exp/`，并沿用 analysis 的 dataset、prompt、CLI、cache/result 和 scheduler contracts。
+
+## 变更记录
+
+- 2026-09-04：将 `analysis/transport/bidirectional_stt_analysis.md` 作为 active goal 启动；确认 full-context STT 与 recurrent `SenderTrajectoryStore/evaluate_receiver_batch()` 语义不同，采用公共基础设施复用加独立版本化 STT store/runtime 的实现路径。
+- 2026-09-04：完成本地 STT 主体与回归验证（33 passed）；正式矩阵为 6 planner + 12 evaluation + 3 analysis + 1 report。artifact gate 证明正向满足静态协议，反向缺少 source IDs `0,1,2`，下一阶段需先修复该输入 artifact。
+
+## 2026-09-04 perturbation 网格调整
+
+- 当前状态：已按用户授权移除 `alpha=0.025`，配置、矩阵、测试和计划计数已同步并通过回归验证。
+- 当前计划：本次调整已完成；不改动 transport 等用户文件。
+- 变更记录：perturbation 正式矩阵由 126 行降为 99 行，三个 Receiver 数组由 324 个唯一单元降为 297 个。
+
 ## 当前状态
 
 `analysis/plan.md` 的本地实现与静态验收已完成：核心协议、缓存、任务、正式/冒烟矩阵和 PBS 链均已建立。真实 Qwen GPU smoke 尚未提交，因为当前修改还未被用户授权提交并推送到远程仓库；服务器规范禁止直接修改或传送未由 Git 管理的源码。

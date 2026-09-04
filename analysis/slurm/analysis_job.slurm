@@ -20,7 +20,7 @@ ARRAY_INDEX="${SLURM_ARRAY_TASK_ID:-0}"
 JOB_ID="${SLURM_JOB_ID:-local}"
 
 case "${TASK_NAME}" in
-  collect_sender_trajectories|evaluate_kernel_scaling|evaluate_perturbation_stability|evaluate_sender_receiver_performance|analyze_logit_entropy|analyze_kernel_scaling|analyze_aligned_state_variance|analyze_perturbation_stability|analyze_sender_receiver_performance|build_kernel_analysis_report) ;;
+  collect_sender_trajectories|evaluate_kernel_scaling|evaluate_perturbation_stability|evaluate_sender_receiver_performance|analyze_logit_entropy|analyze_kernel_scaling|analyze_aligned_state_variance|analyze_perturbation_stability|analyze_sender_receiver_performance|build_kernel_analysis_report|collect_stt_planner_contexts|evaluate_bidirectional_stt|analyze_bidirectional_stt|build_bidirectional_stt_report) ;;
   *) echo "ERROR: unknown TASK_NAME=${TASK_NAME}" >&2; exit 2 ;;
 esac
 case "${CACHE_MODE}" in reuse|cache-only|force) ;; *) echo "ERROR: invalid CACHE_MODE=${CACHE_MODE}" >&2; exit 2 ;; esac

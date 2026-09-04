@@ -1,5 +1,32 @@
 # Analysis test record
 
+## 2026-09-04 双向 Exact STT 实现计划
+
+- 配置/schema：STT 配置严格固定两模型、三 primary datasets、greedy、`tau=0.6`、sender budget 1024、双向 artifact hash；既有 `load_config()` 行为不变。
+- artifact：使用 `allow_pickle=False`，验证 CSC schema、shape、token IDs、fingerprint、revision、非负有限列质量、SHA-256 和方向；任一不匹配 fail closed。
+- 数值核心：小词表 dense oracle 对照稀疏 exact transport；验证完整 source softmax、全部边、FP32 累加、chunk invariance、无 causal shift 和 prefix 顺序。
+- cache：planner full-context 分片与 receiver 结果均使用内容身份、锁、原子写入、文件哈希和完整 manifest；损坏/身份冲突不得复用。
+- 矩阵/任务：正式矩阵行数精确为 6/12/3/1，无重复 ID；所有 task 复用统一 CLI，cache hit 返回 10，cache-only 缺失时不 rollout。
+- 回归/调度：现有 `analysis/tests`、kernel 正式矩阵计数和 PBS/Slurm contracts 不变；STT submitter dry-run 依赖正确。GPU 计算仅通过 Slurm 提交。
+- 实验验收：双方向单题 GPU smoke、每数据集至少四题 integration smoke、12 个正式单元及统一统计报告全部完成后，goal 才可标记 complete。
+
+### 当前实际结果
+
+- `python -m pytest analysis/tests -q`：33 passed；新增 STT 测试覆盖配置隔离、CSC gate、dense oracle、chunk invariance、prefix/position IDs、planner cache、fake causal-LM planner→judger、McNemar、6/12/3/1 矩阵和 cache-only report。
+- `python -m compileall -q analysis`：通过；四个新增 task 的统一 CLI `--help` 均通过。
+- `bash -n analysis/slurm/analysis_job.slurm` 与 `bash -n analysis/slurm/submit_stt_analysis.sh`：通过。
+- AIME first-1 submitter dry-run：正确生成 2 planner、4 evaluation、1 analysis、1 report，并形成 `afterok` 依赖链。
+- 正式 STT matrix dry-run：精确生成 6/12/3/1 行，无重复 effective cache ID。
+- 真实正向 artifact 静态 gate：通过；shape `[131069,151669]`，最大 source-column mass error `1.2299050666797484e-12`。
+- 真实反向 artifact 静态 gate：按预期 fail closed；source IDs 为 `3..131071`，缺少 Mistral IDs `0,1,2`，不满足完整 sender vocabulary。修复 artifact 前不能完成反向 GPU smoke 或 12 个正式单元。
+- Guqq 只读 tokenizer 预检：连接后的首个 `git pull --ff-only` 再次受 GitHub 网络阻塞，命令被中止，未绕过 pull 执行后续检查。
+
+## 2026-09-04 perturbation 强度调整
+
+- 计划：验证正式配置只允许 `alpha={0,0.01,0.05,0.10}`；每个 dataset-seed 包含 11 个 perturbation 单元；正式 perturbation 矩阵共 99 行，三个 Receiver 数组共 297 个唯一 cache ID。
+- 预期：`analysis/tests/test_contracts.py` 与 `analysis/tests/test_job_matrix.py` 全部通过，矩阵 dry-run 输出更新后的计数。
+- 实际：相关测试 `6 passed`；正式矩阵 dry-run 生成 99 个 perturbation 单元（每个 primary dataset 33 个），所有正式计数校验通过；`git diff --check` 通过。
+
 ## 2026-09-03 计划
 
 - 配置/schema：严格校验正式协议、稳定哈希和 clean 条件规范化。

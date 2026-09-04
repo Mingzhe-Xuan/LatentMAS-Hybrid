@@ -1,0 +1,38 @@
+{
+  "protocol_version": "bidirectional-stt-v1",
+  "models": {
+    "qwen": "Qwen/Qwen3-8B",
+    "mistral": "mistralai/Mistral-Nemo-Instruct-2407"
+  },
+  "datasets": {
+    "aime2024": {"split": "train", "family": "math", "max_new_tokens": 20000, "generation_batch_size": 1},
+    "humanevalplus": {"split": "test", "family": "code", "max_new_tokens": 4096, "generation_batch_size": 1},
+    "arc_challenge": {"split": "test", "family": "multiple_choice", "max_new_tokens": 2048, "generation_batch_size": 1}
+  },
+  "generation": {"sender_budget": 1024, "do_sample": false},
+  "transport": {
+    "tau": 0.6,
+    "causal_shift": false,
+    "accumulation_dtype": "float32",
+    "position_chunk_size": 32,
+    "artifacts": {
+      "qwen_to_mistral": {
+        "path": "analysis/transport/qwen3_8b_to_mistral_nemo_openhermes_500k.npz",
+        "sha256": "1495d5224aa83d979134fb7a225989af724753d9c9a0e7d755012d9b0b0aba97",
+        "source": "qwen",
+        "target": "mistral",
+        "source_revision": "b968826d9c46dd6066d109eabc6255188de91218",
+        "target_revision": "04d8a90549d23fc6bd7f642064003592df51e9b3"
+      },
+      "mistral_to_qwen": {
+        "path": "analysis/transport/mistral_nemo_to_qwen3_8b_openhermes_500k.npz",
+        "sha256": "77905324ee9e063aef33c0e01a73c26bf4ac7907c8a48f972c463f5af3eb486f",
+        "source": "mistral",
+        "target": "qwen",
+        "source_revision": "04d8a90549d23fc6bd7f642064003592df51e9b3",
+        "target_revision": "b968826d9c46dd6066d109eabc6255188de91218"
+      }
+    }
+  },
+  "systems": ["qwen_only", "mistral_only", "qwen_to_mistral", "mistral_to_qwen"]
+}

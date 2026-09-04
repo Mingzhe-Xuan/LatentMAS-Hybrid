@@ -12,7 +12,8 @@ from typing import Any, Iterable
 import torch
 
 from analysis.core.schemas import (DatasetSnapshot, ReceiverItemResult, SenderCacheIdentity,
-                                   SenderItemTrajectory, canonical_json,
+                                   SenderItemTrajectory, STTPlannerCacheIdentity,
+                                   STTPlannerItemContext, canonical_json,
                                    stable_hash)
 
 
@@ -279,11 +280,182 @@ class SenderTrajectoryStore:
         return manifest
 
 
+class STTPlannerContextStore:
+    """Immutable per-item full-context states for the Exact STT protocol."""
+
+    def __init__(self, root: str | Path):
+        self.root = Path(root) / "stt_planner_contexts"
+
+    def resolve(self, identity: STTPlannerCacheIdentity, *, cache_id: str | None = None) -> CacheHandle:
+        selected_id = cache_id or identity.cache_id
+        path = self.root / selected_id
+        expected_hash = stable_hash(identity)
+        manifest_path = path / "manifest.json"
+        if manifest_path.exists():
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if manifest.get("identity_hash") != expected_hash:
+                raise CacheError("existing STT planner cache has an incompatible identity")
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "contexts").mkdir(exist_ok=True)
+        return CacheHandle(selected_id, path, expected_hash)
+
+    def initialize(self, handle: CacheHandle, identity: STTPlannerCacheIdentity,
+                   expected_item_ids: Iterable[int], question_rows: list[dict[str, Any]],
+                   prompt_records: list[dict[str, Any]]) -> None:
+        manifest_path = handle.path / "manifest.json"
+        if manifest_path.exists():
+            return
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        questions_path = handle.path / "questions.parquet"
+        fd, temporary = tempfile.mkstemp(prefix=".questions.", suffix=".tmp", dir=handle.path)
+        os.close(fd)
+        try:
+            pq.write_table(pa.Table.from_pylist(question_rows), temporary)
+            os.replace(temporary, questions_path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        atomic_write_json(manifest_path, {
+            "cache_id": handle.cache_id,
+            "identity": dataclasses.asdict(identity),
+            "identity_hash": handle.identity_hash,
+            "schema_version": identity.schema_version,
+            "complete": False,
+            "expected_item_ids": list(expected_item_ids),
+            "questions_sha256": file_sha256(questions_path),
+            "prompt_records": prompt_records,
+            "files": {},
+            "hidden_semantics": identity.hidden_semantics,
+            "prompt_role": "planner",
+            "prompt_builder": "build_agent_message_sequential_latent_mas",
+        })
+
+    @staticmethod
+    def _item_path(handle: CacheHandle, item_id: int) -> Path:
+        return handle.path / "contexts" / f"item_{item_id:04d}.safetensors"
+
+    def missing_item_ids(self, handle: CacheHandle) -> list[int]:
+        manifest = json.loads((handle.path / "manifest.json").read_text(encoding="utf-8"))
+        missing = []
+        for item_id in manifest["expected_item_ids"]:
+            path = self._item_path(handle, item_id)
+            entry = manifest.get("files", {}).get(path.name)
+            if not path.exists() or not entry or file_sha256(path) != entry.get("sha256"):
+                missing.append(item_id)
+        return missing
+
+    def write_item(self, handle: CacheHandle, item: STTPlannerItemContext) -> None:
+        from safetensors.torch import save_file
+
+        path = self._item_path(handle, item.item_id)
+        tensors = {
+            "hidden": item.hidden.detach().cpu().contiguous(),
+            "input_ids": item.input_ids.detach().cpu().long().contiguous(),
+            "attention_mask": item.attention_mask.detach().cpu().long().contiguous(),
+            "timings": torch.tensor(
+                [item.generation_seconds, item.full_forward_seconds], dtype=torch.float64
+            ),
+        }
+        metadata = {
+            "item_id": str(item.item_id), "question_hash": item.question_hash,
+            "prompt_text": item.prompt_text, "prompt_hash": item.prompt_hash,
+            "messages_hash": item.messages_hash, "plan_text": item.plan_text,
+            "prompt_token_count": str(item.prompt_token_count),
+            "plan_token_count": str(item.plan_token_count),
+            "hidden_semantics": item.hidden_semantics,
+        }
+        fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+        os.close(fd)
+        try:
+            save_file(tensors, temporary, metadata=metadata)
+            os.replace(temporary, path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        manifest_path = handle.path / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["files"][path.name] = {
+            "sha256": file_sha256(path), "item_id": item.item_id,
+            "question_hash": item.question_hash,
+            "sequence_length": int(item.hidden.shape[0]),
+            "hidden_dim": int(item.hidden.shape[1]),
+            "dtype": str(item.hidden.dtype),
+            "prompt_hash": item.prompt_hash, "messages_hash": item.messages_hash,
+        }
+        atomic_write_json(manifest_path, manifest)
+
+    def _validate_item(self, handle: CacheHandle, item_id: int) -> None:
+        manifest = json.loads((handle.path / "manifest.json").read_text(encoding="utf-8"))
+        path = self._item_path(handle, item_id)
+        entry = manifest.get("files", {}).get(path.name)
+        if not path.exists() or not entry or file_sha256(path) != entry.get("sha256"):
+            raise CacheError(f"missing or corrupt STT planner shard: {item_id}")
+
+    def read_item(self, handle: CacheHandle, item_id: int) -> STTPlannerItemContext:
+        from safetensors import safe_open
+        from safetensors.torch import load_file
+
+        self._validate_item(handle, item_id)
+        path = self._item_path(handle, item_id)
+        tensors = load_file(path, device="cpu")
+        with safe_open(path, framework="pt", device="cpu") as stream:
+            metadata = stream.metadata()
+        timings = tensors["timings"].tolist()
+        return STTPlannerItemContext(
+            item_id=int(metadata["item_id"]), question_hash=metadata["question_hash"],
+            hidden=tensors["hidden"], input_ids=tensors["input_ids"],
+            attention_mask=tensors["attention_mask"], prompt_text=metadata["prompt_text"],
+            prompt_hash=metadata["prompt_hash"], messages_hash=metadata["messages_hash"],
+            plan_text=metadata["plan_text"], prompt_token_count=int(metadata["prompt_token_count"]),
+            plan_token_count=int(metadata["plan_token_count"]), generation_seconds=float(timings[0]),
+            full_forward_seconds=float(timings[1]), hidden_semantics=metadata["hidden_semantics"],
+        )
+
+    def finalize(self, handle: CacheHandle) -> dict[str, Any]:
+        missing = self.missing_item_ids(handle)
+        if missing:
+            raise CacheError(f"cannot finalize; missing STT planner items: {missing}")
+        manifest_path = handle.path / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["complete"] = True
+        manifest["question_count"] = len(manifest["expected_item_ids"])
+        manifest["state_count"] = sum(row["sequence_length"] for row in manifest["files"].values())
+        atomic_write_json(manifest_path, manifest)
+        manifest["manifest_hash"] = file_sha256(manifest_path)
+        return manifest
+
+    def validate(self, handle: CacheHandle) -> dict[str, Any]:
+        manifest_path = handle.path / "manifest.json"
+        if not manifest_path.exists():
+            raise CacheError("STT planner manifest does not exist")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("identity_hash") != handle.identity_hash or not manifest.get("complete"):
+            raise CacheError("STT planner cache is incomplete or incompatible")
+        questions = handle.path / "questions.parquet"
+        if not questions.exists() or file_sha256(questions) != manifest.get("questions_sha256"):
+            raise CacheError("STT planner questions table is missing or corrupt")
+        prompts = manifest.get("prompt_records", [])
+        if (len(prompts) != len(manifest["expected_item_ids"])
+                or any(record.get("role") != "planner"
+                       or hashlib.sha256(record.get("rendered", "").encode("utf-8")).hexdigest()
+                       != record.get("sha256") for record in prompts)):
+            raise CacheError("STT planner prompt provenance is missing or corrupt")
+        missing = self.missing_item_ids(handle)
+        if missing:
+            raise CacheError(f"STT planner cache has missing/corrupt items: {missing}")
+        manifest["manifest_hash"] = file_sha256(manifest_path)
+        return manifest
+
+
 class ReceiverEvaluationStore:
     """One immutable answers table per Receiver condition."""
 
-    def __init__(self, root: str | Path):
-        self.root = Path(root) / "receiver_evaluations"
+    def __init__(self, root: str | Path, *, namespace: str = "receiver_evaluations"):
+        if namespace not in {"receiver_evaluations", "stt_receiver_evaluations"}:
+            raise ValueError("unsupported Receiver cache namespace")
+        self.root = Path(root) / namespace
 
     def resolve(self, cache_id: str, identity_payload: dict[str, Any]) -> CacheHandle:
         identity_hash = stable_hash(identity_payload)
