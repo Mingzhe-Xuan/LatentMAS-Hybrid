@@ -23,14 +23,14 @@ def _row(item_id: int, correct: bool) -> ReceiverItemResult:
     )
 
 
-def _write_condition(root: Path, system: str, values: list[bool]) -> None:
+def _write_condition(root: Path, system: str, values: list[bool], *, cache_id: str | None = None) -> None:
     identity = {
-        "schema_version": "stt-receiver-v1", "dataset": "aime2024", "split": "train",
+        "schema_version": "stt-receiver-v2", "dataset": "aime2024", "split": "train",
         "dataset_fingerprint": "dataset", "selection_policy": "first-1",
         "system": system,
     }
     store = ReceiverEvaluationStore(root, namespace="stt_receiver_evaluations")
-    handle = store.resolve(f"cache-{system}", identity)
+    handle = store.resolve(cache_id or f"cache-{system}", identity)
     rows = [_row(index, value) for index, value in enumerate(values)]
     store.write(handle, identity, rows, {"accuracy": sum(values) / len(values)})
 
@@ -42,10 +42,12 @@ def test_stt_cache_only_analysis_and_report(tmp_path: Path) -> None:
     }
     for system, correctness in values.items():
         _write_condition(tmp_path / "cache", system, correctness)
+    _write_condition(tmp_path / "cache", "qwen_only", [False, False], cache_id="stale-cache")
     analysis_job = {
         "task": "analyze_bidirectional_stt", "effective_cache_id": "analysis-aime",
         "dataset": "aime2024", "split": "train", "cache_only": True,
         "selection_policy": "first-1", "smoke": True,
+        "receiver_cache_ids": {system: f"cache-{system}" for system in values},
     }
     args = SimpleNamespace(
         config=CONFIG, job_spec=json.dumps(analysis_job), job_matrix=None, job_index=None,
@@ -61,6 +63,7 @@ def test_stt_cache_only_analysis_and_report(tmp_path: Path) -> None:
     report_job = {
         "task": "build_bidirectional_stt_report", "effective_cache_id": "report-smoke",
         "datasets": ["aime2024"], "cache_only": True, "smoke": True,
+        "analysis_cache_ids": {"aime2024": "analysis-aime"},
     }
     args.job_spec = json.dumps(report_job)
     assert run_report(args) == 0

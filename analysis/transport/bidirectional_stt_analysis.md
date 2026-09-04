@@ -284,7 +284,7 @@ Receiver cache identity 必须包含：
 
 正式配置使用 32-position chunk 和 8192-target-vocabulary chunk；二者都只用于等价的 FP32 分块累加，并已纳入 receiver cache identity。不同 chunk size 必须通过 dense oracle 的 chunk-invariance 验证。不得因为显存充足而 dense 化完整 `T`，也不得改变完整 vocabulary softmax、全部稀疏边或 prefix 顺序。
 
-Stage A 的 planner cache 仍然保留，用于确保确定性 trajectory 可复查、可复现；Stage A/Stage B 的逻辑边界是缓存与 provenance 边界，不代表必须卸载模型或使用不同 GPU 作业。
+Stage A 的 planner cache 仍然保留，用于确保确定性 trajectory 可复查、可复现；Stage A/Stage B 的逻辑边界是缓存与 provenance 边界，不代表必须卸载模型或使用不同 GPU 作业。每个 dataset analysis job 必须显式列出其四个 receiver cache IDs，最终 report job 必须显式列出每个 dataset 的 analysis result ID；cache-only 阶段不得通过目录扫描猜测依赖，以免旧提交或旧 smoke cache 污染当前结果。
 
 若运行环境使用 Slurm，所有计算任务仍按 scheduler 规则提交；若正式高显存 GPU 使用其他调度环境，则保持相同任务入口、job matrix、cache identity 和依赖关系，不把调度器差异写入实验条件。
 

@@ -26,22 +26,30 @@ def run(args) -> int:
         return 10
     expected_selection = "first-1" if job.get("smoke") else "all"
     expected_datasets = tuple(job.get("datasets") or config["datasets"])
+    expected_analysis_ids = job.get("analysis_cache_ids", {})
+    if set(expected_analysis_ids) != set(expected_datasets):
+        raise CacheError("STT report job must name exactly one analysis result per dataset")
     root = Path(args.result_root) / "analyze_bidirectional_stt"
     summaries: dict[str, dict] = {}
     provenance = []
-    for path in root.glob("*/summaries/summary.json") if root.exists() else ():
+    for expected_dataset in expected_datasets:
+        analysis_id = expected_analysis_ids[expected_dataset]
+        path = root / analysis_id / "summaries" / "summary.json"
+        if not path.exists():
+            raise CacheError(f"required STT analysis result does not exist: {analysis_id}")
         summary = json.loads(path.read_text(encoding="utf-8"))
         dataset = summary.get("dataset")
-        if dataset not in expected_datasets or summary.get("selection_policy") != expected_selection:
-            continue
-        if dataset in summaries:
-            raise CacheError(f"ambiguous STT analysis summary for {dataset}")
+        if dataset != expected_dataset or summary.get("selection_policy") != expected_selection:
+            raise CacheError(f"STT analysis dependency identity mismatch: {analysis_id}")
         manifest_path = path.parents[1] / "run_manifest.json"
         if not manifest_path.exists():
             raise CacheError(f"STT analysis result has no run manifest: {path.parents[1]}")
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         relative = str(path.relative_to(path.parents[1])).replace("\\", "/")
-        if manifest.get("status") != "complete" or manifest.get("artifacts", {}).get(relative) != file_sha256(path):
+        if (manifest.get("status") != "complete"
+                or manifest.get("result_id") != analysis_id
+                or manifest.get("task") != "analyze_bidirectional_stt"
+                or manifest.get("artifacts", {}).get(relative) != file_sha256(path)):
             raise CacheError(f"STT analysis summary is not validated: {path}")
         summaries[dataset] = summary
         provenance.append({"path": str(manifest_path), "manifest_hash": file_sha256(manifest_path),

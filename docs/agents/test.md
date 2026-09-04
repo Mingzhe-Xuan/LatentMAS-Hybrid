@@ -28,6 +28,7 @@
 - 正向 runtime-v3 strict gate：SHA `b7ce13823f3a09750aa944dbe7f6a419df2d9c7987883a20be854d32be857e17`，shape `[131069,151669]`，Qwen source vocab 151669 完整，最大列质量误差 `1.2299050666797484e-12`。
 - 反向 runtime-v3 strict gate：SHA `257c46a67c2e68c7888cca5ae32e6f2d89afcd68c0faa8eeae386225bb30cd32`，shape `[151643,131072]`，Mistral source vocab 131072 完整且运行时 pad ID 为 2，最大列质量误差 `7.178257988016412e-12`。
 - Exact STT dense oracle：未分块输出与 position-size=1、target-size=1 的双重分块输出均在 `atol=1e-6` 内等于显式 dense 公式；正式 chunk sizes 已进入 receiver cache identity。
+- Cache-only 依赖隔离：matrix 显式绑定每个 dataset 的四个 receiver cache IDs 及 report 所需的三个 analysis IDs；测试注入同 dataset/system 的 stale cache 后，analysis 只读取 job 声明的四个已验证 cache。
 
 ## 2026-09-04 perturbation 强度调整
 

@@ -18,6 +18,16 @@ def test_formal_stt_matrix_counts_and_systems() -> None:
         "qwen_only", "mistral_only", "qwen_to_mistral", "mistral_to_qwen"
     }
     assert len({row["effective_cache_id"] for rows in matrices.values() for row in rows}) == 22
+    evaluations = {(row["dataset"], row["system"]): row["effective_cache_id"]
+                   for row in evaluation}
+    for row in matrices["stt_analysis.jsonl"]:
+        assert row["receiver_cache_ids"] == {
+            system: evaluations[(row["dataset"], system)]
+            for system in ("qwen_only", "mistral_only", "qwen_to_mistral", "mistral_to_qwen")
+        }
+    assert matrices["stt_report.jsonl"][0]["analysis_cache_ids"] == {
+        row["dataset"]: row["effective_cache_id"] for row in matrices["stt_analysis.jsonl"]
+    }
 
 
 def test_stt_smoke_matrix_uses_first_one_and_directional_artifacts() -> None:

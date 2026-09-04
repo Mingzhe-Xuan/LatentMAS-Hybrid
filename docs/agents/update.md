@@ -5,6 +5,7 @@
 - 2026-09-04: Re-audited a concurrently rebuilt reverse artifact, which now has complete Mistral source support. Generated runtime-v2 artifacts against the locked real tokenizers, preserving parent hashes/fingerprints while binding reproducible analysis mapping+special-ID fingerprints. Both directions pass the strict local gate; the clean-origin regression now passes 34 tests.
 - 2026-09-04: Corrected artifact fingerprint generation to mirror `ModelWrapper` tokenizer normalization (`pad=eos` when absent and left padding), added a regression test, and generated runtime-v3 artifacts from commit `210e75f`. Both directions pass the production strict loader against the normalized real tokenizers; all 35 analysis tests pass.
 - 2026-09-04: Closed the target-vocabulary chunk acceptance gap with exact FP32 chunked embedding accumulation. Position and target chunk sizes are validated and included in receiver cache identity; the dense oracle now exercises both dimensions simultaneously.
+- 2026-09-04: Replaced cache-directory discovery in STT analysis/report with matrix-bound dependency IDs. New results now remain isolated from stale caches produced by earlier commits or smoke runs while retaining manifest/hash validation.
 
 - 2026-09-04: Removed `alpha=0.025` from the authorized formal perturbation grid. The perturbation matrix now has 99 rows and the three Receiver arrays have 297 unique cells; six targeted tests, matrix dry-run, and `git diff --check` pass.
 

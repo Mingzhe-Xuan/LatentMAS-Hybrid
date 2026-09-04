@@ -85,6 +85,7 @@ def build_stt_matrices(config_path: str | Path, *, smoke: bool = False,
     config = load_stt_config(config_path).raw
     datasets = [name for name in PRIMARY_DATASETS if dataset_filter in (None, name)]
     result = {name: [] for name in MATRIX_TASKS}
+    analysis_cache_ids: dict[str, str] = {}
     for dataset in datasets:
         task = config["datasets"][dataset]
         for model_key in ("qwen", "mistral"):
@@ -96,6 +97,7 @@ def build_stt_matrices(config_path: str | Path, *, smoke: bool = False,
                 sender_budget=config["generation"]["sender_budget"],
                 max_samples=1 if smoke else None,
             ))
+        receiver_cache_ids: dict[str, str] = {}
         for system in config["systems"]:
             receiver_key = "qwen" if system in {"qwen_only", "mistral_to_qwen"} else "mistral"
             sender_key = system.split("_to_", 1)[0] if "_to_" in system else None
@@ -112,24 +114,34 @@ def build_stt_matrices(config_path: str | Path, *, smoke: bool = False,
                 "generation_batch_size": task["generation_batch_size"],
                 "max_samples": 1 if smoke else None,
             }
+            receiver_cache_id = evaluation_cache_id(config, dataset, system, smoke=smoke)
+            receiver_cache_ids[system] = receiver_cache_id
             result["stt_evaluation.jsonl"].append(_row(
                 "evaluate_bidirectional_stt",
-                evaluation_cache_id(config, dataset, system, smoke=smoke), **fields,
+                receiver_cache_id, **fields,
             ))
+        analysis_cache_id = _cache_id(
+            "stt-analysis", {"protocol": config["protocol_version"],
+                             "dataset": dataset, "smoke": smoke,
+                             "receiver_cache_ids": receiver_cache_ids,
+                             "code_revision": _code_revision()},
+        )
+        analysis_cache_ids[dataset] = analysis_cache_id
         result["stt_analysis.jsonl"].append(_row(
             "analyze_bidirectional_stt",
-            _cache_id("stt-analysis", {"protocol": config["protocol_version"],
-                                       "dataset": dataset, "smoke": smoke,
-                                       "code_revision": _code_revision()}),
+            analysis_cache_id,
             dataset=dataset, split=task["split"], cache_only=True,
             selection_policy="first-1" if smoke else "all", smoke=smoke,
+            receiver_cache_ids=receiver_cache_ids,
         ))
     result["stt_report.jsonl"].append(_row(
         "build_bidirectional_stt_report",
         _cache_id("stt-report", {"protocol": config["protocol_version"],
                                  "datasets": datasets, "smoke": smoke,
+                                 "analysis_cache_ids": analysis_cache_ids,
                                  "code_revision": _code_revision()}),
         datasets=datasets, cache_only=True, smoke=smoke,
+        analysis_cache_ids=analysis_cache_ids,
     ))
     return result
 
