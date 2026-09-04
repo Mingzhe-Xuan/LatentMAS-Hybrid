@@ -108,8 +108,8 @@ OpenHermes-2.5 是 transport matrix 的构建语料，不是下游评测集，�
 
 | 方向 | 文件 | Shape `[target, source]` | NNZ | SHA-256 |
 |---|---|---:|---:|---|
-| Qwen3-8B → Mistral-Nemo | `analysis/transport/qwen3_8b_to_mistral_nemo_openhermes_500k_runtime_v2.npz` | `[131069, 151669]` | 2,733,518 | `04b8c1e2a553eb61233fb71dfcea692a471fab14ac204359fab484a0c42d6944` |
-| Mistral-Nemo → Qwen3-8B | `analysis/transport/mistral_nemo_to_qwen3_8b_openhermes_500k_full_vocab_runtime_v2.npz` | `[151643, 131072]` | 2,693,524 | `9880bb4885dc792e3d61786b8dad5531cea70c796c578191c9fd0724e8b92b2c` |
+| Qwen3-8B → Mistral-Nemo | `analysis/transport/qwen3_8b_to_mistral_nemo_openhermes_500k_runtime_v3.npz` | `[131069, 151669]` | 2,733,518 | `b7ce13823f3a09750aa944dbe7f6a419df2d9c7987883a20be854d32be857e17` |
+| Mistral-Nemo → Qwen3-8B | `analysis/transport/mistral_nemo_to_qwen3_8b_openhermes_500k_full_vocab_runtime_v3.npz` | `[151643, 131072]` | 2,693,524 | `257c46a67c2e68c7888cca5ae32e6f2d89afcd68c0faa8eeae386225bb30cd32` |
 
 已完成的静态检查：
 
@@ -117,9 +117,9 @@ OpenHermes-2.5 是 transport matrix 的构建语料，不是下游评测集，�
 - 所有 transport 权重均有限且非负；
 - 正向矩阵最大列质量误差约为 `1.23e-12`；
 - 反向矩阵最大列质量误差约为 `7.18e-12`；
-- 两个正式 runtime-v2 artifacts 的 source support 都覆盖对应 sender tokenizer 的完整词表；target support 是对应 receiver 的 ordinary-token 子集；
+- 两个正式 runtime-v3 artifacts 的 source support 都覆盖对应 sender tokenizer 的完整词表；target support 是对应 receiver 的 ordinary-token 子集；
 - 正反向矩阵分别独立构建，反向不是正向条件矩阵的转置；
-- runtime-v2 派生过程不改变已有 transport 数值边，只使用锁定 revision 的真实 tokenizer 将运行时 token→ID 映射与 special IDs 重新指纹化，并保留 parent SHA-256、原始 fingerprints 和构建 provenance。
+- runtime-v3 派生过程不改变已有 transport 数值边，只使用锁定 revision 的真实 tokenizer，并复现 `ModelWrapper` 的 pad-token/left-padding 归一化，再将运行时 token→ID 映射与 special IDs 重新指纹化；parent SHA-256、原始 fingerprints 和构建 provenance 均被保留。
 
 正向 artifact 记录的 revision 是：
 
@@ -143,7 +143,7 @@ loader 必须使用 `allow_pickle=False`，并在加载模型后逐项检查：
 
 任何检查失败都必须立即停止，不能自动转置矩阵、删除 fingerprint 检查或退化成 hard mapping。
 
-正式 runtime-v2 artifacts 已在上述锁定 revision 的实际 Mistral/Qwen tokenizer 上完成 fingerprint normalization 与 full-source-support 检查。父 artifact 的 opaque builder fingerprint 仍保留在 `runtime_tokenizer_validation.parent_*_fingerprint`；运行时 gate 比较的是可由当前 `analysis` 独立重算的 `analysis-tokenizer-mapping-plus-special-ids-sha256-v1` 指纹。大文件不进入普通 Git，必须通过受控数据传输放入配置声明的路径，并在运行前再次校验配置 SHA-256。
+正式 runtime-v3 artifacts 已在上述锁定 revision 的实际 Mistral/Qwen tokenizer 上完成 fingerprint normalization 与 full-source-support 检查，其中 Mistral 按模型运行时策略将缺失的 pad token 绑定为 EOS（ID 2）。父 artifact 的 opaque builder fingerprint 仍保留在 `runtime_tokenizer_validation.parent_*_fingerprint`；运行时 gate 比较的是可由当前 `analysis` 独立重算的 `analysis-tokenizer-mapping-plus-special-ids-sha256-v1` 指纹。大文件不进入普通 Git，必须通过受控数据传输放入配置声明的路径，并在运行前再次校验配置 SHA-256。
 
 ## 5. Prompt 与生成协议
 

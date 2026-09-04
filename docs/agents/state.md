@@ -2,8 +2,8 @@
 
 ## 2026-09-04 双向 Exact STT goal
 
-- 当前状态：本地 cross-vocab STT 配置/schema/cache/runtime、四个 task、6/12/3/1 matrix、Slurm 链与 cache-only 统计报告均已实现；干净 `origin/main` 基线上 `analysis/tests` 34 项全部通过。两个 runtime-v2 artifacts 均已在锁定 revision 的真实 tokenizer 上通过 strict gate，正反向 source support 都完整。
-- 当前计划：推送 runtime-normalization 工具与配置更新；通过 `scp` 将两个 Git-ignored 大 artifact 放到 Guqq，在远端 pull 成功后通过 Slurm 依次运行双向 smoke、三数据集 integration smoke、12 个正式单元和最终报告。
+- 当前状态：本地 cross-vocab STT 配置/schema/cache/runtime、四个 task、6/12/3/1 matrix、Slurm 链与 cache-only 统计报告均已实现；干净 `origin/main` 基线上 `analysis/tests` 35 项全部通过。两个 runtime-v3 artifacts 均已按 `ModelWrapper` tokenizer 归一化策略通过 strict gate，正反向 source support 都完整。
+- 当前计划：推送 runtime-v3 配置更新；通过 SFTP 将两个 Git-ignored 大 artifact 放到 Guqq，在远端 pull 成功后通过 Slurm 依次运行双向 smoke、三数据集 integration smoke、12 个正式单元和最终报告。
 - 边界：保留 kernel-analysis-v1 的配置校验、矩阵计数、cache identity 与现有结果；STT 不导入 `exp/`，并沿用 analysis 的 dataset、prompt、CLI、cache/result 和 scheduler contracts。
 
 ## 变更记录
@@ -11,6 +11,7 @@
 - 2026-09-04：将 `analysis/transport/bidirectional_stt_analysis.md` 作为 active goal 启动；确认 full-context STT 与 recurrent `SenderTrajectoryStore/evaluate_receiver_batch()` 语义不同，采用公共基础设施复用加独立版本化 STT store/runtime 的实现路径。
 - 2026-09-04：完成本地 STT 主体与回归验证（33 passed）；正式矩阵为 6 planner + 12 evaluation + 3 analysis + 1 report。artifact gate 证明正向满足静态协议，反向缺少 source IDs `0,1,2`，下一阶段需先修复该输入 artifact。
 - 2026-09-04：检测到用户并发更新的反向 artifact 已独立重建为 full-source-support。使用锁定 Qwen/Mistral revision 生成 runtime-v2 派生 artifacts，以 analysis 规范重新绑定完整 token→ID mapping 与 special IDs；正向 `[131069,151669]`、反向 `[151643,131072]` 均通过 SHA、revision、fingerprint、support 和列质量 gate。
+- 2026-09-04：发现 `ModelWrapper` 会把 Mistral 的缺失 pad token 绑定为 EOS，因而 runtime-v2 的原始-tokenizer指纹与真实执行状态不一致。生成 runtime-v3，并使用同一归一化函数和 strict loader 重新验证；Qwen vocab 151669、Mistral vocab 131072/pad 2，双向 gate 均通过。
 
 ## 2026-09-04 perturbation 网格调整
 
