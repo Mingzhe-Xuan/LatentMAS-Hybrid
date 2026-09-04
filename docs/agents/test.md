@@ -36,6 +36,7 @@
 - Guqq runtime-v3 preflight：通过；Qwen/Mistral vocab 分别为 151669/131072，pad IDs 为 151643/2；正反向 shapes `[131069,151669]`/`[151643,131072]`，SHA 与配置一致，最大列质量误差分别为 `1.2299050666797484e-12`/`7.178257988016412e-12`。
 - Guqq planner smoke：Qwen 与 Mistral 均完成。旧 Mistral 失败由缺少 `refs/main` 引起；显式传入锁定 revision 后直接命中完整 snapshot。
 - Guqq evaluation smoke 332：两个 baseline 暴露空 nested struct 的 PyArrow 写入缺陷，现由 Parquet cache-write 回归覆盖并修复；两个 cross 单元在第二模型 `.to(cuda)` 时 OOM，因此不构成 STT runtime 通过证据。
+- Guqq baseline re-smoke 338（revision `595ba1c`）：Qwen `339_1` 用时约 2m53s、Mistral `338_2` 用时约 32s，ledger 均为 COMPLETED；两个内容寻址 receiver manifests 已写出。baseline Parquet 修复获得真实模型端到端验证。
 
 ## 2026-09-04 perturbation 强度调整
 
