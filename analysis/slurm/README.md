@@ -26,11 +26,15 @@ submitter:
 ```bash
 bash analysis/slurm/submit_stt_analysis.sh --dataset aime2024 --smoke --dry-run
 bash analysis/slurm/submit_stt_analysis.sh --dataset aime2024 --smoke
+bash analysis/slurm/submit_stt_analysis.sh --smoke --max-samples 4
 bash analysis/slurm/submit_stt_analysis.sh --stage all
 ```
 
 Its dependency chain is planner-context collection → four-system evaluation →
 cache-only paired analysis → report. Formal matrix counts are 6/12/3/1.
+The first command is the one-question protocol smoke; `--smoke --max-samples 4`
+creates the required first-four integration smoke for all three primary datasets
+with distinct cache identities.
 
 The Guqq defaults are partition `compute`, `gpu:1`, 4 CPUs, 64 GiB RAM, one
 running array element, and a 72-hour limit. Override them with

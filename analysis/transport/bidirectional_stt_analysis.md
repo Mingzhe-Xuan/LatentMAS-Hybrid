@@ -361,7 +361,7 @@ Delta_M_to_Q = score(mistral_to_qwen) - score(qwen_only)
 13. 验证 cache identity 对方向、artifact、tau、模型 revision 和 prompt 敏感；
 14. 验证 STT task 可由现有 `analysis_job.slurm` worker 调度，并通过 submitter dry-run 的依赖图检查；
 15. Slurm 单题、双方向 GPU smoke；
-16. 每个 primary dataset 至少四题的 integration smoke；
+16. 使用 `--smoke --max-samples 4` 运行每个 primary dataset 前四题的 integration smoke；其 selection policy 固定为 `first-4`，不得复用 `first-1` cache；
 17. 运行 12 个正式主实验单元；
 18. cache-only 统计与最终报告。
 

@@ -63,6 +63,7 @@ def test_stt_cache_only_analysis_and_report(tmp_path: Path) -> None:
     report_job = {
         "task": "build_bidirectional_stt_report", "effective_cache_id": "report-smoke",
         "datasets": ["aime2024"], "cache_only": True, "smoke": True,
+        "selection_policy": "first-1",
         "analysis_cache_ids": {"aime2024": "analysis-aime"},
     }
     args.job_spec = json.dumps(report_job)

@@ -24,7 +24,9 @@ def run(args) -> int:
         raise ValueError("job task does not match entry point")
     if _validated_result_hit(args, job):
         return 10
-    expected_selection = "first-1" if job.get("smoke") else "all"
+    expected_selection = job.get("selection_policy")
+    if not isinstance(expected_selection, str) or not expected_selection:
+        raise CacheError("STT report job has no selection policy")
     expected_datasets = tuple(job.get("datasets") or config["datasets"])
     expected_analysis_ids = job.get("analysis_cache_ids", {})
     if set(expected_analysis_ids) != set(expected_datasets):

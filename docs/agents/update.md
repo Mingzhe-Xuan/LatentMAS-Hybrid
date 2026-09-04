@@ -8,6 +8,7 @@
 - 2026-09-04: Replaced cache-directory discovery in STT analysis/report with matrix-bound dependency IDs. New results now remain isolated from stale caches produced by earlier commits or smoke runs while retaining manifest/hash validation.
 - 2026-09-04: Expanded the unified report to expose every preregistered task metric and paired test directly, including HumanEvalPlus code-execution failure rate, 95% paired-bootstrap intervals, exact McNemar p-values, and discordant counts.
 - 2026-09-04: Pinned Qwen and Mistral model revisions for every planner, baseline, and cross-vocabulary cell. The shared wrapper accepts an optional revision without changing existing callers, and STT tasks verify the resolved commit after loading.
+- 2026-09-05: Added an explicit first-four integration-smoke mode (`--smoke --max-samples 4`) across all primary datasets. Its selection policy and cache IDs are distinct from the first-one smoke and full formal runs.
 
 - 2026-09-04: Removed `alpha=0.025` from the authorized formal perturbation grid. The perturbation matrix now has 99 rows and the three Receiver arrays have 297 unique cells; six targeted tests, matrix dry-run, and `git diff --check` pass.
 

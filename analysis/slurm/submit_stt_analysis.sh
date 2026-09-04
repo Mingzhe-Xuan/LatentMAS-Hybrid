@@ -4,6 +4,7 @@ set -euo pipefail
 STAGE=all
 DATASET=""
 SMOKE=false
+MAX_SAMPLES=""
 DRY_RUN=false
 MAX_RUNNING="${SLURM_MAX_RUNNING:-1}"
 while (( $# )); do
@@ -11,6 +12,7 @@ while (( $# )); do
     --stage) STAGE="$2"; shift 2 ;;
     --dataset) DATASET="$2"; shift 2 ;;
     --smoke) SMOKE=true; shift ;;
+    --max-samples) MAX_SAMPLES="$2"; shift 2 ;;
     --dry-run) DRY_RUN=true; shift ;;
     *) echo "ERROR: unknown argument $1" >&2; exit 2 ;;
   esac
@@ -35,6 +37,10 @@ mkdir -p state/analysis
 BUILD=("${PYTHON_BIN}" analysis/pbs/build_stt_job_matrix.py --config "${CONFIG_PATH}" --output analysis/jobs)
 [[ -n "${DATASET}" ]] && BUILD+=(--dataset "${DATASET}")
 [[ "${SMOKE}" == true ]] && BUILD+=(--smoke)
+if [[ -n "${MAX_SAMPLES}" ]]; then
+  [[ "${SMOKE}" == true ]] || { echo "ERROR: --max-samples requires --smoke" >&2; exit 2; }
+  BUILD+=(--max-samples "${MAX_SAMPLES}")
+fi
 "${BUILD[@]}"
 
 submit_array() {
