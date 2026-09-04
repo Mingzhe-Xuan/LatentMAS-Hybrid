@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -77,3 +78,13 @@ def model_revision(wrapper: Any) -> str:
     if not revision:
         raise ValueError("loaded model does not expose a resolved revision or source path")
     return str(revision)
+
+
+def repository_revision() -> str:
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True,
+    )
+    revision = completed.stdout.strip()
+    if len(revision) != 40:
+        raise ValueError("repository does not expose a full Git revision")
+    return revision

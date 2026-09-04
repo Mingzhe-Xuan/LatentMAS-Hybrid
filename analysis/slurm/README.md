@@ -19,6 +19,19 @@ bash analysis/slurm/submit_analysis.sh --stage collect
 bash analysis/slurm/submit_analysis.sh --stage all
 ```
 
+The bidirectional cross-vocabulary Exact STT protocol uses the same worker,
+ledger, cache/result roots, and array conventions through a separate matrix and
+submitter:
+
+```bash
+bash analysis/slurm/submit_stt_analysis.sh --dataset aime2024 --smoke --dry-run
+bash analysis/slurm/submit_stt_analysis.sh --dataset aime2024 --smoke
+bash analysis/slurm/submit_stt_analysis.sh --stage all
+```
+
+Its dependency chain is planner-context collection → four-system evaluation →
+cache-only paired analysis → report. Formal matrix counts are 6/12/3/1.
+
 The Guqq defaults are partition `compute`, `gpu:1`, 4 CPUs, 64 GiB RAM, one
 running array element, and a 72-hour limit. Override them with
 `SLURM_PARTITION`, `SLURM_GRES`, `SLURM_CPUS`, `SLURM_MEMORY`,

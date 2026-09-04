@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import math
 from typing import Callable, Iterable, Sequence
 
 import numpy as np
@@ -54,3 +55,19 @@ def robust_slope(x: Sequence[float], y: Sequence[float]) -> float:
     slopes = [(yv[j] - yv[i]) / (xv[j] - xv[i]) for i in range(len(xv))
               for j in range(i + 1, len(xv)) if xv[j] != xv[i]]
     return float(np.median(slopes))
+
+
+def exact_mcnemar(left: Sequence[bool | int], right: Sequence[bool | int]) -> dict[str, float | int]:
+    a, b = np.asarray(left, dtype=bool), np.asarray(right, dtype=bool)
+    if a.shape != b.shape or a.ndim != 1 or not len(a):
+        raise ValueError("McNemar inputs must be non-empty equal-length vectors")
+    left_only = int(np.sum(a & ~b))
+    right_only = int(np.sum(~a & b))
+    discordant = left_only + right_only
+    if discordant == 0:
+        p_value = 1.0
+    else:
+        tail = sum(math.comb(discordant, k) for k in range(min(left_only, right_only) + 1))
+        p_value = min(1.0, 2.0 * tail / (2 ** discordant))
+    return {"left_only": left_only, "right_only": right_only,
+            "discordant": discordant, "p_value": float(p_value)}

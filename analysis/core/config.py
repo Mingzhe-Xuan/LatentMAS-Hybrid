@@ -41,8 +41,56 @@ class AnalysisConfig:
             raise ValueError("canonical Kernel parameters do not match the protocol")
         if tuple(self.raw["experiments"]["scaling_k"]) != (0, 10, 20, 40, 80, 160):
             raise ValueError("invalid scaling grid")
-        if tuple(self.raw["experiments"]["perturbation_alpha"]) != (0, .01, .025, .05, .1):
+        if tuple(self.raw["experiments"]["perturbation_alpha"]) != (0, .01, .05, .1):
             raise ValueError("invalid perturbation grid")
+        return self
+
+
+@dataclass(frozen=True)
+class STTAnalysisConfig:
+    raw: dict[str, Any]
+
+    def validate(self) -> "STTAnalysisConfig":
+        required = {"protocol_version", "models", "datasets", "generation", "transport", "systems"}
+        unknown = set(self.raw) - required
+        missing = required - set(self.raw)
+        if missing or unknown:
+            raise ValueError(f"STT configuration keys: missing={sorted(missing)}, unknown={sorted(unknown)}")
+        if self.raw["protocol_version"] != "bidirectional-stt-v1":
+            raise ValueError("unsupported STT protocol version")
+        models = self.raw["models"]
+        if set(models) != {"qwen", "mistral"} or any(not isinstance(value, str) or not value for value in models.values()):
+            raise ValueError("STT models must define non-empty qwen and mistral IDs")
+        datasets = self.raw["datasets"]
+        if tuple(datasets) != PRIMARY_DATASETS:
+            raise ValueError(f"STT datasets must be exactly {PRIMARY_DATASETS}")
+        for dataset, task in datasets.items():
+            if task.get("split") != SPLITS[dataset]:
+                raise ValueError(f"invalid STT split for {dataset}")
+            if int(task.get("max_new_tokens", 0)) <= 0 or int(task.get("generation_batch_size", 0)) <= 0:
+                raise ValueError(f"invalid STT generation settings for {dataset}")
+        generation = self.raw["generation"]
+        if (generation.get("sender_budget"), generation.get("do_sample")) != (1024, False):
+            raise ValueError("STT requires sender_budget=1024 and greedy decoding")
+        transport = self.raw["transport"]
+        if (transport.get("tau"), transport.get("causal_shift"),
+                transport.get("accumulation_dtype")) != (0.6, False, "float32"):
+            raise ValueError("STT transport parameters do not match the formal protocol")
+        artifacts = transport.get("artifacts")
+        if not isinstance(artifacts, dict) or set(artifacts) != {"qwen_to_mistral", "mistral_to_qwen"}:
+            raise ValueError("STT requires both directed transport artifacts")
+        required_artifact = {"path", "sha256", "source", "target", "source_revision", "target_revision"}
+        directions = {"qwen_to_mistral": ("qwen", "mistral"),
+                      "mistral_to_qwen": ("mistral", "qwen")}
+        for name, direction in directions.items():
+            value = artifacts[name]
+            if set(value) != required_artifact or (value["source"], value["target"]) != direction:
+                raise ValueError(f"invalid STT artifact declaration for {name}")
+            if len(value["sha256"]) != 64 or any(not value[key] for key in required_artifact):
+                raise ValueError(f"incomplete STT artifact declaration for {name}")
+        expected_systems = ("qwen_only", "mistral_only", "qwen_to_mistral", "mistral_to_qwen")
+        if tuple(self.raw["systems"]) != expected_systems:
+            raise ValueError(f"STT systems must be exactly {expected_systems}")
         return self
 
 
@@ -59,3 +107,18 @@ def load_config(path: str | Path) -> AnalysisConfig:
     if not isinstance(raw, dict):
         raise ValueError("configuration root must be a mapping")
     return AnalysisConfig(raw).validate()
+
+
+def load_stt_config(path: str | Path) -> STTAnalysisConfig:
+    text = Path(path).read_text(encoding="utf-8")
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            import yaml
+        except ImportError as exc:
+            raise RuntimeError("configuration is not JSON and PyYAML is unavailable") from exc
+        raw = yaml.safe_load(text)
+    if not isinstance(raw, dict):
+        raise ValueError("configuration root must be a mapping")
+    return STTAnalysisConfig(raw).validate()
