@@ -12,6 +12,7 @@
 - 2026-09-05: Added a reusable runtime-artifact preflight CLI so each compute environment can prove locked tokenizer resolution and both strict matrix gates without loading model weights.
 - 2026-09-05: Real AIME baseline smoke exposed PyArrow's rejection of an empty nested `transport` struct. Baseline rows now omit the inapplicable field, with an end-to-end Parquet cache-write regression test; cross rows retain complete transport diagnostics.
 - 2026-09-05: Re-ran the current-revision AIME first-one planners and baseline evaluations on Guqq. Both planners and both baselines completed with validated cache manifests; cross execution remains untested because the available RTX 5090 OOMs while loading the second model.
+- 2026-09-05: Audited all Guqq Slurm resources and confirmed node221 is the only GPU node/partition target. No higher-memory GPU exists on that cluster, so cross smoke and formal cells require the user's separate GPU environment.
 
 - 2026-09-04: Removed `alpha=0.025` from the authorized formal perturbation grid. The perturbation matrix now has 99 rows and the three Receiver arrays have 297 unique cells; six targeted tests, matrix dry-run, and `git diff --check` pass.
 

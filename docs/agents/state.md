@@ -4,6 +4,7 @@
 
 - 当前状态：本地 cross-vocab STT 配置/schema/cache/runtime、四个 task、6/12/3/1 matrix、Slurm 链与 cache-only 统计报告均已实现；干净 `origin/main` 基线上 `analysis/tests` 38 项全部通过。两个 runtime-v3 artifacts 已在本地和 Guqq 按 `ModelWrapper` tokenizer 归一化策略通过 strict gate，正反向 source support 都完整。Guqq 双 planner 与 Qwen/Mistral 两个 baseline smoke 均已通过；两个 cross smoke 在 31.37 GiB RTX 5090 加载第二模型时按预期 OOM，未进入 STT。
 - 当前计划：在用户所述的高显存 GPU 环境重新生成同一 revision 的 first-1 planner cache，完成双向 cross smoke；随后运行 first-4 integration、12 个正式单元和最终报告。
+- 资源审计：Guqq 仅有 node221/`gpu:1`，没有第二个 partition 或高显存节点；剩余 cross 与正式实验不能在 Guqq 内调度完成。
 - 边界：保留 kernel-analysis-v1 的配置校验、矩阵计数、cache identity 与现有结果；STT 不导入 `exp/`，并沿用 analysis 的 dataset、prompt、CLI、cache/result 和 scheduler contracts。
 
 ## 变更记录
