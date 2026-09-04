@@ -10,7 +10,8 @@ import numpy as np
 import pytest
 import torch
 
-from analysis.core.cache import CacheError, STTPlannerContextStore
+from analysis.core.cache import (CacheError, ReceiverEvaluationStore,
+                                 STTPlannerContextStore)
 from analysis.core.config import load_config, load_stt_config
 from analysis.core.schemas import (AnalysisItem, STTPlannerCacheIdentity,
                                    STTPlannerItemContext, STTReceiverCondition)
@@ -226,6 +227,18 @@ def test_planner_collection_and_stt_receiver_runtime(tmp_path: Path) -> None:
         "aligned_sender_prompt", "aligned_sender_plan", "receiver_native_prompt"
     ]
     assert row.diagnostics["causal_shift"] is False
+
+
+def test_stt_baseline_diagnostics_are_parquet_serializable(tmp_path: Path) -> None:
+    item = AnalysisItem(0, "q", "7", "7")
+    row = evaluate_stt_item(
+        item, _Wrapper(), receiver_model_id="receiver", max_new_tokens=4)
+    assert "transport" not in row.diagnostics
+    store = ReceiverEvaluationStore(tmp_path, namespace="stt_receiver_evaluations")
+    identity = {"schema_version": "stt-receiver-v2", "system": "qwen_only"}
+    handle = store.resolve("baseline", identity)
+    store.write(handle, identity, [row], {"accuracy": 1.0})
+    assert store.validate(handle)["question_count"] == 1
 
 
 def test_exact_mcnemar_counts_discordant_pairs() -> None:

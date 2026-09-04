@@ -472,6 +472,26 @@ def evaluate_stt_item(item: AnalysisItem, receiver: Any, *, receiver_model_id: s
     evaluation_seconds = time.perf_counter() - started
     prompt_hash = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
     prefix_length = int(planner.attention_mask.sum()) if planner is not None else 0
+    result_diagnostics = {
+        "prompt_text": prompt_text, "prompt_hash": prompt_hash,
+        "messages": messages, "messages_hash": stable_hash(messages),
+        "receiver_prompt_token_ids": receiver_ids[0].detach().cpu().tolist(),
+        "receiver_attention_mask": receiver_mask[0].detach().cpu().tolist(),
+        "prefill_attention_mask": generation_mask[0].detach().cpu().tolist(),
+        "prefill_position_ids": position_ids[0].detach().cpu().tolist(),
+        "prefix_order": ["aligned_sender_prompt", "aligned_sender_plan", "receiver_native_prompt"]
+        if planner is not None else ["receiver_native_prompt"],
+        "causal_shift": False, "do_sample": False,
+        "sender_prompt_token_count": planner.prompt_token_count if planner is not None else 0,
+        "sender_plan_token_count": planner.plan_token_count if planner is not None else 0,
+        "sender_full_context_token_count": prefix_length,
+        "receiver_prompt_token_count": int(receiver_mask.sum()),
+        "transferred_length_ratio": prefix_length / int(generation_mask.sum()),
+        "planner_generation_seconds": planner.generation_seconds if planner is not None else 0.0,
+        "planner_full_forward_seconds": planner.full_forward_seconds if planner is not None else 0.0,
+    }
+    if planner is not None:
+        result_diagnostics["transport"] = transport_diagnostics
     return ReceiverItemResult(
         item_id=item.item_id, question_hash=item.question_hash,
         prediction=evaluation.prediction, raw_prediction=raw, gold=item.gold,
@@ -483,23 +503,5 @@ def evaluate_stt_item(item: AnalysisItem, receiver: Any, *, receiver_model_id: s
         sender_recurrence_output_tokens=planner.plan_token_count if planner is not None else 0,
         transfer_alignment_output_tokens=prefix_length,
         receiver_decode_output_tokens=len(answer_ids), aligned_prefix_length=prefix_length,
-        diagnostics={
-            "prompt_text": prompt_text, "prompt_hash": prompt_hash,
-            "messages": messages, "messages_hash": stable_hash(messages),
-            "receiver_prompt_token_ids": receiver_ids[0].detach().cpu().tolist(),
-            "receiver_attention_mask": receiver_mask[0].detach().cpu().tolist(),
-            "prefill_attention_mask": generation_mask[0].detach().cpu().tolist(),
-            "prefill_position_ids": position_ids[0].detach().cpu().tolist(),
-            "prefix_order": ["aligned_sender_prompt", "aligned_sender_plan", "receiver_native_prompt"]
-            if planner is not None else ["receiver_native_prompt"],
-            "causal_shift": False, "do_sample": False,
-            "sender_prompt_token_count": planner.prompt_token_count if planner is not None else 0,
-            "sender_plan_token_count": planner.plan_token_count if planner is not None else 0,
-            "sender_full_context_token_count": prefix_length,
-            "receiver_prompt_token_count": int(receiver_mask.sum()),
-            "transferred_length_ratio": prefix_length / int(generation_mask.sum()),
-            "planner_generation_seconds": planner.generation_seconds if planner is not None else 0.0,
-            "planner_full_forward_seconds": planner.full_forward_seconds if planner is not None else 0.0,
-            "transport": transport_diagnostics,
-        },
+        diagnostics=result_diagnostics,
     )

@@ -2,8 +2,8 @@
 
 ## 2026-09-04 双向 Exact STT goal
 
-- 当前状态：本地 cross-vocab STT 配置/schema/cache/runtime、四个 task、6/12/3/1 matrix、Slurm 链与 cache-only 统计报告均已实现；干净 `origin/main` 基线上 `analysis/tests` 37 项全部通过。两个 runtime-v3 artifacts 均已按 `ModelWrapper` tokenizer 归一化策略通过 strict gate，正反向 source support 都完整。
-- 当前计划：等待 Guqq 恢复到 GitHub 的 HTTPS pull（当前有界 pull 均为 exit 124）；成功后通过 SFTP 放置两个 Git-ignored runtime-v3 artifacts，并由 Slurm 依次运行双向 smoke、三数据集 integration smoke、12 个正式单元和最终报告。除非用户另行明确授权，不使用代理脚本或离线 bundle 绕过 pull gate。
+- 当前状态：本地 cross-vocab STT 配置/schema/cache/runtime、四个 task、6/12/3/1 matrix、Slurm 链与 cache-only 统计报告均已实现；干净 `origin/main` 基线上 `analysis/tests` 38 项全部通过。两个 runtime-v3 artifacts 已在本地和 Guqq 按 `ModelWrapper` tokenizer 归一化策略通过 strict gate，正反向 source support 都完整。Guqq 双 planner smoke 已通过；baseline Parquet 缺陷已修复待重跑，cross smoke 在 31.37 GiB RTX 5090 加载第二模型时按预期 OOM。
+- 当前计划：推送 baseline Parquet 修复并在 Guqq 重跑双 planner/baseline smoke；双向 cross smoke、first-4 integration、12 个正式单元和最终报告仍需用户所述的高显存 GPU 环境。
 - 边界：保留 kernel-analysis-v1 的配置校验、矩阵计数、cache identity 与现有结果；STT 不导入 `exp/`，并沿用 analysis 的 dataset、prompt、CLI、cache/result 和 scheduler contracts。
 
 ## 变更记录
