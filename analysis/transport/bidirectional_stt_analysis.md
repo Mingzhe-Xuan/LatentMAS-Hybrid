@@ -126,6 +126,8 @@ OpenHermes-2.5 是 transport matrix 的构建语料，不是下游评测集，�
 - Qwen source revision：`b968826d9c46dd6066d109eabc6255188de91218`
 - Mistral target revision：`04d8a90549d23fc6bd7f642064003592df51e9b3`
 
+这两个 revision 同时在正式配置的 `model_revisions` 中逐模型锁定。六个 planner jobs、两个单模型 baseline 和两个 cross-vocab 条件都把相应 revision 写入 job 与 cache identity，并将其直接传给 `AutoTokenizer/AutoModelForCausalLM.from_pretrained()`；加载后再次比较模型配置解析出的 commit hash。baseline 不得使用浮动的 Hugging Face `main`。
+
 ### 4.1 正式运行前的 artifact gate
 
 loader 必须使用 `allow_pickle=False`，并在加载模型后逐项检查：

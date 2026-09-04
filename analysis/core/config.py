@@ -51,7 +51,8 @@ class STTAnalysisConfig:
     raw: dict[str, Any]
 
     def validate(self) -> "STTAnalysisConfig":
-        required = {"protocol_version", "models", "datasets", "generation", "transport", "systems"}
+        required = {"protocol_version", "models", "model_revisions", "datasets",
+                    "generation", "transport", "systems"}
         unknown = set(self.raw) - required
         missing = required - set(self.raw)
         if missing or unknown:
@@ -61,6 +62,10 @@ class STTAnalysisConfig:
         models = self.raw["models"]
         if set(models) != {"qwen", "mistral"} or any(not isinstance(value, str) or not value for value in models.values()):
             raise ValueError("STT models must define non-empty qwen and mistral IDs")
+        revisions = self.raw["model_revisions"]
+        if (set(revisions) != set(models)
+                or any(not isinstance(value, str) or len(value) != 40 for value in revisions.values())):
+            raise ValueError("STT model revisions must be full qwen and mistral commit hashes")
         datasets = self.raw["datasets"]
         if tuple(datasets) != PRIMARY_DATASETS:
             raise ValueError(f"STT datasets must be exactly {PRIMARY_DATASETS}")
@@ -91,6 +96,9 @@ class STTAnalysisConfig:
                 raise ValueError(f"invalid STT artifact declaration for {name}")
             if len(value["sha256"]) != 64 or any(not value[key] for key in required_artifact):
                 raise ValueError(f"incomplete STT artifact declaration for {name}")
+            if (value["source_revision"], value["target_revision"]) != (
+                    revisions[direction[0]], revisions[direction[1]]):
+                raise ValueError(f"STT artifact revisions do not match locked models for {name}")
         expected_systems = ("qwen_only", "mistral_only", "qwen_to_mistral", "mistral_to_qwen")
         if tuple(self.raw["systems"]) != expected_systems:
             raise ValueError(f"STT systems must be exactly {expected_systems}")

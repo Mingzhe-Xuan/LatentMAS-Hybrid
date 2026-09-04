@@ -18,6 +18,10 @@ def test_formal_stt_matrix_counts_and_systems() -> None:
         "qwen_only", "mistral_only", "qwen_to_mistral", "mistral_to_qwen"
     }
     assert len({row["effective_cache_id"] for rows in matrices.values() for row in rows}) == 22
+    assert all(len(row["sender_revision"]) == 40 for row in matrices["stt_planner.jsonl"])
+    assert all(len(row["receiver_revision"]) == 40 for row in evaluation)
+    assert all(row["sender_revision"] is None or len(row["sender_revision"]) == 40
+               for row in evaluation)
     evaluations = {(row["dataset"], row["system"]): row["effective_cache_id"]
                    for row in evaluation}
     for row in matrices["stt_analysis.jsonl"]:

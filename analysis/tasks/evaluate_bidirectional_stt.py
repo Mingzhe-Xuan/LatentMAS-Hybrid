@@ -49,9 +49,12 @@ def run(args) -> int:
     expected_sender_key = job["system"].split("_to_", 1)[0] if "_to_" in job["system"] else None
     if (job.get("receiver_key") != expected_receiver_key
             or job.get("receiver_model") != config["models"][expected_receiver_key]
+            or job.get("receiver_revision") != config["model_revisions"][expected_receiver_key]
             or job.get("sender_key") != expected_sender_key
             or job.get("sender_model") != (config["models"][expected_sender_key]
-                                            if expected_sender_key else None)):
+                                            if expected_sender_key else None)
+            or job.get("sender_revision") != (config["model_revisions"][expected_sender_key]
+                                               if expected_sender_key else None)):
         raise ValueError("STT system/model direction mismatch")
     if ((expected_sender_key is None and (job.get("planner_cache_id") is not None
                                           or job.get("artifact") is not None))
@@ -60,8 +63,13 @@ def run(args) -> int:
         raise ValueError("STT planner/artifact dependencies do not match the selected system")
     snapshot = load_analysis_items(job["dataset"], job["split"], max_samples=job.get("max_samples"))
     DatasetSnapshotStore(args.cache_root).write(snapshot)
-    receiver = load_wrapper(job["receiver_model"], args.device, model_args(job, alignment="identical"))
+    receiver = load_wrapper(
+        job["receiver_model"], args.device,
+        model_args(job, alignment="identical", revision=job["receiver_revision"]),
+    )
     receiver_revision = model_revision(receiver)
+    if receiver_revision != job["receiver_revision"]:
+        raise ValueError("loaded receiver model revision does not match the formal configuration")
     receiver_fingerprint = transport_tokenizer_fingerprint(receiver.tokenizer)
     prompt_texts = [
         render_role_prompt(receiver, build_role_messages(
@@ -88,7 +96,10 @@ def run(args) -> int:
         planner_handle, planner_manifest = _planner_handle(args.cache_root, job["planner_cache_id"])
         planner_store.validate(planner_handle)
         sender_manifest_hash = file_sha256(planner_handle.path / "manifest.json")
-        sender = load_wrapper(job["sender_model"], args.device, model_args(job, alignment="identical"))
+        sender = load_wrapper(
+            job["sender_model"], args.device,
+            model_args(job, alignment="identical", revision=job["sender_revision"]),
+        )
         sender_revision = model_revision(sender)
         sender_fingerprint = transport_tokenizer_fingerprint(sender.tokenizer)
         declaration = job["artifact"]

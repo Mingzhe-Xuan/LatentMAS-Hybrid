@@ -62,6 +62,8 @@ def test_stt_config_is_separate_from_kernel_config() -> None:
         "qwen_only", "mistral_only", "qwen_to_mistral", "mistral_to_qwen"
     ]
     assert stt.raw["transport"]["target_chunk_size"] == 8192
+    assert set(stt.raw["model_revisions"]) == {"qwen", "mistral"}
+    assert all(len(value) == 40 for value in stt.raw["model_revisions"].values())
     assert load_config("analysis/configs/kernel_analysis.yaml").raw["protocol_version"] == "kernel-analysis-v1"
 
 
