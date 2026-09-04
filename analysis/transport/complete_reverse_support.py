@@ -17,6 +17,17 @@ from analysis.core.cache import file_sha256
 from analysis.core.stt import transport_tokenizer_fingerprint
 
 
+def normalize_runtime_tokenizer(tokenizer: Any) -> Any:
+    """Mirror models._ensure_pad_token without importing model weights/runtime."""
+    if tokenizer.pad_token_id is None:
+        if tokenizer.eos_token is not None:
+            tokenizer.pad_token = tokenizer.eos_token
+        else:
+            tokenizer.add_special_tokens({"pad_token": "<pad>"})
+    tokenizer.padding_side = "left"
+    return tokenizer
+
+
 def _literal_text(tokenizer: Any, token_id: int) -> str:
     text = tokenizer.decode([token_id], skip_special_tokens=False,
                             clean_up_tokenization_spaces=False)
@@ -172,6 +183,8 @@ def main() -> int:
     target = AutoTokenizer.from_pretrained(args.target_model, revision=args.target_revision,
                                            use_fast=True, local_files_only=False,
                                            fix_mistral_regex=False)
+    normalize_runtime_tokenizer(source)
+    normalize_runtime_tokenizer(target)
     digest = complete_artifact(Path(args.input), Path(args.output),
                                source_tokenizer=source, target_tokenizer=target,
                                source_revision=args.source_revision,

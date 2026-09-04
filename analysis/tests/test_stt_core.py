@@ -17,7 +17,8 @@ from analysis.core.stt import (STTArtifactError, STTArtifactSpec, exact_stt,
                                collect_stt_planner_item, evaluate_stt_item,
                                load_stt_artifact, pack_stt_prefix)
 from analysis.core.statistics import exact_mcnemar
-from analysis.transport.complete_reverse_support import complete_csc_source_support
+from analysis.transport.complete_reverse_support import (complete_csc_source_support,
+                                                         normalize_runtime_tokenizer)
 
 
 def _artifact(path: Path, *, source_ids: np.ndarray | None = None) -> STTArtifactSpec:
@@ -238,3 +239,16 @@ def test_reverse_support_completion_adds_literal_special_columns() -> None:
     assert completed["data"][:2].tolist() == pytest.approx([2 / 3, 1 / 3])
     assert records == [{"source_token_id": 0, "literal": "special-zero",
                         "target_token_ids": [2, 3], "weights": pytest.approx([2 / 3, 1 / 3])}]
+
+
+def test_artifact_tokenizer_normalization_matches_model_wrapper_pad_policy() -> None:
+    class Tokenizer:
+        pad_token_id = None
+        eos_token_id = 2
+        eos_token = "</s>"
+        pad_token = None
+        padding_side = "right"
+
+    tokenizer = normalize_runtime_tokenizer(Tokenizer())
+    assert tokenizer.pad_token == "</s>"
+    assert tokenizer.padding_side == "left"
