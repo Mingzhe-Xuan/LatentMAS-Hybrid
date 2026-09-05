@@ -79,6 +79,7 @@ if [ "${CAPTURE_ALL_OUTPUT}" = true ] && [ "${RUN_OUTPUT_WRAPPED}" != true ]; th
     mkdir -p "$(dirname "${STATE_FILE}")"
     export FULL_EXP TASK_ONLY STATE_FILE RUN_SCRIPT RESULT_ROOT LOG_ROOT
     export SINGLE_CONFIG CONFIG_METHOD CONFIG_PROMPT CONFIG_ALIGNMENT
+    export GENERATE_BS GENERATE_BS_DIVISOR
     export CAPTURE_ALL_OUTPUT RUN_OUTPUT_WRAPPED=true
     exec bash "${BASH_SOURCE[0]}" "$@" > "${STATE_FILE}" 2>&1
 fi
@@ -173,13 +174,18 @@ TEMPERATURE="${TEMPERATURE:-0.6}" # Sampling temperature; model wrappers may ove
 TOP_P="${TOP_P:-0.95}"             # Nucleus-sampling threshold; model wrappers may override.
 # Empty means use params_dict.json[TASK].generation_bs; fallback: 10.
 GENERATE_BS="${GENERATE_BS:-}"
+GENERATE_BS_DIVISOR="${GENERATE_BS_DIVISOR:-1}"
+if ! [[ "${GENERATE_BS_DIVISOR}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: GENERATE_BS_DIVISOR must be a positive integer, got: ${GENERATE_BS_DIVISOR}"
+    exit 2
+fi
 resolve_generate_bs() {
     if [ -n "${GENERATE_BS}" ]; then
         printf '%s\n' "${GENERATE_BS}"
         return
     fi
 
-    python3 - "$1" <<'PY'
+    python3 - "$1" "${GENERATE_BS_DIVISOR}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -189,9 +195,12 @@ try:
     params = json.loads(Path("params_dict.json").read_text(encoding="utf-8"))
     task_params = params.get(sys.argv[1], {})
     value = task_params.get("generation_bs", fallback) if isinstance(task_params, dict) else fallback
-    print(value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else fallback)
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        value = fallback
+    divisor = int(sys.argv[2])
+    print(max(1, value // divisor))
 except (OSError, json.JSONDecodeError):
-    print(fallback)
+    print(max(1, fallback // int(sys.argv[2])))
 PY
 }
 SEED=42               # Random seed for reproducibility.
