@@ -1,5 +1,19 @@
 # Analysis test record
 
+## 2026-09-05 serial `analysis.sh` test plan
+
+- Shell contract: `bash -n analysis.sh` must pass; the regression suite must
+  retain the PBS GPU directive, default `all` target, kernel-before-STT order,
+  PBS-allocation guard, and exit-code-10 cache semantics.
+- Matrix integration: a local `--all --smoke --dataset aime2024 --dry-run`
+  must validate both builders and print kernel and STT matrix summaries without
+  launching model computation.
+- Argument validation: `--max-samples` without `--smoke` must fail before any
+  environment or model setup.
+- Actual: `bash -n analysis.sh` passed; the combined AIME first-one dry-run
+  reported kernel counts 2/9/42/12 plus cache-only rows and STT counts 2/4/1/1;
+  invalid `--max-samples` exited 1 before setup; `analysis/tests` passed 39/39.
+
 ## 2026-09-04 双向 Exact STT 实现计划
 
 - 配置/schema：STT 配置严格固定两模型、三 primary datasets、greedy、`tau=0.6`、sender budget 1024、双向 artifact hash；既有 `load_config()` 行为不变。

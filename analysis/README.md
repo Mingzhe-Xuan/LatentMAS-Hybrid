@@ -46,6 +46,20 @@ dataset-seed and 126-row acceptance invariants.
 
 ## Submit
 
+The repository-level PBS entry point runs the complete kernel protocol followed
+by the complete bidirectional STT protocol, strictly serially in one allocation:
+
+```bash
+qsub analysis.sh
+qsub -v ANALYSIS_TARGET=kernel analysis.sh
+qsub -v ANALYSIS_TARGET=stt,ANALYSIS_SMOKE=true,DATASET=aime2024 analysis.sh
+bash analysis.sh --all --smoke --dataset aime2024 --dry-run
+```
+
+Use `--kernel` or `--stt` for one protocol, and `--stage` for one common phase.
+The entry point validates exit code `10` as a resumable cache hit. It refuses to
+run model work outside a PBS allocation; `--dry-run` is safe locally.
+
 All model work must use the cluster scheduler:
 
 ```bash

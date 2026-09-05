@@ -1,5 +1,18 @@
 # Agent state
 
+## 2026-09-05 repository-level analysis entry point
+
+- Current state: the root `analysis.sh` PBS entry point is implemented and
+  verified; its default target is a strict serial kernel-then-STT run in one
+  GPU allocation.
+- Plan: implementation is complete; submit `qsub analysis.sh` on the intended
+  high-memory PBS GPU when the full formal run is desired.
+- Change record: selected direct sequential matrix execution rather than nested
+  `qsub`, so completion of the kernel report is a real prerequisite for starting
+  STT and exit-code-10 cache hits remain resumable.
+- Change record: shell syntax, the combined AIME smoke dry-run, argument failure
+  behavior, and all 39 analysis tests passed.
+
 ## 2026-09-04 双向 Exact STT goal
 
 - 当前状态：本地 cross-vocab STT 配置/schema/cache/runtime、四个 task、6/12/3/1 matrix、Slurm 链与 cache-only 统计报告均已实现；干净 `origin/main` 基线上 `analysis/tests` 38 项全部通过。两个 runtime-v3 artifacts 已在本地和 Guqq 按 `ModelWrapper` tokenizer 归一化策略通过 strict gate，正反向 source support 都完整。Guqq 双 planner 与 Qwen/Mistral 两个 baseline smoke 均已通过；两个 cross smoke 在 31.37 GiB RTX 5090 加载第二模型时按预期 OOM，未进入 STT。
