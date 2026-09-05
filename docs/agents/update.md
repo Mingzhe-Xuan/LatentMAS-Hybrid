@@ -1,7 +1,24 @@
 # Progress updates
 
+- 2026-09-05: Added a repository-level PBS `analysis.sh` patterned after
+  `exp.sh`. It defaults to strictly serial kernel then bidirectional-STT matrix
+  execution in one GPU allocation, with target/stage/dataset/smoke controls,
+  resumable cache-hit handling, local dry-run validation, and a PBS guard for
+  real model work.
+
 - 2026-09-04: Started the bidirectional Exact STT goal from `analysis/transport/bidirectional_stt_analysis.md`. Audited the existing analysis architecture and confirmed it supports cross-model hidden alignment only when tokenizer mappings are identical; implementation now proceeds through a separate versioned cross-vocabulary STT runtime while preserving shared analysis contracts.
 - 2026-09-04: Implemented the local bidirectional Exact STT stack: strict config and directed CSC gate, full-context planner caches, FP32 sparse transport with dense-oracle/chunk tests, explicit prefix packing/positions/greedy decoding, four-system evaluation, paired cache-only statistics/report, exact 6/12/3/1 matrices, and Slurm orchestration. All 33 analysis tests pass. The forward artifact passes its static gate; the reverse artifact is correctly rejected because its source support omits Mistral token IDs 0, 1, and 2.
+- 2026-09-04: Re-audited a concurrently rebuilt reverse artifact, which now has complete Mistral source support. Generated runtime-v2 artifacts against the locked real tokenizers, preserving parent hashes/fingerprints while binding reproducible analysis mapping+special-ID fingerprints. Both directions pass the strict local gate; the clean-origin regression now passes 34 tests.
+- 2026-09-04: Corrected artifact fingerprint generation to mirror `ModelWrapper` tokenizer normalization (`pad=eos` when absent and left padding), added a regression test, and generated runtime-v3 artifacts from commit `210e75f`. Both directions pass the production strict loader against the normalized real tokenizers; all 35 analysis tests pass.
+- 2026-09-04: Closed the target-vocabulary chunk acceptance gap with exact FP32 chunked embedding accumulation. Position and target chunk sizes are validated and included in receiver cache identity; the dense oracle now exercises both dimensions simultaneously.
+- 2026-09-04: Replaced cache-directory discovery in STT analysis/report with matrix-bound dependency IDs. New results now remain isolated from stale caches produced by earlier commits or smoke runs while retaining manifest/hash validation.
+- 2026-09-04: Expanded the unified report to expose every preregistered task metric and paired test directly, including HumanEvalPlus code-execution failure rate, 95% paired-bootstrap intervals, exact McNemar p-values, and discordant counts.
+- 2026-09-04: Pinned Qwen and Mistral model revisions for every planner, baseline, and cross-vocabulary cell. The shared wrapper accepts an optional revision without changing existing callers, and STT tasks verify the resolved commit after loading.
+- 2026-09-05: Added an explicit first-four integration-smoke mode (`--smoke --max-samples 4`) across all primary datasets. Its selection policy and cache IDs are distinct from the first-one smoke and full formal runs.
+- 2026-09-05: Added a reusable runtime-artifact preflight CLI so each compute environment can prove locked tokenizer resolution and both strict matrix gates without loading model weights.
+- 2026-09-05: Real AIME baseline smoke exposed PyArrow's rejection of an empty nested `transport` struct. Baseline rows now omit the inapplicable field, with an end-to-end Parquet cache-write regression test; cross rows retain complete transport diagnostics.
+- 2026-09-05: Re-ran the current-revision AIME first-one planners and baseline evaluations on Guqq. Both planners and both baselines completed with validated cache manifests; cross execution remains untested because the available RTX 5090 OOMs while loading the second model.
+- 2026-09-05: Audited all Guqq Slurm resources and confirmed node221 is the only GPU node/partition target. No higher-memory GPU exists on that cluster, so cross smoke and formal cells require the user's separate GPU environment.
 
 - 2026-09-04: Removed `alpha=0.025` from the authorized formal perturbation grid. The perturbation matrix now has 99 rows and the three Receiver arrays have 297 unique cells; six targeted tests, matrix dry-run, and `git diff --check` pass.
 

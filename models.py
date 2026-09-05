@@ -167,6 +167,8 @@ class ModelWrapper:
         self.use_vllm = use_vllm and _HAS_VLLM
         self.vllm_engine = None
         self.trust_remote_code = bool(getattr(args, "trust_remote_code", False)) if args else False
+        self.model_revision = getattr(args, "model_revision", None) if args else None
+        revision_kwargs = {"revision": self.model_revision} if self.model_revision else {}
         legacy_realign = bool(getattr(args, "latent_space_realign", False)) if args else False
         self.align_method = getattr(args, "align_method", None) or ("linear" if legacy_realign else "identical")
         self._alignment_states: Dict[Tuple[int, int, str], AlignmentState] = {}
@@ -187,7 +189,7 @@ class ModelWrapper:
                 self.vllm_engine = LLM(model=model_name, tensor_parallel_size=tp_size, gpu_memory_utilization=gpu_util, enable_prefix_caching=True, enable_prompt_embeds=True, trust_remote_code=self.trust_remote_code)
             else:
                 self.vllm_engine = LLM(model=model_name, tensor_parallel_size=tp_size, gpu_memory_utilization=gpu_util, trust_remote_code=self.trust_remote_code)
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True, token=False, trust_remote_code=self.trust_remote_code)
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True, token=False, trust_remote_code=self.trust_remote_code, **revision_kwargs)
 
             use_second_hf = bool(getattr(args, "use_second_HF_model", False)) if args else False
             if use_second_hf:
@@ -196,6 +198,7 @@ class ModelWrapper:
                     dtype=(torch.bfloat16 if torch.cuda.is_available() else torch.float32),
                     token=False,
                     trust_remote_code=self.trust_remote_code,
+                    **revision_kwargs,
                 ).to(args.device2).eval()
                 self.embedding_layer = self.HF_model.get_input_embeddings()
                 self.HF_device = args.device2
@@ -206,7 +209,7 @@ class ModelWrapper:
             return  # skip loading transformers model
 
         # fallback: normal transformers path
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True, token=False, trust_remote_code=self.trust_remote_code)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True, token=False, trust_remote_code=self.trust_remote_code, **revision_kwargs)
         _ensure_pad_token(self.tokenizer)
         with torch.no_grad():
             self.model = AutoModelForCausalLM.from_pretrained(
@@ -214,6 +217,7 @@ class ModelWrapper:
                 dtype=(torch.bfloat16 if torch.cuda.is_available() else torch.float32),
                 token=False,
                 trust_remote_code=self.trust_remote_code,
+                **revision_kwargs,
             )
         if len(self.tokenizer) != self.model.get_input_embeddings().weight.shape[0]:
             self.model.resize_token_embeddings(len(self.tokenizer))

@@ -44,11 +44,12 @@ def _row(task: str, cache_id: str, **fields: Any) -> dict[str, Any]:
 
 
 def planner_cache_id(config: dict[str, Any], dataset: str, model_key: str,
-                     *, smoke: bool) -> str:
+                     *, selection_policy: str) -> str:
     payload = {
         "protocol": config["protocol_version"], "kind": "planner-context",
         "dataset": dataset, "split": config["datasets"][dataset]["split"],
-        "selection": "first-1" if smoke else "all", "model": config["models"][model_key],
+        "selection": selection_policy, "model": config["models"][model_key],
+        "model_revision": config["model_revisions"][model_key],
         "sender_budget": config["generation"]["sender_budget"], "do_sample": False,
         "code_revision": _code_revision(),
     }
@@ -56,21 +57,26 @@ def planner_cache_id(config: dict[str, Any], dataset: str, model_key: str,
 
 
 def evaluation_cache_id(config: dict[str, Any], dataset: str, system: str,
-                        *, smoke: bool) -> str:
+                        *, selection_policy: str) -> str:
     receiver_key = "qwen" if system in {"qwen_only", "mistral_to_qwen"} else "mistral"
     payload: dict[str, Any] = {
         "protocol": config["protocol_version"], "kind": "receiver-evaluation",
         "dataset": dataset, "split": config["datasets"][dataset]["split"],
-        "selection": "first-1" if smoke else "all", "system": system,
+        "selection": selection_policy, "system": system,
         "receiver": config["models"][receiver_key],
+        "receiver_revision": config["model_revisions"][receiver_key],
         "max_new_tokens": config["datasets"][dataset]["max_new_tokens"],
         "do_sample": False,
+        "position_chunk_size": config["transport"]["position_chunk_size"],
+        "target_chunk_size": config["transport"]["target_chunk_size"],
         "code_revision": _code_revision(),
     }
     if "_to_" in system:
         sender_key = system.split("_to_", 1)[0]
         payload.update(sender=config["models"][sender_key],
-                       planner_cache_id=planner_cache_id(config, dataset, sender_key, smoke=smoke),
+                       sender_revision=config["model_revisions"][sender_key],
+                       planner_cache_id=planner_cache_id(
+                           config, dataset, sender_key, selection_policy=selection_policy),
                        artifact=config["transport"]["artifacts"][system],
                        tau=config["transport"]["tau"], causal_shift=False)
     else:
@@ -79,55 +85,79 @@ def evaluation_cache_id(config: dict[str, Any], dataset: str, system: str,
 
 
 def build_stt_matrices(config_path: str | Path, *, smoke: bool = False,
-                       dataset_filter: str | None = None) -> dict[str, list[dict[str, Any]]]:
+                       dataset_filter: str | None = None,
+                       smoke_samples: int = 1) -> dict[str, list[dict[str, Any]]]:
+    if smoke_samples <= 0 or (not smoke and smoke_samples != 1):
+        raise ValueError("smoke_samples must be positive and is only configurable for smoke runs")
     config = load_stt_config(config_path).raw
     datasets = [name for name in PRIMARY_DATASETS if dataset_filter in (None, name)]
+    selection_policy = f"first-{smoke_samples}" if smoke else "all"
+    max_samples = smoke_samples if smoke else None
     result = {name: [] for name in MATRIX_TASKS}
+    analysis_cache_ids: dict[str, str] = {}
     for dataset in datasets:
         task = config["datasets"][dataset]
         for model_key in ("qwen", "mistral"):
             result["stt_planner.jsonl"].append(_row(
                 "collect_stt_planner_contexts",
-                planner_cache_id(config, dataset, model_key, smoke=smoke),
+                planner_cache_id(config, dataset, model_key,
+                                 selection_policy=selection_policy),
                 dataset=dataset, split=task["split"], sender_key=model_key,
                 sender_model=config["models"][model_key],
+                sender_revision=config["model_revisions"][model_key],
                 sender_budget=config["generation"]["sender_budget"],
-                max_samples=1 if smoke else None,
+                max_samples=max_samples,
             ))
+        receiver_cache_ids: dict[str, str] = {}
         for system in config["systems"]:
             receiver_key = "qwen" if system in {"qwen_only", "mistral_to_qwen"} else "mistral"
             sender_key = system.split("_to_", 1)[0] if "_to_" in system else None
             fields: dict[str, Any] = {
                 "dataset": dataset, "split": task["split"], "system": system,
                 "receiver_key": receiver_key, "receiver_model": config["models"][receiver_key],
+                "receiver_revision": config["model_revisions"][receiver_key],
                 "sender_key": sender_key,
                 "sender_model": config["models"][sender_key] if sender_key else None,
-                "planner_cache_id": planner_cache_id(config, dataset, sender_key, smoke=smoke)
+                "sender_revision": config["model_revisions"][sender_key] if sender_key else None,
+                "planner_cache_id": planner_cache_id(
+                    config, dataset, sender_key, selection_policy=selection_policy)
                 if sender_key else None,
                 "artifact": config["transport"]["artifacts"].get(system),
                 "tau": config["transport"]["tau"], "causal_shift": False,
                 "max_new_tokens": task["max_new_tokens"],
                 "generation_batch_size": task["generation_batch_size"],
-                "max_samples": 1 if smoke else None,
+                "max_samples": max_samples,
             }
+            receiver_cache_id = evaluation_cache_id(
+                config, dataset, system, selection_policy=selection_policy)
+            receiver_cache_ids[system] = receiver_cache_id
             result["stt_evaluation.jsonl"].append(_row(
                 "evaluate_bidirectional_stt",
-                evaluation_cache_id(config, dataset, system, smoke=smoke), **fields,
+                receiver_cache_id, **fields,
             ))
+        analysis_cache_id = _cache_id(
+            "stt-analysis", {"protocol": config["protocol_version"],
+                             "dataset": dataset, "selection_policy": selection_policy,
+                             "receiver_cache_ids": receiver_cache_ids,
+                             "code_revision": _code_revision()},
+        )
+        analysis_cache_ids[dataset] = analysis_cache_id
         result["stt_analysis.jsonl"].append(_row(
             "analyze_bidirectional_stt",
-            _cache_id("stt-analysis", {"protocol": config["protocol_version"],
-                                       "dataset": dataset, "smoke": smoke,
-                                       "code_revision": _code_revision()}),
+            analysis_cache_id,
             dataset=dataset, split=task["split"], cache_only=True,
-            selection_policy="first-1" if smoke else "all", smoke=smoke,
+            selection_policy=selection_policy, smoke=smoke,
+            receiver_cache_ids=receiver_cache_ids,
         ))
     result["stt_report.jsonl"].append(_row(
         "build_bidirectional_stt_report",
         _cache_id("stt-report", {"protocol": config["protocol_version"],
-                                 "datasets": datasets, "smoke": smoke,
+                                 "datasets": datasets, "selection_policy": selection_policy,
+                                 "analysis_cache_ids": analysis_cache_ids,
                                  "code_revision": _code_revision()}),
         datasets=datasets, cache_only=True, smoke=smoke,
+        selection_policy=selection_policy,
+        analysis_cache_ids=analysis_cache_ids,
     ))
     return result
 
@@ -168,9 +198,15 @@ def main() -> int:
     parser.add_argument("--output", default="analysis/jobs")
     parser.add_argument("--dataset", choices=PRIMARY_DATASETS)
     parser.add_argument("--smoke", action="store_true")
+    parser.add_argument("--max-samples", type=int)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    matrices = build_stt_matrices(args.config, smoke=args.smoke, dataset_filter=args.dataset)
+    if args.max_samples is not None and not args.smoke:
+        parser.error("--max-samples requires --smoke")
+    matrices = build_stt_matrices(
+        args.config, smoke=args.smoke, dataset_filter=args.dataset,
+        smoke_samples=args.max_samples or 1,
+    )
     validate_stt_matrices(matrices, formal=not args.smoke and args.dataset is None)
     print(json.dumps({"counts": {name: len(rows) for name, rows in matrices.items()},
                       "by_dataset": {name: dict(Counter(row.get("dataset", "all") for row in rows))

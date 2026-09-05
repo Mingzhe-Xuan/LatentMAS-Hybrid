@@ -1,5 +1,19 @@
 # Analysis test record
 
+## 2026-09-05 serial `analysis.sh` test plan
+
+- Shell contract: `bash -n analysis.sh` must pass; the regression suite must
+  retain the PBS GPU directive, default `all` target, kernel-before-STT order,
+  PBS-allocation guard, and exit-code-10 cache semantics.
+- Matrix integration: a local `--all --smoke --dataset aime2024 --dry-run`
+  must validate both builders and print kernel and STT matrix summaries without
+  launching model computation.
+- Argument validation: `--max-samples` without `--smoke` must fail before any
+  environment or model setup.
+- Actual: `bash -n analysis.sh` passed; the combined AIME first-one dry-run
+  reported kernel counts 2/9/42/12 plus cache-only rows and STT counts 2/4/1/1;
+  invalid `--max-samples` exited 1 before setup; `analysis/tests` passed 39/39.
+
 ## 2026-09-04 双向 Exact STT 实现计划
 
 - 配置/schema：STT 配置严格固定两模型、三 primary datasets、greedy、`tau=0.6`、sender budget 1024、双向 artifact hash；既有 `load_config()` 行为不变。
@@ -20,6 +34,24 @@
 - 真实正向 artifact 静态 gate：通过；shape `[131069,151669]`，最大 source-column mass error `1.2299050666797484e-12`。
 - 真实反向 artifact 静态 gate：按预期 fail closed；source IDs 为 `3..131071`，缺少 Mistral IDs `0,1,2`，不满足完整 sender vocabulary。修复 artifact 前不能完成反向 GPU smoke 或 12 个正式单元。
 - Guqq 只读 tokenizer 预检：连接后的首个 `git pull --ff-only` 再次受 GitHub 网络阻塞，命令被中止，未绕过 pull 执行后续检查。
+- 干净 `origin/main` worktree 回归：`38 passed`；早先全局 `%TEMP%` 权限导致 fixture setup error，改用 workspace 内显式 `--basetemp` 后全部通过。
+- 锁定 revision 的真实 tokenizer 已下载并离线加载：Mistral vocab 131072，Qwen vocab 151669。旧 builder fingerprints 为 opaque scheme，因此生成保留父 provenance 的 runtime-v2 artifacts，并改用 analysis 可重算的 token mapping + special IDs 指纹。
+- 正向 runtime-v2 strict gate：SHA `04b8c1e2a553eb61233fb71dfcea692a471fab14ac204359fab484a0c42d6944`，shape `[131069,151669]`，source IDs 完整，最大列质量误差 `1.2299050666797484e-12`。
+- 反向 runtime-v2 strict gate：SHA `9880bb4885dc792e3d61786b8dad5531cea70c796c578191c9fd0724e8b92b2c`，shape `[151643,131072]`，source IDs `0..131071` 完整，最大列质量误差 `7.178257988016412e-12`。
+- 运行时 tokenizer 策略回归：新增测试确认 artifact 工具复现 `ModelWrapper` 的 `pad=eos` 与 left-padding 行为。
+- 正向 runtime-v3 strict gate：SHA `b7ce13823f3a09750aa944dbe7f6a419df2d9c7987883a20be854d32be857e17`，shape `[131069,151669]`，Qwen source vocab 151669 完整，最大列质量误差 `1.2299050666797484e-12`。
+- 反向 runtime-v3 strict gate：SHA `257c46a67c2e68c7888cca5ae32e6f2d89afcd68c0faa8eeae386225bb30cd32`，shape `[151643,131072]`，Mistral source vocab 131072 完整且运行时 pad ID 为 2，最大列质量误差 `7.178257988016412e-12`。
+- Exact STT dense oracle：未分块输出与 position-size=1、target-size=1 的双重分块输出均在 `atol=1e-6` 内等于显式 dense 公式；正式 chunk sizes 已进入 receiver cache identity。
+- Cache-only 依赖隔离：matrix 显式绑定每个 dataset 的四个 receiver cache IDs 及 report 所需的三个 analysis IDs；测试注入同 dataset/system 的 stale cache 后，analysis 只读取 job 声明的四个已验证 cache。
+- 结果报告：每个 dataset/system 明确输出 score、无法解析率、HumanEvalPlus 代码执行失败率和总错误率；两个预注册方向效应在 Markdown 与 JSON 中都报告 10,000 次 paired-bootstrap 95% CI、exact McNemar p 值与 discordant 数。
+- 模型版本一致性：Qwen/Mistral 的 40 位 commit hash 在正式配置中逐模型锁定，并写入全部 planner/baseline/cross job 与 cache identity；wrapper 将 revision 传给 tokenizer/model loader，任务在加载后再次 fail-closed 比较解析 revision。
+- Guqq 同步 gate：标准 HTTPS `git pull --ff-only` 在 30/45 秒窗口内重复返回 124；GitHub SSH Git remote 返回 `Permission denied (publickey)`。因此尚无可证明的 runtime-v3 远端工作树、双向 GPU smoke 或正式结果，goal 保持未完成。
+- Integration smoke matrix：`--smoke --max-samples 4` 对三个 primary datasets 生成 6/12/3/1 行，所有 planner/evaluation 单元均为 `max_samples=4`，analysis/report selection policy 为独立的 `first-4`。
+- Guqq runtime-v3 preflight：通过；Qwen/Mistral vocab 分别为 151669/131072，pad IDs 为 151643/2；正反向 shapes `[131069,151669]`/`[151643,131072]`，SHA 与配置一致，最大列质量误差分别为 `1.2299050666797484e-12`/`7.178257988016412e-12`。
+- Guqq planner smoke：Qwen 与 Mistral 均完成。旧 Mistral 失败由缺少 `refs/main` 引起；显式传入锁定 revision 后直接命中完整 snapshot。
+- Guqq evaluation smoke 332：两个 baseline 暴露空 nested struct 的 PyArrow 写入缺陷，现由 Parquet cache-write 回归覆盖并修复；两个 cross 单元在第二模型 `.to(cuda)` 时 OOM，因此不构成 STT runtime 通过证据。
+- Guqq baseline re-smoke 338（revision `595ba1c`）：Qwen `339_1` 用时约 2m53s、Mistral `338_2` 用时约 32s，ledger 均为 COMPLETED；两个内容寻址 receiver manifests 已写出。baseline Parquet 修复获得真实模型端到端验证。
+- Guqq resource gate：`sinfo`/`scontrol` 证明只有 node221、`compute`、`gpu:1`；无其他高显存 Slurm 目标。RTX 5090 cross OOM 不能在该集群内通过资源选择消除。
 
 ## 2026-09-04 perturbation 强度调整
 

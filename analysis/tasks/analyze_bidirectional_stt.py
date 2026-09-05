@@ -21,23 +21,32 @@ from analysis.tasks._common import load_job, parser
 SYSTEMS = ("qwen_only", "mistral_only", "qwen_to_mistral", "mistral_to_qwen")
 
 
-def _load_rows(cache_root: Path, dataset: str, selection_policy: str) -> tuple[list[dict], list[dict]]:
+def _load_rows(cache_root: Path, dataset: str, selection_policy: str,
+               expected_cache_ids: dict[str, str]) -> tuple[list[dict], list[dict]]:
     import pyarrow.parquet as pq
 
     store = ReceiverEvaluationStore(cache_root, namespace="stt_receiver_evaluations")
     rows, provenance = [], []
+    if set(expected_cache_ids) != set(SYSTEMS):
+        raise CacheError("STT analysis job must name exactly one cache per system")
     directory = cache_root / "stt_receiver_evaluations"
-    for path in directory.glob("*/manifest.json") if directory.exists() else ():
+    for system in SYSTEMS:
+        cache_id = expected_cache_ids[system]
+        path = directory / cache_id / "manifest.json"
+        if not path.exists():
+            raise CacheError(f"required STT Receiver cache does not exist: {cache_id}")
         manifest = json.loads(path.read_text(encoding="utf-8"))
         identity = manifest.get("identity", {})
-        if identity.get("dataset") != dataset or identity.get("selection_policy") != selection_policy:
-            continue
+        if (manifest.get("cache_id") != cache_id or identity.get("system") != system
+                or identity.get("dataset") != dataset
+                or identity.get("selection_policy") != selection_policy):
+            raise CacheError(f"STT Receiver dependency identity mismatch: {cache_id}")
         if manifest.get("identity_hash") != stable_hash(identity):
             raise CacheError(f"incompatible STT Receiver identity: {path.parent}")
         handle = CacheHandle(manifest["cache_id"], path.parent, manifest["identity_hash"])
         store.validate(handle)
         for row in pq.read_table(path.parent / "answers.parquet").to_pylist():
-            row.update(system=identity["system"], condition=identity,
+            row.update(system=system, condition=identity,
                        cache_id=manifest["cache_id"])
             rows.append(row)
         provenance.append({"cache_id": manifest["cache_id"], "path": str(path),
@@ -73,15 +82,24 @@ def run(args) -> int:
         raise ValueError("job task does not match entry point")
     if _validated_result_hit(args, job):
         return 10
-    rows, provenance = _load_rows(Path(args.cache_root), job["dataset"], job["selection_policy"])
+    rows, provenance = _load_rows(
+        Path(args.cache_root), job["dataset"], job["selection_policy"],
+        job.get("receiver_cache_ids", {}),
+    )
     grouped = _coverage(rows)
     cells = []
     for system in SYSTEMS:
         selected = grouped[system]
+        code_execution_failures = (
+            sum(row.get("prediction") is not None and row.get("error") is not None
+                for row in selected) / len(selected)
+            if job["dataset"] == "humanevalplus" else None
+        )
         cells.append({
             "system": system, "questions": len(selected),
             "accuracy": sum(bool(row["correct"]) for row in selected) / len(selected),
             "unparseable_rate": sum(row.get("prediction") is None for row in selected) / len(selected),
+            "code_execution_failure_rate": code_execution_failures,
             "error_rate": sum(row.get("error") is not None for row in selected) / len(selected),
         })
     effects = []

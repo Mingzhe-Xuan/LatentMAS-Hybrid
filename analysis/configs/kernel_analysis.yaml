@@ -18,7 +18,7 @@
     "primary_datasets": ["aime2024", "humanevalplus", "arc_challenge"],
     "scaling_k": [0, 10, 20, 40, 80, 160],
     "stability_k": 40,
-    "perturbation_alpha": [0, 0.01, 0.025, 0.05, 0.10],
+    "perturbation_alpha": [0, 0.01, 0.05, 0.10],
     "perturbation_alignments": ["kernel", "soft", "linear"],
     "variance_features": [256, 512, 1024, 2048, 4096],
     "variance_seeds": 32,

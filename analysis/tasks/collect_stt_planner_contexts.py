@@ -26,12 +26,19 @@ def run(args) -> int:
         raise ValueError("job task does not match entry point")
     if (job.get("sender_key") not in config["models"]
             or job.get("sender_model") != config["models"][job["sender_key"]]
+            or job.get("sender_revision") != config["model_revisions"][job["sender_key"]]
             or job.get("split") != config["datasets"].get(job.get("dataset"), {}).get("split")
             or int(job.get("sender_budget", 0)) != int(config["generation"]["sender_budget"])):
         raise ValueError("STT planner job does not match the formal configuration")
     snapshot = load_analysis_items(job["dataset"], job["split"], max_samples=job.get("max_samples"))
     DatasetSnapshotStore(args.cache_root).write(snapshot)
-    wrapper = load_wrapper(job["sender_model"], args.device, model_args(job, alignment="identical"))
+    wrapper = load_wrapper(
+        job["sender_model"], args.device,
+        model_args(job, alignment="identical", revision=job["sender_revision"]),
+    )
+    resolved_revision = model_revision(wrapper)
+    if resolved_revision != job["sender_revision"]:
+        raise ValueError("loaded planner model revision does not match the formal configuration")
     messages = [build_role_messages(role="planner", question=item.question,
                                     task=job["dataset"], model_name=job["sender_model"])
                 for item in snapshot.items]
@@ -40,7 +47,7 @@ def run(args) -> int:
     code_revision = repository_revision()
     identity = STTPlannerCacheIdentity(
         snapshot.dataset, snapshot.split, snapshot.fingerprint, snapshot.selection_policy,
-        job["sender_model"], model_revision(wrapper),
+        job["sender_model"], resolved_revision,
         transport_tokenizer_fingerprint(wrapper.tokenizer), prompt_set_hash,
         int(config["generation"]["sender_budget"]), code_revision, False,
     )

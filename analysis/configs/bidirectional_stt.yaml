@@ -4,6 +4,10 @@
     "qwen": "Qwen/Qwen3-8B",
     "mistral": "mistralai/Mistral-Nemo-Instruct-2407"
   },
+  "model_revisions": {
+    "qwen": "b968826d9c46dd6066d109eabc6255188de91218",
+    "mistral": "04d8a90549d23fc6bd7f642064003592df51e9b3"
+  },
   "datasets": {
     "aime2024": {"split": "train", "family": "math", "max_new_tokens": 20000, "generation_batch_size": 1},
     "humanevalplus": {"split": "test", "family": "code", "max_new_tokens": 4096, "generation_batch_size": 1},
@@ -15,18 +19,19 @@
     "causal_shift": false,
     "accumulation_dtype": "float32",
     "position_chunk_size": 32,
+    "target_chunk_size": 8192,
     "artifacts": {
       "qwen_to_mistral": {
-        "path": "analysis/transport/qwen3_8b_to_mistral_nemo_openhermes_500k.npz",
-        "sha256": "1495d5224aa83d979134fb7a225989af724753d9c9a0e7d755012d9b0b0aba97",
+        "path": "analysis/transport/qwen3_8b_to_mistral_nemo_openhermes_500k_runtime_v3.npz",
+        "sha256": "b7ce13823f3a09750aa944dbe7f6a419df2d9c7987883a20be854d32be857e17",
         "source": "qwen",
         "target": "mistral",
         "source_revision": "b968826d9c46dd6066d109eabc6255188de91218",
         "target_revision": "04d8a90549d23fc6bd7f642064003592df51e9b3"
       },
       "mistral_to_qwen": {
-        "path": "analysis/transport/mistral_nemo_to_qwen3_8b_openhermes_500k.npz",
-        "sha256": "77905324ee9e063aef33c0e01a73c26bf4ac7907c8a48f972c463f5af3eb486f",
+        "path": "analysis/transport/mistral_nemo_to_qwen3_8b_openhermes_500k_full_vocab_runtime_v3.npz",
+        "sha256": "257c46a67c2e68c7888cca5ae32e6f2d89afcd68c0faa8eeae386225bb30cd32",
         "source": "mistral",
         "target": "qwen",
         "source_revision": "04d8a90549d23fc6bd7f642064003592df51e9b3",

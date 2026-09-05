@@ -27,6 +27,18 @@ def test_pbs_scripts_have_valid_shell_syntax() -> None:
         subprocess.run([bash, "-n", str(ROOT / "analysis/pbs" / script)], check=True)
     for script in ("analysis_job.slurm", "submit_analysis.sh"):
         subprocess.run([bash, "-n", str(ROOT / "analysis/slurm" / script)], check=True)
+    subprocess.run([bash, "-n", str(ROOT / "analysis.sh")], check=True)
+
+
+def test_repository_analysis_entrypoint_is_serial_and_pbs_guarded() -> None:
+    text = (ROOT / "analysis.sh").read_text(encoding="utf-8")
+    assert "#PBS -l select=1:ncpus=12:ngpus=1" in text
+    assert 'ANALYSIS_TARGET="${ANALYSIS_TARGET:-all}"' in text
+    assert '[[ "${ANALYSIS_TARGET}" == all || "${ANALYSIS_TARGET}" == kernel ]] && run_kernel' in text
+    assert '[[ "${ANALYSIS_TARGET}" == all || "${ANALYSIS_TARGET}" == stt ]] && run_stt' in text
+    assert text.index('&& run_kernel\n') < text.index('&& run_stt\n')
+    assert 'if [[ -z "${PBS_JOBID:-}" ]]' in text
+    assert "status == 10" in text and "validated cache hit" in text
 
 
 def test_worker_contains_required_validation_and_status_contract() -> None:

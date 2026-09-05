@@ -1,16 +1,16 @@
-# Planner → Thinker STT 伪代码
+# Planner → Judger STT 伪代码
 
 ## 1. 目标与符号
 
 给定同一道题 `problem`：
 
 - sender 模型 `A`（Qwen3-8B） 充当 `planner`；
-- receiver 模型 `B`（Mistral-Nemo-Instruct-2407） 充当 `thinker`；
+- receiver 模型 `B`（Mistral-Nemo-Instruct-2407）充当 `judger`；
 - 两个模型都显式接收题目，并在各自原生 chat template 中开启 CoT；
-- planner 先生成 `sender_think`；
-- `sender_prompt + sender_think` 的全部有效位置经过 exact soft-token
+- planner 先生成 `sender_plan`；
+- `sender_prompt + sender_plan` 的全部有效位置经过 exact soft-token
   transport（STT）；
-- aligned sender context 拼在 receiver 原生提示词之前，最后由 thinker 自己
+- aligned sender context 拼在 receiver 原生提示词之前，最后由 judger 自己
   思考并回答。
 
 记：
@@ -42,7 +42,7 @@ target token。
 ## 2. 顶层算法
 
 ```text
-ALGORITHM PlannerThinkerSTT(problem, model_A, tokenizer_A,
+ALGORITHM PlannerJudgerSTT(problem, model_A, tokenizer_A,
                             model_B, tokenizer_B,
                             artifact_path, tau,
                             sender_budget, receiver_budget):
@@ -60,24 +60,20 @@ ALGORITHM PlannerThinkerSTT(problem, model_A, tokenizer_A,
     T ← artifact.CSC_matrix                      # 保持稀疏，禁止 dense 化
 
     # ---------- B. 同一道题分别构造双角色提示词 ----------
-    sender_messages ← [
-        SYSTEM("You are the planner. Think step by step and produce a plan."),
-        USER(problem),
-    ]
-    receiver_messages ← [
-        SYSTEM("You are the thinker. Use the planner context, think, and answer."),
-        USER(problem),
-    ]
-
-    sender_prompt_text ← tokenizer_A.APPLY_CHAT_TEMPLATE(
-        sender_messages,
-        add_generation_prompt = true,
-        enable_thinking = true,
+    sender_messages ← analysis.core.schemas.BUILD_ROLE_MESSAGES(
+        role = "planner", question = problem, task = dataset,
+        model_name = sender_model_id,
     )
-    receiver_prompt_text ← tokenizer_B.APPLY_CHAT_TEMPLATE(
-        receiver_messages,
-        add_generation_prompt = true,
-        enable_thinking = true,
+    receiver_messages ← analysis.core.schemas.BUILD_ROLE_MESSAGES(
+        role = "judger", question = problem, task = dataset,
+        model_name = receiver_model_id,
+    )
+
+    sender_prompt_text ← analysis.core.schemas.RENDER_ROLE_PROMPT(
+        model_A, sender_messages, sender_model_id,
+    )
+    receiver_prompt_text ← analysis.core.schemas.RENDER_ROLE_PROMPT(
+        model_B, receiver_messages, receiver_model_id,
     )
 
     sender_prompt_ids, sender_prompt_mask ← tokenizer_A.ENCODE(
@@ -99,12 +95,12 @@ ALGORITHM PlannerThinkerSTT(problem, model_A, tokenizer_A,
     )
 
     REQUIRE sender_full_ids starts_with sender_prompt_ids
-    sender_think_ids ← sender_full_ids AFTER sender_prompt_ids
-    REQUIRE LENGTH(sender_think_ids) > 0
+    sender_plan_ids ← sender_full_ids AFTER sender_prompt_ids
+    REQUIRE LENGTH(sender_plan_ids) > 0
 
     sender_full_mask ← CONCAT(
         sender_prompt_mask,
-        ONES_LIKE(sender_think_ids),
+        ONES_LIKE(sender_plan_ids),
     )
 
     # 这里的 sender_full_ids 正好表示：sender prompt + sender think。
@@ -162,12 +158,12 @@ ALGORITHM PlannerThinkerSTT(problem, model_A, tokenizer_A,
 
     REQUIRE prefix order == [
         "aligned_sender_prompt",
-        "aligned_sender_think",
+        "aligned_sender_plan",
         "receiver_native_prompt",
     ]
     REQUIRE receiver never receives sender token IDs
 
-    # ---------- F. thinker prefill，并显式执行自己的 CoT/回答 ----------
+    # ---------- F. judger prefill，并显式执行自己的推理/回答 ----------
     state ← model_B.FORWARD(
         inputs_embeds = receiver_inputs_embeds,
         attention_mask = receiver_attention_mask,
@@ -199,14 +195,14 @@ ALGORITHM PlannerThinkerSTT(problem, model_A, tokenizer_A,
         kv_cache ← decode_state.kv_cache
         receiver_attention_mask ← APPEND_ONE(receiver_attention_mask)
 
-    sender_think_text ← tokenizer_A.DECODE(sender_think_ids)
+    sender_plan_text ← tokenizer_A.DECODE(sender_plan_ids)
     receiver_answer_text ← tokenizer_B.DECODE(answer_ids)
 
     RETURN {
-        sender_think: sender_think_text,
+        sender_plan: sender_plan_text,
         answer: receiver_answer_text,
         sender_prompt_tokens: COUNT_ONES(sender_prompt_mask),
-        sender_think_tokens: LENGTH(sender_think_ids),
+        sender_plan_tokens: LENGTH(sender_plan_ids),
         aligned_sender_tokens: COUNT_ONES(sender_full_mask),
         receiver_prompt_tokens: COUNT_ONES(receiver_prompt_mask),
         receiver_output_tokens: LENGTH(answer_ids),
@@ -242,7 +238,7 @@ FUNCTION ExactSTTChunk(H, LMHead_A, sparse_T, E_B, tau):
 ## 4. Batch 与 padding
 
 ```text
-FUNCTION PackPlannerAndThinker(aligned_sender, sender_mask,
+FUNCTION PackPlannerAndJudger(aligned_sender, sender_mask,
                                receiver_embeddings, receiver_mask):
     FOR each batch item b:
         sender_valid ← aligned_sender[b][sender_mask[b] == 1]
@@ -267,12 +263,10 @@ all target_token_ids are valid receiver tokenizer IDs
 artifact.source_fingerprint == fingerprint(tokenizer_A)
 artifact.target_fingerprint == fingerprint(tokenizer_B)
 sender_role == "planner"
-receiver_role == "thinker"
-sender_enable_thinking == true
-receiver_enable_thinking == true
-sender_full_context == sender_prompt + sender_think
+receiver_role == "judger"
+sender_full_context == sender_prompt + sender_plan
 causal_shift == false
-receiver_prefix == aligned(sender_prompt + sender_think) + receiver_native_prompt
+receiver_prefix == aligned(sender_prompt + sender_plan) + receiver_native_prompt
 receiver_native_prompt explicitly contains problem
 do_sample == false                       # 当前正式 benchmark
 no discrete source IDs enter receiver

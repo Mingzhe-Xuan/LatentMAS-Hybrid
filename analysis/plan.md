@@ -313,7 +313,7 @@ alpha in {0, 0.01, 0.05, 0.10}
 Kernel, soft, and linear receive the same standard-Gaussian direction for a
 given dataset, item, role, step, and repeat. Kernel `alpha=0, K=40` is already a
 scaling condition. Soft and linear each need one clean `K=40` condition, and all
-three methods need four nonzero perturbation conditions:
+three methods need three nonzero perturbation conditions:
 
 `text` is not part of perturbation stability: it does not consume a continuous
 aligned hidden state at the intervention site, so the same Gaussian perturbation
@@ -321,8 +321,8 @@ is not well-defined or directly comparable. `identical` is also excluded from
 the formal stability matrix.
 
 ```text
-2 clean controls + 3 methods * 4 nonzero alpha = 14 cells per dataset-seed
-9 * 14 = 126 Receiver evaluation cells
+2 clean controls + 3 methods * 3 nonzero alpha = 11 cells per dataset-seed
+9 * 11 = 99 Receiver evaluation cells
 ```
 
 The formal total is therefore:
@@ -330,8 +330,8 @@ The formal total is therefore:
 ```text
 3 Sender trajectory caches
 54 Kernel scaling Receiver cells
-126 stability Receiver cells
-= 180 unique Receiver evaluation cells
+99 stability Receiver cells
+= 153 unique Receiver evaluation cells
 ```
 
 Entropy and alignment-variance analysis perform no new rollout or generation.
@@ -377,7 +377,7 @@ deduplicated formal workload is:
 
 ```text
 18 total Sender caches (3 existing primary + 15 additional)
-324 total Receiver cells (180 primary + 144 additional)
+297 total Receiver cells (153 primary + 144 additional)
 ```
 
 ## 4. Cache design
@@ -887,7 +887,7 @@ any other code means failure. The worker records `STARTED`, `SKIPPED`,
         |
         | afterok
         v
-324 deduplicated Receiver evaluation jobs
+297 deduplicated Receiver evaluation jobs
 (180 primary, 144 additional model-size cells)
         |
         | afterok
@@ -920,7 +920,7 @@ The formal job matrices are:
 | --- | --- | ---: | --- |
 | `sender.jsonl` | `collect_sender_trajectories` | 18 | reuse |
 | `kernel_scaling.jsonl` | `evaluate_kernel_scaling` | 54 | reuse |
-| `perturbation.jsonl` | `evaluate_perturbation_stability` | 126 | reuse |
+| `perturbation.jsonl` | `evaluate_perturbation_stability` | 99 | reuse |
 | `model_pairs.jsonl` | `evaluate_sender_receiver_performance` | 144 | reuse |
 | `entropy_analysis.jsonl` | `analyze_logit_entropy` | 3 | cache-only |
 | `scaling_analysis.jsonl` | `analyze_kernel_scaling` | 3 | cache-only |
@@ -929,7 +929,7 @@ The formal job matrices are:
 | `model_pair_analysis.jsonl` | `analyze_sender_receiver_performance` | 9 | cache-only |
 | `report.jsonl` | `build_kernel_analysis_report` | 1 | cache-only |
 
-The three Receiver evaluation arrays contain `54 + 126 + 144 = 324` unique
+The three Receiver evaluation arrays contain `54 + 99 + 144 = 297` unique
 cells. Reused model-pair cells are deliberately absent from `model_pairs.jsonl`;
 the analyzer resolves them through their canonical scaling cache identities.
 
@@ -967,7 +967,7 @@ SENDER_JOB="$(submit_array collect_sender_trajectories \
 SCALING_JOB="$(submit_array evaluate_kernel_scaling \
     analysis/jobs/kernel_scaling.jsonl 54 reuse "${SENDER_JOB}")"
 PERTURB_JOB="$(submit_array evaluate_perturbation_stability \
-    analysis/jobs/perturbation.jsonl 126 reuse "${SENDER_JOB}")"
+    analysis/jobs/perturbation.jsonl 99 reuse "${SENDER_JOB}")"
 PAIR_JOB="$(submit_array evaluate_sender_receiver_performance \
     analysis/jobs/model_pairs.jsonl 144 reuse "${SENDER_JOB}")"
 
@@ -1096,7 +1096,7 @@ interface under `analysis/core/`; tasks should not duplicate it.
 
 ### Phase 4: PBS and verification
 
-1. Generate an 18-row deduplicated Sender matrix and a 324-row deduplicated
+1. Generate an 18-row deduplicated Sender matrix and a 297-row deduplicated
    Receiver matrix, while retaining task-level counts for the primary and
    model-size experiments.
 2. Add the PBS template, dependencies, dry run, and progress ledger.
@@ -1118,10 +1118,10 @@ The implementation is accepted only if:
   branch of `prompts.py`, and every Receiver manifest proves use of the
   task-specific `judger` branch;
 - the primary three-dataset analysis requires exactly three Qwen3-8B Sender
-  cache identities and 180 Receiver identities;
+  cache identities and 153 Receiver identities;
 - the combined nine-dataset plan contains exactly 18 Sender cache identities
-  and 324 deduplicated Receiver identities;
-- the PBS matrices have exact row counts `18/54/126/144/3/3/3/3/9/1`, contain
+  and 297 deduplicated Receiver identities;
+- the PBS matrices have exact row counts `18/54/99/144/3/3/3/3/9/1`, contain
   no duplicate effective cache IDs, and pass a dry-run/static shell test;
 - the PBS worker rejects unknown task names, out-of-range indices, matrices
   outside `analysis/jobs/`, and configs outside `analysis/configs/`;

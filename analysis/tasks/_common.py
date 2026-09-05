@@ -52,13 +52,15 @@ def load_job(args: argparse.Namespace) -> dict[str, Any]:
     return job
 
 
-def model_args(job: dict[str, Any], *, alignment: str) -> SimpleNamespace:
+def model_args(job: dict[str, Any], *, alignment: str,
+               revision: str | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         task=job["dataset"], model_name=job.get("sender_model") or job.get("receiver_model"),
         method="latent_mas", align_method=alignment, latent_space_realign=False,
         kernel_features=2048, kernel_temperature=.6, kernel_seed=101,
         kernel_chunk_size=4096, soft_temperature=.6, soft_chunk_size=32,
         align_ridge=1e-5, trust_remote_code=False, use_second_HF_model=False,
+        model_revision=revision,
     )
 
 

@@ -24,24 +24,34 @@ def run(args) -> int:
         raise ValueError("job task does not match entry point")
     if _validated_result_hit(args, job):
         return 10
-    expected_selection = "first-1" if job.get("smoke") else "all"
+    expected_selection = job.get("selection_policy")
+    if not isinstance(expected_selection, str) or not expected_selection:
+        raise CacheError("STT report job has no selection policy")
     expected_datasets = tuple(job.get("datasets") or config["datasets"])
+    expected_analysis_ids = job.get("analysis_cache_ids", {})
+    if set(expected_analysis_ids) != set(expected_datasets):
+        raise CacheError("STT report job must name exactly one analysis result per dataset")
     root = Path(args.result_root) / "analyze_bidirectional_stt"
     summaries: dict[str, dict] = {}
     provenance = []
-    for path in root.glob("*/summaries/summary.json") if root.exists() else ():
+    for expected_dataset in expected_datasets:
+        analysis_id = expected_analysis_ids[expected_dataset]
+        path = root / analysis_id / "summaries" / "summary.json"
+        if not path.exists():
+            raise CacheError(f"required STT analysis result does not exist: {analysis_id}")
         summary = json.loads(path.read_text(encoding="utf-8"))
         dataset = summary.get("dataset")
-        if dataset not in expected_datasets or summary.get("selection_policy") != expected_selection:
-            continue
-        if dataset in summaries:
-            raise CacheError(f"ambiguous STT analysis summary for {dataset}")
+        if dataset != expected_dataset or summary.get("selection_policy") != expected_selection:
+            raise CacheError(f"STT analysis dependency identity mismatch: {analysis_id}")
         manifest_path = path.parents[1] / "run_manifest.json"
         if not manifest_path.exists():
             raise CacheError(f"STT analysis result has no run manifest: {path.parents[1]}")
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         relative = str(path.relative_to(path.parents[1])).replace("\\", "/")
-        if manifest.get("status") != "complete" or manifest.get("artifacts", {}).get(relative) != file_sha256(path):
+        if (manifest.get("status") != "complete"
+                or manifest.get("result_id") != analysis_id
+                or manifest.get("task") != "analyze_bidirectional_stt"
+                or manifest.get("artifacts", {}).get(relative) != file_sha256(path)):
             raise CacheError(f"STT analysis summary is not validated: {path}")
         summaries[dataset] = summary
         provenance.append({"path": str(manifest_path), "manifest_hash": file_sha256(manifest_path),
@@ -82,7 +92,31 @@ def run(args) -> int:
     lines.extend(["", "## Paired effect macro averages", "",
                   "| Effect | Macro difference |", "|---|---:|"])
     lines.extend(f"| `{row['effect']}` | {row['macro_average']:+.6f} |" for row in macro_effects)
-    lines.extend(["", "Per-dataset 95% paired-bootstrap confidence intervals and exact McNemar tests are stored in `summaries/combined.json`.", ""])
+    lines.extend(["", "## Per-dataset system metrics", "",
+                  "| Dataset | System | Score | Unparseable | Code execution failure | Error |",
+                  "|---|---|---:|---:|---:|---:|"])
+    for dataset in expected_datasets:
+        for cell in summaries[dataset]["systems"]:
+            code_rate = cell.get("code_execution_failure_rate")
+            rendered_code_rate = "—" if code_rate is None else f"{float(code_rate):.6f}"
+            lines.append(
+                f"| `{dataset}` | `{cell['system']}` | {float(cell['accuracy']):.6f} | "
+                f"{float(cell['unparseable_rate']):.6f} | {rendered_code_rate} | "
+                f"{float(cell['error_rate']):.6f} |"
+            )
+    lines.extend(["", "## Per-dataset paired effects", "",
+                  "| Dataset | Effect | Difference | 95% paired-bootstrap CI | McNemar p | Discordant |",
+                  "|---|---|---:|---:|---:|---:|"])
+    for dataset in expected_datasets:
+        for effect in summaries[dataset]["effects"]:
+            bootstrap = effect["paired_bootstrap"]
+            mcnemar = effect["exact_mcnemar"]
+            lines.append(
+                f"| `{dataset}` | `{effect['effect']}` | {float(bootstrap['estimate']):+.6f} | "
+                f"[{float(bootstrap['ci_low']):+.6f}, {float(bootstrap['ci_high']):+.6f}] | "
+                f"{float(mcnemar['p_value']):.6g} | {int(mcnemar['discordant'])} |"
+            )
+    lines.extend(["", "Machine-readable per-dataset statistics and provenance are stored in `summaries/combined.json`.", ""])
     atomic_write_bytes(destination / "summaries" / "report.md", "\n".join(lines).encode("utf-8"))
     atomic_write_json(destination / "provenance" / "analysis_manifests.json", provenance)
     _finalize_result(destination, job, provenance)

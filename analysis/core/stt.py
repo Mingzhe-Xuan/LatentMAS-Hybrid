@@ -73,7 +73,9 @@ class STTChunkDiagnostics:
 def transport_tokenizer_fingerprint(tokenizer: Any) -> str:
     """Canonical token-ID mapping fingerprint used at the runtime artifact gate."""
     rows = sorted((int(token_id), str(token)) for token, token_id in tokenizer.get_vocab().items())
-    return hashlib.sha256(canonical_json(rows).encode("utf-8")).hexdigest()
+    special = {name: getattr(tokenizer, name, None) for name in
+               ("bos_token_id", "eos_token_id", "pad_token_id", "unk_token_id")}
+    return hashlib.sha256(canonical_json({"rows": rows, "special": special}).encode("utf-8")).hexdigest()
 
 
 def _base_model(wrapper: Any) -> Any:
@@ -279,7 +281,8 @@ def _embedding_weight(receiver_embeddings: torch.Tensor | torch.nn.Module) -> to
 def exact_stt(hidden: torch.Tensor, lm_head: Callable[[torch.Tensor], torch.Tensor],
               receiver_embeddings: torch.Tensor | torch.nn.Module,
               artifact: ValidatedSTTArtifact, *, tau: float = 0.6,
-              position_chunk_size: int | None = None) -> tuple[torch.Tensor, STTChunkDiagnostics]:
+              position_chunk_size: int | None = None,
+              target_chunk_size: int | None = None) -> tuple[torch.Tensor, STTChunkDiagnostics]:
     if hidden.ndim < 2:
         raise ValueError("hidden must have shape [..., sequence, hidden_dim]")
     if tau <= 0:
@@ -288,12 +291,15 @@ def exact_stt(hidden: torch.Tensor, lm_head: Callable[[torch.Tensor], torch.Tens
     chunk_size = position_chunk_size or positions
     if chunk_size <= 0:
         raise ValueError("position_chunk_size must be positive")
+    target_size = target_chunk_size or artifact.shape[0]
+    if target_size <= 0:
+        raise ValueError("target_chunk_size must be positive")
     flat_hidden = hidden.reshape(positions, hidden.shape[-1])
     sparse = artifact.sparse_coo(hidden.device)
     source_ids = artifact.source_token_ids.to(hidden.device)
     target_ids = artifact.target_token_ids.to(hidden.device)
     embedding_weight = _embedding_weight(receiver_embeddings)
-    active_embeddings = embedding_weight.index_select(0, target_ids.to(embedding_weight.device)).float()
+    embedding_width = int(embedding_weight.shape[1])
     outputs: list[torch.Tensor] = []
     source_errors: list[torch.Tensor] = []
     target_errors: list[torch.Tensor] = []
@@ -309,7 +315,14 @@ def exact_stt(hidden: torch.Tensor, lm_head: Callable[[torch.Tensor], torch.Tens
         probabilities_full = torch.softmax(logits / tau, dim=-1)
         probabilities_source = probabilities_full.index_select(1, source_ids)
         probabilities_target = torch.sparse.mm(sparse, probabilities_source.transpose(0, 1)).transpose(0, 1)
-        aligned = probabilities_target @ active_embeddings.to(probabilities_target.device)
+        aligned = torch.zeros((probabilities_target.shape[0], embedding_width), dtype=torch.float32,
+                              device=probabilities_target.device)
+        for target_start in range(0, artifact.shape[0], target_size):
+            target_stop = min(target_start + target_size, artifact.shape[0])
+            chunk_ids = target_ids[target_start:target_stop].to(embedding_weight.device)
+            chunk_embeddings = embedding_weight.index_select(0, chunk_ids).to(
+                device=probabilities_target.device, dtype=torch.float32)
+            aligned.addmm_(probabilities_target[:, target_start:target_stop], chunk_embeddings)
         outputs.append(aligned.to(dtype=embedding_weight.dtype, device=hidden.device))
         source_errors.append((probabilities_source.sum(-1) - 1).abs())
         target_errors.append((probabilities_target.sum(-1) - 1).abs())
@@ -319,7 +332,7 @@ def exact_stt(hidden: torch.Tensor, lm_head: Callable[[torch.Tensor], torch.Tens
         target_entropies.append(target_entropy)
         source_effective_support.append(source_entropy.exp())
         target_effective_support.append(target_entropy.exp())
-    result = torch.cat(outputs, dim=0).reshape(*hidden.shape[:-1], active_embeddings.shape[-1])
+    result = torch.cat(outputs, dim=0).reshape(*hidden.shape[:-1], embedding_width)
     diagnostics = STTChunkDiagnostics(
         source_mass_max_error=float(torch.cat(source_errors).max()),
         target_mass_max_error=float(torch.cat(target_errors).max()),
@@ -409,7 +422,8 @@ def greedy_decode_from_embeddings(wrapper: Any, inputs_embeds: torch.Tensor,
 def evaluate_stt_item(item: AnalysisItem, receiver: Any, *, receiver_model_id: str,
                       max_new_tokens: int, planner: STTPlannerItemContext | None = None,
                       sender: Any | None = None, artifact: ValidatedSTTArtifact | None = None,
-                      tau: float = 0.6, position_chunk_size: int | None = None) -> ReceiverItemResult:
+                      tau: float = 0.6, position_chunk_size: int | None = None,
+                      target_chunk_size: int | None = None) -> ReceiverItemResult:
     cross = planner is not None or sender is not None or artifact is not None
     if cross and (planner is None or sender is None or artifact is None):
         raise ValueError("cross-vocabulary STT requires planner context, sender model and artifact")
@@ -432,6 +446,7 @@ def evaluate_stt_item(item: AnalysisItem, receiver: Any, *, receiver_model_id: s
         aligned, diagnostics = exact_stt(
             planner.hidden.to(sender.device), _lm_head(_base_model(sender)), receiver_embedding_layer,
             artifact, tau=tau, position_chunk_size=position_chunk_size,
+            target_chunk_size=target_chunk_size,
         )
         _sync(receiver.device)
         alignment_seconds = time.perf_counter() - started
@@ -441,6 +456,8 @@ def evaluate_stt_item(item: AnalysisItem, receiver: Any, *, receiver_model_id: s
             aligned, sender_mask, receiver_embeddings, receiver_mask,
         )
         transport_diagnostics = dataclasses.asdict(diagnostics)
+        transport_diagnostics.update(position_chunk_size=position_chunk_size,
+                                     target_chunk_size=target_chunk_size)
     else:
         inputs_embeds = receiver_embeddings
         generation_mask = receiver_mask
@@ -455,6 +472,26 @@ def evaluate_stt_item(item: AnalysisItem, receiver: Any, *, receiver_model_id: s
     evaluation_seconds = time.perf_counter() - started
     prompt_hash = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
     prefix_length = int(planner.attention_mask.sum()) if planner is not None else 0
+    result_diagnostics = {
+        "prompt_text": prompt_text, "prompt_hash": prompt_hash,
+        "messages": messages, "messages_hash": stable_hash(messages),
+        "receiver_prompt_token_ids": receiver_ids[0].detach().cpu().tolist(),
+        "receiver_attention_mask": receiver_mask[0].detach().cpu().tolist(),
+        "prefill_attention_mask": generation_mask[0].detach().cpu().tolist(),
+        "prefill_position_ids": position_ids[0].detach().cpu().tolist(),
+        "prefix_order": ["aligned_sender_prompt", "aligned_sender_plan", "receiver_native_prompt"]
+        if planner is not None else ["receiver_native_prompt"],
+        "causal_shift": False, "do_sample": False,
+        "sender_prompt_token_count": planner.prompt_token_count if planner is not None else 0,
+        "sender_plan_token_count": planner.plan_token_count if planner is not None else 0,
+        "sender_full_context_token_count": prefix_length,
+        "receiver_prompt_token_count": int(receiver_mask.sum()),
+        "transferred_length_ratio": prefix_length / int(generation_mask.sum()),
+        "planner_generation_seconds": planner.generation_seconds if planner is not None else 0.0,
+        "planner_full_forward_seconds": planner.full_forward_seconds if planner is not None else 0.0,
+    }
+    if planner is not None:
+        result_diagnostics["transport"] = transport_diagnostics
     return ReceiverItemResult(
         item_id=item.item_id, question_hash=item.question_hash,
         prediction=evaluation.prediction, raw_prediction=raw, gold=item.gold,
@@ -466,23 +503,5 @@ def evaluate_stt_item(item: AnalysisItem, receiver: Any, *, receiver_model_id: s
         sender_recurrence_output_tokens=planner.plan_token_count if planner is not None else 0,
         transfer_alignment_output_tokens=prefix_length,
         receiver_decode_output_tokens=len(answer_ids), aligned_prefix_length=prefix_length,
-        diagnostics={
-            "prompt_text": prompt_text, "prompt_hash": prompt_hash,
-            "messages": messages, "messages_hash": stable_hash(messages),
-            "receiver_prompt_token_ids": receiver_ids[0].detach().cpu().tolist(),
-            "receiver_attention_mask": receiver_mask[0].detach().cpu().tolist(),
-            "prefill_attention_mask": generation_mask[0].detach().cpu().tolist(),
-            "prefill_position_ids": position_ids[0].detach().cpu().tolist(),
-            "prefix_order": ["aligned_sender_prompt", "aligned_sender_plan", "receiver_native_prompt"]
-            if planner is not None else ["receiver_native_prompt"],
-            "causal_shift": False, "do_sample": False,
-            "sender_prompt_token_count": planner.prompt_token_count if planner is not None else 0,
-            "sender_plan_token_count": planner.plan_token_count if planner is not None else 0,
-            "sender_full_context_token_count": prefix_length,
-            "receiver_prompt_token_count": int(receiver_mask.sum()),
-            "transferred_length_ratio": prefix_length / int(generation_mask.sum()),
-            "planner_generation_seconds": planner.generation_seconds if planner is not None else 0.0,
-            "planner_full_forward_seconds": planner.full_forward_seconds if planner is not None else 0.0,
-            "transport": transport_diagnostics,
-        },
+        diagnostics=result_diagnostics,
     )

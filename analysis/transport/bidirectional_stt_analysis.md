@@ -108,22 +108,25 @@ OpenHermes-2.5 是 transport matrix 的构建语料，不是下游评测集，�
 
 | 方向 | 文件 | Shape `[target, source]` | NNZ | SHA-256 |
 |---|---|---:|---:|---|
-| Qwen3-8B → Mistral-Nemo | `analysis/transport/qwen3_8b_to_mistral_nemo_openhermes_500k.npz` | `[131069, 151669]` | 2,733,518 | `1495d5224aa83d979134fb7a225989af724753d9c9a0e7d755012d9b0b0aba97` |
-| Mistral-Nemo → Qwen3-8B | `analysis/transport/mistral_nemo_to_qwen3_8b_openhermes_500k.npz` | `[151669, 131069]` | 2,733,518 | `77905324ee9e063aef33c0e01a73c26bf4ac7907c8a48f972c463f5af3eb486f` |
+| Qwen3-8B → Mistral-Nemo | `analysis/transport/qwen3_8b_to_mistral_nemo_openhermes_500k_runtime_v3.npz` | `[131069, 151669]` | 2,733,518 | `b7ce13823f3a09750aa944dbe7f6a419df2d9c7987883a20be854d32be857e17` |
+| Mistral-Nemo → Qwen3-8B | `analysis/transport/mistral_nemo_to_qwen3_8b_openhermes_500k_full_vocab_runtime_v3.npz` | `[151643, 131072]` | 2,693,524 | `257c46a67c2e68c7888cca5ae32e6f2d89afcd68c0faa8eeae386225bb30cd32` |
 
 已完成的静态检查：
 
 - 两个矩阵均为 CSC，`indptr` 长度分别等于 source support size 加一；
 - 所有 transport 权重均有限且非负；
 - 正向矩阵最大列质量误差约为 `1.23e-12`；
-- 反向矩阵最大列质量误差约为 `4.91e-14`；
-- 反向 artifact 的 source/target fingerprints 与正向 artifact 恰好互换；
-- 反向 artifact 标记为 `bayes-joint-reversal-v1`，不是直接把正向条件矩阵转置后使用。
+- 反向矩阵最大列质量误差约为 `7.18e-12`；
+- 两个正式 runtime-v3 artifacts 的 source support 都覆盖对应 sender tokenizer 的完整词表；target support 是对应 receiver 的 ordinary-token 子集；
+- 正反向矩阵分别独立构建，反向不是正向条件矩阵的转置；
+- runtime-v3 派生过程不改变已有 transport 数值边，只使用锁定 revision 的真实 tokenizer，并复现 `ModelWrapper` 的 pad-token/left-padding 归一化，再将运行时 token→ID 映射与 special IDs 重新指纹化；parent SHA-256、原始 fingerprints 和构建 provenance 均被保留。
 
 正向 artifact 记录的 revision 是：
 
 - Qwen source revision：`b968826d9c46dd6066d109eabc6255188de91218`
 - Mistral target revision：`04d8a90549d23fc6bd7f642064003592df51e9b3`
+
+这两个 revision 同时在正式配置的 `model_revisions` 中逐模型锁定。六个 planner jobs、两个单模型 baseline 和两个 cross-vocab 条件都把相应 revision 写入 job 与 cache identity，并将其直接传给 `AutoTokenizer/AutoModelForCausalLM.from_pretrained()`；加载后再次比较模型配置解析出的 commit hash。baseline 不得使用浮动的 Hugging Face `main`。
 
 ### 4.1 正式运行前的 artifact gate
 
@@ -142,10 +145,9 @@ loader 必须使用 `allow_pickle=False`，并在加载模型后逐项检查：
 
 任何检查失败都必须立即停止，不能自动转置矩阵、删除 fingerprint 检查或退化成 hard mapping。
 
-反向 artifact 当前还需要特别处理两个 provenance 问题：
+正式 runtime-v3 artifacts 已在上述锁定 revision 的实际 Mistral/Qwen tokenizer 上完成 fingerprint normalization 与 full-source-support 检查，其中 Mistral 按模型运行时策略将缺失的 pad token 绑定为 EOS（ID 2）。父 artifact 的 opaque builder fingerprint 仍保留在 `runtime_tokenizer_validation.parent_*_fingerprint`；运行时 gate 比较的是可由当前 `analysis` 独立重算的 `analysis-tokenizer-mapping-plus-special-ids-sha256-v1` 指纹。大文件不进入普通 Git，必须通过受控数据传输放入配置声明的路径，并在运行前再次校验配置 SHA-256。
 
-- metadata 标记了 `derivation.fingerprint_validation = "not-performed"`；正式实验前必须对实际 Mistral/Qwen tokenizer 执行验证并记录结果；
-- 反向 source support 继承自正向 target 的 `ordinary-only` support，而主协议要求完整 sender vocabulary。必须核对 Mistral tokenizer 的实际长度和缺失 token IDs。如果没有完整覆盖，应重新构建或补齐满足 full-source-support 的反向 artifact；在此之前只能作为明确标注的 provisional protocol，不能与正向 strict-exact 结果等价表述。
+部署到计算环境后，先运行 `python analysis/transport/validate_runtime_artifacts.py --config analysis/configs/bidirectional_stt.yaml`。该命令不加载模型权重，但必须对两个方向执行与 evaluation 相同的 tokenizer normalization 和 strict artifact gate，并输出机器可读的通过记录。
 
 ## 5. Prompt 与生成协议
 
@@ -284,9 +286,9 @@ Receiver cache identity 必须包含：
 5. receiver 完成 prefill、greedy decode 和任务评测；
 6. 原子写入 planner context、receiver result、计时和 provenance cache。
 
-position chunk 或 target-vocabulary chunk 仍可用于提高吞吐和进行 chunk-invariance 验证，但它们只是数学等价的可选实现优化。不得因为显存充足而 dense 化完整 `T`，也不得改变完整 vocabulary softmax、全部稀疏边或 prefix 顺序。
+正式配置使用 32-position chunk 和 8192-target-vocabulary chunk；二者都只用于等价的 FP32 分块累加，并已纳入 receiver cache identity。不同 chunk size 必须通过 dense oracle 的 chunk-invariance 验证。不得因为显存充足而 dense 化完整 `T`，也不得改变完整 vocabulary softmax、全部稀疏边或 prefix 顺序。
 
-Stage A 的 planner cache 仍然保留，用于确保确定性 trajectory 可复查、可复现；Stage A/Stage B 的逻辑边界是缓存与 provenance 边界，不代表必须卸载模型或使用不同 GPU 作业。
+Stage A 的 planner cache 仍然保留，用于确保确定性 trajectory 可复查、可复现；Stage A/Stage B 的逻辑边界是缓存与 provenance 边界，不代表必须卸载模型或使用不同 GPU 作业。每个 dataset analysis job 必须显式列出其四个 receiver cache IDs，最终 report job 必须显式列出每个 dataset 的 analysis result ID；cache-only 阶段不得通过目录扫描猜测依赖，以免旧提交或旧 smoke cache 污染当前结果。
 
 若运行环境使用 Slurm，所有计算任务仍按 scheduler 规则提交；若正式高显存 GPU 使用其他调度环境，则保持相同任务入口、job matrix、cache identity 和依赖关系，不把调度器差异写入实验条件。
 
@@ -361,7 +363,7 @@ Delta_M_to_Q = score(mistral_to_qwen) - score(qwen_only)
 13. 验证 cache identity 对方向、artifact、tau、模型 revision 和 prompt 敏感；
 14. 验证 STT task 可由现有 `analysis_job.slurm` worker 调度，并通过 submitter dry-run 的依赖图检查；
 15. Slurm 单题、双方向 GPU smoke；
-16. 每个 primary dataset 至少四题的 integration smoke；
+16. 使用 `--smoke --max-samples 4` 运行每个 primary dataset 前四题的 integration smoke；其 selection policy 固定为 `first-4`，不得复用 `first-1` cache；
 17. 运行 12 个正式主实验单元；
 18. cache-only 统计与最终报告。
 

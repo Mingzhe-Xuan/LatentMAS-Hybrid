@@ -31,7 +31,7 @@ MATRIX_TASKS = {
     "model_pair_analysis.jsonl": "analyze_sender_receiver_performance",
     "report.jsonl": "build_kernel_analysis_report",
 }
-EXPECTED_COUNTS = dict(zip(MATRIX_TASKS, (18, 54, 126, 144, 3, 3, 3, 3, 9, 1)))
+EXPECTED_COUNTS = dict(zip(MATRIX_TASKS, (18, 54, 99, 144, 3, 3, 3, 3, 9, 1)))
 
 
 def sender_source_id(dataset: str, model: str, *, smoke: bool = False) -> str:

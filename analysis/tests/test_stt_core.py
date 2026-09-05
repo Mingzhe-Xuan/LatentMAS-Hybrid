@@ -10,13 +10,17 @@ import numpy as np
 import pytest
 import torch
 
-from analysis.core.cache import CacheError, STTPlannerContextStore
+from analysis.core.cache import (CacheError, ReceiverEvaluationStore,
+                                 STTPlannerContextStore)
 from analysis.core.config import load_config, load_stt_config
-from analysis.core.schemas import AnalysisItem, STTPlannerCacheIdentity, STTPlannerItemContext
+from analysis.core.schemas import (AnalysisItem, STTPlannerCacheIdentity,
+                                   STTPlannerItemContext, STTReceiverCondition)
 from analysis.core.stt import (STTArtifactError, STTArtifactSpec, exact_stt,
                                collect_stt_planner_item, evaluate_stt_item,
                                load_stt_artifact, pack_stt_prefix)
 from analysis.core.statistics import exact_mcnemar
+from analysis.transport.complete_reverse_support import (complete_csc_source_support,
+                                                         normalize_runtime_tokenizer)
 
 
 def _artifact(path: Path, *, source_ids: np.ndarray | None = None) -> STTArtifactSpec:
@@ -58,7 +62,21 @@ def test_stt_config_is_separate_from_kernel_config() -> None:
     assert stt.raw["systems"] == [
         "qwen_only", "mistral_only", "qwen_to_mistral", "mistral_to_qwen"
     ]
+    assert stt.raw["transport"]["target_chunk_size"] == 8192
+    assert set(stt.raw["model_revisions"]) == {"qwen", "mistral"}
+    assert all(len(value) == 40 for value in stt.raw["model_revisions"].values())
     assert load_config("analysis/configs/kernel_analysis.yaml").raw["protocol_version"] == "kernel-analysis-v1"
+
+
+def test_stt_receiver_identity_is_chunk_sensitive() -> None:
+    condition = STTReceiverCondition(
+        dataset="aime2024", split="train", dataset_fingerprint="dataset",
+        selection_policy="first-1", system="qwen_only", receiver_model_id="qwen",
+        receiver_revision="revision", receiver_tokenizer_fingerprint="tokenizer",
+        receiver_prompt_hash="prompt", max_new_tokens=32,
+    )
+    assert condition.cache_id != dataclasses.replace(condition, target_chunk_size=1).cache_id
+    assert condition.cache_id != dataclasses.replace(condition, position_chunk_size=1).cache_id
 
 
 def test_load_stt_artifact_validates_csc_and_revisions(tmp_path: Path) -> None:
@@ -91,7 +109,7 @@ def test_exact_stt_matches_dense_oracle_and_chunks(tmp_path: Path) -> None:
     ])
     actual, diagnostics = exact_stt(hidden, lm_head, embeddings, artifact, tau=0.6)
     chunked, _ = exact_stt(hidden, lm_head, embeddings, artifact, tau=0.6,
-                           position_chunk_size=1)
+                           position_chunk_size=1, target_chunk_size=1)
 
     logits = lm_head(hidden).float()
     full = torch.softmax(logits / 0.6, dim=-1)
@@ -211,6 +229,54 @@ def test_planner_collection_and_stt_receiver_runtime(tmp_path: Path) -> None:
     assert row.diagnostics["causal_shift"] is False
 
 
+def test_stt_baseline_diagnostics_are_parquet_serializable(tmp_path: Path) -> None:
+    item = AnalysisItem(0, "q", "7", "7")
+    row = evaluate_stt_item(
+        item, _Wrapper(), receiver_model_id="receiver", max_new_tokens=4)
+    assert "transport" not in row.diagnostics
+    store = ReceiverEvaluationStore(tmp_path, namespace="stt_receiver_evaluations")
+    identity = {"schema_version": "stt-receiver-v2", "system": "qwen_only"}
+    handle = store.resolve("baseline", identity)
+    store.write(handle, identity, [row], {"accuracy": 1.0})
+    assert store.validate(handle)["question_count"] == 1
+
+
 def test_exact_mcnemar_counts_discordant_pairs() -> None:
     result = exact_mcnemar([1, 1, 0, 0], [1, 0, 1, 0])
     assert result == {"left_only": 1, "right_only": 1, "discordant": 2, "p_value": 1.0}
+
+
+def test_reverse_support_completion_adds_literal_special_columns() -> None:
+    class Source:
+        def __len__(self): return 4
+        def decode(self, ids, **kwargs): return "special-zero"
+        def convert_ids_to_tokens(self, token_id): return f"source-{token_id}"
+
+    class Target:
+        def __len__(self): return 4
+        def __call__(self, text, add_special_tokens=False): return {"input_ids": [2, 3, 2]}
+
+    completed, records = complete_csc_source_support(
+        indptr=np.array([0, 1, 2, 3]), indices=np.array([0, 1, 0]),
+        data=np.ones(3), source_token_ids=np.array([1, 2, 3]),
+        target_token_ids=np.arange(4), source_tokenizer=Source(), target_tokenizer=Target(),
+    )
+    assert completed["source_token_ids"].tolist() == [0, 1, 2, 3]
+    assert completed["indptr"].tolist() == [0, 2, 3, 4, 5]
+    assert completed["indices"][:2].tolist() == [2, 3]
+    assert completed["data"][:2].tolist() == pytest.approx([2 / 3, 1 / 3])
+    assert records == [{"source_token_id": 0, "literal": "special-zero",
+                        "target_token_ids": [2, 3], "weights": pytest.approx([2 / 3, 1 / 3])}]
+
+
+def test_artifact_tokenizer_normalization_matches_model_wrapper_pad_policy() -> None:
+    class Tokenizer:
+        pad_token_id = None
+        eos_token_id = 2
+        eos_token = "</s>"
+        pad_token = None
+        padding_side = "right"
+
+    tokenizer = normalize_runtime_tokenizer(Tokenizer())
+    assert tokenizer.pad_token == "</s>"
+    assert tokenizer.padding_side == "left"
