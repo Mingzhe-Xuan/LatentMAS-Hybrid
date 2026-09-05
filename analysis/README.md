@@ -45,19 +45,27 @@ perturbation rows.
 
 ## Submit
 
-The repository-level PBS entry point runs the complete kernel protocol followed
-by the complete bidirectional STT protocol, strictly serially in one allocation:
+The repository-level PBS submitter builds one dataset/run compute array. Its
+formal default has 27 kernel cells (9 datasets x 3 configured seeds) and 3
+deterministic STT cells (3 datasets x 1 run). Every cell requests one GPU and
+the array throttle is two, so the workflow uses at most two GPUs concurrently.
+After the compute array succeeds, one dependent finalize job performs all
+cache-only analyses and builds both reports:
 
 ```bash
-qsub analysis.sh
-qsub -v ANALYSIS_TARGET=kernel analysis.sh
-qsub -v ANALYSIS_TARGET=stt,ANALYSIS_SMOKE=true,DATASET=aime2024 analysis.sh
+bash analysis.sh
+bash analysis.sh --kernel
+bash analysis.sh --stt --smoke --dataset aime2024
 bash analysis.sh --all --smoke --dataset aime2024 --dry-run
 ```
 
 Use `--kernel` or `--stt` for one protocol, and `--stage` for one common phase.
-The entry point validates exit code `10` as a resumable cache hit. It refuses to
-run model work outside a PBS allocation; `--dry-run` is safe locally.
+Set `ANALYSIS_MAX_GPUS=1` to reduce concurrency; values above two are rejected.
+The submitter must run on a PBS login node with `qsub`; `--dry-run` is safe
+locally. A bundle treats task exit code `10` as a validated resumable cache hit.
+Every submission writes immutable matrices and manifests below a distinct
+`analysis/jobs/<run-id>/` directory, so a later submission cannot overwrite the
+inputs of an array that is still queued or running.
 
 All model work must use the cluster scheduler:
 

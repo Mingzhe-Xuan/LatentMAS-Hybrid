@@ -1,0 +1,53 @@
+#!/bin/bash
+#PBS -N analysis_compute
+#PBS -P ds_ccds_wei.lu
+#PBS -q gpu_ded
+#PBS -l walltime=72:00:00
+#PBS -l select=1:ncpus=12:ngpus=1
+#PBS -j oe
+set -euo pipefail
+
+RUN_MANIFEST="${RUN_MANIFEST:-analysis/jobs/dataset_runs.jsonl}"
+ANALYSIS_CACHE_ROOT="${ANALYSIS_CACHE_ROOT:-analysis_cache}"
+ANALYSIS_RESULT_ROOT="${ANALYSIS_RESULT_ROOT:-analysis_result}"
+STATE_ROOT="${STATE_ROOT:-state/analysis}"
+DEVICE="${DEVICE:-cuda}"
+ARRAY_INDEX="${PBS_ARRAY_INDEX:-0}"
+
+if ! [[ "${ARRAY_INDEX}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: PBS_ARRAY_INDEX must be a positive integer" >&2
+    exit 2
+fi
+
+module purge
+module load "${ANALYSIS_PYTHON_MODULE:-python/3.12.13}"
+ANALYSIS_VENV="${ANALYSIS_VENV:-/home/n2501945g/LatentMAS-Hybrid/.venv}"
+source "${ANALYSIS_VENV}/bin/activate"
+cd "${PBS_O_WORKDIR}" || exit 1
+if [[ ! -d analysis ]]; then echo "ERROR: analysis directory not found" >&2; exit 1; fi
+export PYTHONUNBUFFERED=1
+export HF_HOME="${HF_HOME:-/home/n2501945g/.cache/huggingface}"
+export HF_HUB_CACHE="${HF_HUB_CACHE:-${HF_HOME}/hub}"
+export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${HF_HOME}/datasets}"
+if echo "${CUDA_VISIBLE_DEVICES:-}" | grep -q "GPU-"; then
+    GPU_COUNT=$(echo "${CUDA_VISIBLE_DEVICES}" | tr ',' '\n' | wc -l)
+    CUDA_VISIBLE_DEVICES=$(seq -s, 0 "$((GPU_COUNT - 1))"); export CUDA_VISIBLE_DEVICES
+fi
+
+JOB_SLUG="$(printf '%s' "${PBS_JOBID:-local}" | tr -c 'A-Za-z0-9._-' '_')"
+STATE_PATH="${STATE_ROOT}/dataset_runs/${JOB_SLUG}_${ARRAY_INDEX}.log"
+mkdir -p "$(dirname "${STATE_PATH}")"
+{
+    echo "job/index: ${PBS_JOBID:-local}/${ARRAY_INDEX}"
+    echo "host: $(hostname)"
+    echo "revision: $(git rev-parse HEAD)"
+    echo "started: $(date --iso-8601=seconds)"
+    echo "python: $(python3 --version 2>&1)"
+    echo "CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-unset}"
+    nvidia-smi -L
+    python3 analysis/pbs/run_dataset_bundle.py --manifest "${RUN_MANIFEST}" \
+        --index "${ARRAY_INDEX}" --cache-root "${ANALYSIS_CACHE_ROOT}" \
+        --result-root "${ANALYSIS_RESULT_ROOT}" --state-root "${STATE_ROOT}" \
+        --device "${DEVICE}"
+    echo "finished: $(date --iso-8601=seconds)"
+} > "${STATE_PATH}" 2>&1

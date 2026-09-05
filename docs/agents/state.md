@@ -2,16 +2,19 @@
 
 ## 2026-09-05 repository-level analysis entry point
 
-- Current state: the root `analysis.sh` PBS entry point is implemented and
-  verified; its default target is a strict serial kernel-then-STT run in one
-  GPU allocation.
-- Plan: implementation is complete; submit `qsub analysis.sh` on the intended
-  high-memory PBS GPU when the full formal run is desired.
-- Change record: selected direct sequential matrix execution rather than nested
-  `qsub`, so completion of the kernel report is a real prerequisite for starting
-  STT and exit-code-10 cache hits remain resumable.
-- Change record: shell syntax, the combined AIME smoke dry-run, argument failure
-  behavior, and all 39 analysis tests passed.
+- Current state: the root `analysis.sh` is now a dynamic PBS compute-array
+  submitter. The formal manifest has 27 kernel dataset/seed cells and 3
+  deterministic STT dataset cells; every cell requests one GPU and `%2` caps
+  aggregate concurrency at two GPUs.
+- Plan: implementation and local verification are complete; the entry point is
+  ready for submission on the intended PBS cluster.
+- Change record: replaced the earlier one-allocation serial design with the
+  user-approved compute-array plus dependent-finalizer design. The finalizer
+  starts only after every array cell succeeds and retains cache-only analysis
+  and report ordering.
+- Change record: submission-scoped manifest directories prevent a later launch
+  from overwriting queued/running job inputs. Formal and AIME first-four dry
+  runs, shell syntax, compileall, and all 41 analysis tests pass.
 
 ## 2026-09-04 双向 Exact STT goal
 

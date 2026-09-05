@@ -1,10 +1,10 @@
 # Progress updates
 
-- 2026-09-05: Added a repository-level PBS `analysis.sh` patterned after
-  `exp.sh`. It defaults to strictly serial kernel then bidirectional-STT matrix
-  execution in one GPU allocation, with target/stage/dataset/smoke controls,
-  resumable cache-hit handling, local dry-run validation, and a PBS guard for
-  real model work.
+- 2026-09-05: Refactored the repository-level PBS `analysis.sh` into a dynamic
+  dataset/run array submitter. Its formal compute manifest contains 27 kernel
+  dataset/seed cells plus 3 deterministic STT dataset cells, each with one GPU,
+  throttled to at most two concurrent GPUs. A single afterokarray finalizer runs
+  cache-only analyses and both reports after all compute cells succeed.
 
 - 2026-09-04: Started the bidirectional Exact STT goal from `analysis/transport/bidirectional_stt_analysis.md`. Audited the existing analysis architecture and confirmed it supports cross-model hidden alignment only when tokenizer mappings are identical; implementation now proceeds through a separate versioned cross-vocabulary STT runtime while preserving shared analysis contracts.
 - 2026-09-04: Implemented the local bidirectional Exact STT stack: strict config and directed CSC gate, full-context planner caches, FP32 sparse transport with dense-oracle/chunk tests, explicit prefix packing/positions/greedy decoding, four-system evaluation, paired cache-only statistics/report, exact 6/12/3/1 matrices, and Slurm orchestration. All 33 analysis tests pass. The forward artifact passes its static gate; the reverse artifact is correctly rejected because its source support omits Mistral token IDs 0, 1, and 2.

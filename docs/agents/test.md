@@ -1,18 +1,21 @@
 # Analysis test record
 
-## 2026-09-05 serial `analysis.sh` test plan
+## 2026-09-05 array `analysis.sh` test plan
 
-- Shell contract: `bash -n analysis.sh` must pass; the regression suite must
-  retain the PBS GPU directive, default `all` target, kernel-before-STT order,
-  PBS-allocation guard, and exit-code-10 cache semantics.
-- Matrix integration: a local `--all --smoke --dataset aime2024 --dry-run`
-  must validate both builders and print kernel and STT matrix summaries without
-  launching model computation.
-- Argument validation: `--max-samples` without `--smoke` must fail before any
-  environment or model setup.
-- Actual: `bash -n analysis.sh` passed; the combined AIME first-one dry-run
-  reported kernel counts 2/9/42/12 plus cache-only rows and STT counts 2/4/1/1;
-  invalid `--max-samples` exited 1 before setup; `analysis/tests` passed 39/39.
+- Array contract: the formal combined manifest must contain exactly 27 unique
+  kernel `(dataset, seed)` cells and 3 deterministic STT dataset cells. The
+  submitter must request `1-N%2`, reject concurrency above two, and attach one
+  finalize job with `afterokarray`.
+- Bundle contract: all task references must remain inside versioned job/config
+  roots, point to a matching nonblank matrix row, serialize shared Sender cache
+  creation, and treat exit 10 as a validated cache hit.
+- Shell/integration: all three shell entry points must pass `bash -n`; formal
+  dry-run must report 30 compute rows and one finalizer, while AIME first-four
+  smoke must report 4 compute rows and one finalizer.
+- Actual: targeted PBS tests pass 7/7; formal dry-run reports 27+3 compute cells
+  and one 26-task finalizer; AIME first-four reports 3+1 cells and one 8-task
+  finalizer. All shell syntax checks and compileall pass, and the complete
+  `analysis/tests` suite passes 41/41.
 
 ## 2026-09-04 双向 Exact STT 实现计划
 
