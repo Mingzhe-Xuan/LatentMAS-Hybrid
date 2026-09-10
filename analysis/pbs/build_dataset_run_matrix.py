@@ -52,6 +52,7 @@ def _selected(rows: list[dict[str, Any]], **conditions: Any) -> list[tuple[int, 
 def build_dataset_run_manifests(*, target: str = "all", stage: str = "all",
                                 dataset_filter: str | None = None, smoke: bool = False,
                                 smoke_samples: int = 1,
+                                all_datasets: bool = False,
                                 matrix_root: str = "analysis/jobs") -> tuple[
                                     dict[str, list[dict[str, Any]]],
                                     dict[str, list[dict[str, Any]]],
@@ -60,6 +61,8 @@ def build_dataset_run_manifests(*, target: str = "all", stage: str = "all",
         raise ValueError(f"invalid target: {target}")
     if stage not in {"all", "collect", "evaluate", "analyze", "report"}:
         raise ValueError(f"invalid stage: {stage}")
+    if all_datasets and dataset_filter is not None:
+        raise ValueError("all_datasets and dataset_filter are mutually exclusive")
     include_kernel = target in {"all", "kernel"} and dataset_filter in (None, *ALL_DATASETS)
     include_stt = target in {"all", "stt"} and dataset_filter in (None, *PRIMARY_DATASETS)
     if target == "kernel" and not include_kernel:
@@ -67,7 +70,10 @@ def build_dataset_run_manifests(*, target: str = "all", stage: str = "all",
     if target == "stt" and not include_stt:
         raise ValueError(f"dataset {dataset_filter!r} is not supported by STT analysis")
 
-    kernel = (build_matrices(KERNEL_CONFIG, smoke=smoke, dataset_filter=dataset_filter)
+    kernel_filter: str | tuple[str, ...] | None = dataset_filter
+    if kernel_filter is None and not all_datasets:
+        kernel_filter = PRIMARY_DATASETS
+    kernel = (build_matrices(KERNEL_CONFIG, smoke=smoke, dataset_filter=kernel_filter)
               if include_kernel else {})
     stt = (build_stt_matrices(STT_CONFIG, smoke=smoke, dataset_filter=dataset_filter,
                               smoke_samples=smoke_samples) if include_stt else {})
@@ -76,7 +82,8 @@ def build_dataset_run_manifests(*, target: str = "all", stage: str = "all",
 
     if include_kernel and stage in {"all", "collect", "evaluate"}:
         config = load_config(KERNEL_CONFIG).raw
-        datasets = [name for name in ALL_DATASETS if dataset_filter in (None, name)]
+        dataset_scope = ALL_DATASETS if all_datasets else PRIMARY_DATASETS
+        datasets = [name for name in dataset_scope if dataset_filter in (None, name)]
         seeds = config["generation"]["seeds"]
         if stage == "collect":
             for dataset in datasets:
@@ -173,6 +180,8 @@ def main() -> int:
     parser.add_argument("--stage", choices=("all", "collect", "evaluate", "analyze", "report"),
                         default="all")
     parser.add_argument("--dataset", choices=ALL_DATASETS)
+    parser.add_argument("--all-datasets", action="store_true",
+                        help="run kernel analysis on all nine datasets")
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--max-samples", type=int)
     parser.add_argument("--output", default="analysis/jobs")
@@ -180,6 +189,10 @@ def main() -> int:
     args = parser.parse_args()
     if args.max_samples is not None and not args.smoke:
         parser.error("--max-samples requires --smoke")
+    if args.all_datasets and args.dataset is not None:
+        parser.error("--all-datasets conflicts with --dataset")
+    if args.all_datasets and args.target == "stt":
+        parser.error("--all-datasets is only valid with --all or --kernel")
     output = Path(args.output)
     try:
         matrix_root = output.resolve().relative_to(Path.cwd().resolve()).as_posix()
@@ -189,7 +202,8 @@ def main() -> int:
         parser.error("--output must be analysis/jobs or one of its descendants")
     kernel, stt, compute, finalize = build_dataset_run_manifests(
         target=args.target, stage=args.stage, dataset_filter=args.dataset, smoke=args.smoke,
-        smoke_samples=args.max_samples or 1, matrix_root=matrix_root,
+        smoke_samples=args.max_samples or 1, all_datasets=args.all_datasets,
+        matrix_root=matrix_root,
     )
     summary = {
         "compute_array_rows": len(compute), "finalize_rows": len(finalize),

@@ -71,10 +71,18 @@ def test_dataset_run_manifest_has_one_cell_per_dataset_run() -> None:
     kernel_matrices, stt_matrices, compute, finalize = build_dataset_run_manifests()
     kernel = [row for row in compute if row["protocol"] == "kernel"]
     stt = [row for row in compute if row["protocol"] == "stt"]
-    assert len(kernel) == 27
-    assert len({(row["dataset"], row["seed"]) for row in kernel}) == 27
+    primary = {"aime2024", "humanevalplus", "arc_challenge"}
+    assert len(kernel) == 9
+    assert len({(row["dataset"], row["seed"]) for row in kernel}) == 9
+    assert {row["dataset"] for row in kernel} == primary
+    assert {row["dataset"] for name, rows in kernel_matrices.items()
+            if name != "report.jsonl" for row in rows} <= primary
+    assert kernel_matrices["report.jsonl"][0]["datasets"] == [
+        "aime2024", "arc_challenge", "humanevalplus",
+    ]
     assert {row["run"] for row in kernel} == {1, 2, 3}
     assert len(stt) == 3
+    assert {row["dataset"] for row in stt} == primary
     assert len({row["dataset"] for row in stt}) == 3
     assert all(row["run"] == 1 and row["deterministic"] for row in stt)
     assert len(finalize) == 1
@@ -90,6 +98,16 @@ def test_dataset_run_manifest_has_one_cell_per_dataset_run() -> None:
         for task in bundle["tasks"]:
             row = stt_matrices[Path(task["matrix"]).name][task["job_index"] - 1]
             assert row["dataset"] == bundle["dataset"]
+
+
+def test_all_datasets_restores_nine_dataset_kernel_scope() -> None:
+    _, _, compute, finalize = build_dataset_run_manifests(all_datasets=True)
+    kernel = [row for row in compute if row["protocol"] == "kernel"]
+    stt = [row for row in compute if row["protocol"] == "stt"]
+    assert len(kernel) == 27
+    assert len({row["dataset"] for row in kernel}) == 9
+    assert len(stt) == 3
+    assert len(finalize) == 1
 
 
 def test_combined_aime_smoke_has_three_kernel_runs_and_one_stt_run() -> None:

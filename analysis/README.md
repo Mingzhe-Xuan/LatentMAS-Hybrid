@@ -46,9 +46,9 @@ perturbation rows.
 ## Submit
 
 The repository-level PBS submitter builds one dataset/run compute array. Its
-formal default has 27 kernel cells (9 datasets x 3 configured seeds) and 3
-deterministic STT cells (3 datasets x 1 run). Every cell requests one GPU and
-the array throttle is two, so the workflow uses at most two GPUs concurrently.
+default scope is AIME2024, ARC-Challenge, and HumanEval+: 9 kernel cells
+(3 datasets x 3 seeds) and 3 deterministic STT cells. Every cell requests one
+GPU, and the `%3` throttle permits at most three concurrent GPUs.
 After the compute array succeeds, one dependent finalize job performs all
 cache-only analyses and builds both reports:
 
@@ -57,10 +57,12 @@ bash analysis.sh
 bash analysis.sh --kernel
 bash analysis.sh --stt --smoke --dataset aime2024
 bash analysis.sh --all --smoke --dataset aime2024 --dry-run
+bash analysis.sh --kernel --all-datasets
 ```
 
 Use `--kernel` or `--stt` for one protocol, and `--stage` for one common phase.
-Set `ANALYSIS_MAX_GPUS=1` to reduce concurrency; values above two are rejected.
+Use `--all-datasets` to restore the nine-dataset kernel scope. Set
+`ANALYSIS_MAX_GPUS=1` or `2` to reduce concurrency; values above three are rejected.
 The submitter must run on a PBS login node with `qsub`; `--dry-run` is safe
 locally. A bundle treats task exit code `10` as a validated resumable cache hit.
 Every submission writes immutable matrices and manifests below a distinct

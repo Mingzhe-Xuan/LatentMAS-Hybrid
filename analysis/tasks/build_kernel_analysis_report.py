@@ -17,6 +17,7 @@ def run(args) -> int:
     job = load_job(args)
     if job.get("task") != "build_kernel_analysis_report":
         raise ValueError("job task does not match entry point")
+    selected_datasets = set(job.get("datasets", config["datasets"]))
     root = Path(args.result_root)
     sources = []
     for task in ("analyze_logit_entropy", "analyze_kernel_scaling",
@@ -25,7 +26,8 @@ def run(args) -> int:
         for path in (root / task).glob("*/summaries/summary.json") if (root / task).exists() else ():
             summary = json.loads(path.read_text(encoding="utf-8"))
             expected_selection = "first-1" if job.get("smoke") else "all"
-            if summary.get("selection_policy", "all") == expected_selection:
+            if (summary.get("selection_policy", "all") == expected_selection and
+                    summary.get("dataset") in selected_datasets):
                 sources.append({"task": task, "path": str(path), "sha256": file_sha256(path),
                                 "summary": summary})
     if not sources:

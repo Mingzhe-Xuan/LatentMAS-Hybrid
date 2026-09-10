@@ -1,5 +1,17 @@
 # Agent state
 
+## 2026-09-11 primary-dataset default analysis scope
+
+- Current state: the default combined analysis scope is now restricted from all nine
+  kernel datasets to the three preregistered primary datasets (`aime2024`,
+  `arc_challenge`, `humanevalplus`); STT already uses exactly this scope.
+- Plan: implementation and local verification are complete; use
+  `--all-datasets` only when the former nine-dataset kernel scope is intended.
+- Change record: 2026-09-11 task started; no PBS/GPU job has been submitted.
+- Change record: 2026-09-11 implemented primary-only default matrices,
+  dataset-scoped report cache identities/source filtering, and the explicit
+  nine-dataset override. All 43 analysis tests and three matrix dry-runs pass.
+
 ## 2026-09-10 single-file analysis array entry point
 
 - Current state: refactoring is complete; root `analysis.sh` is both the

@@ -1,5 +1,22 @@
 # Analysis test record
 
+## 2026-09-11 primary-dataset default test plan
+
+- Default contract: combined and kernel-only manifests without a dataset flag
+  must contain only AIME2024, ARC-Challenge, and HumanEval+.
+- Override contract: `--dataset NAME` keeps selecting one supported dataset;
+  `--all-datasets` restores the former nine-dataset kernel scope and conflicts
+  with `--dataset`.
+- Expected formal default: 9 kernel dataset/seed cells plus 3 deterministic STT
+  cells, one dependent finalizer, one GPU per cell, and `%3` concurrency.
+- Regression scope: manifest unit tests, CLI dry-runs, complete analysis tests,
+  shell syntax, compileall, and `git diff --check`.
+- Actual: complete `analysis/tests` passes 43/43. Default dry-run reports 12
+  compute cells (9 kernel + 3 STT) and one 20-task finalizer. The
+  `--all-datasets` dry-run reports 30 cells and a 26-task finalizer;
+  ARC-Challenge alone reports 4 cells and an 8-task finalizer. Shell syntax
+  and compileall pass; no PBS job was submitted.
+
 ## 2026-09-10 single-file `analysis.sh` array test plan
 
 - Shell contract: `analysis.sh` must contain the one-GPU PBS resource contract,

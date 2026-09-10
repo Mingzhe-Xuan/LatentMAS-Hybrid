@@ -12,7 +12,7 @@
 # analysis.sh - self-submitting PBS dataset/run array for analysis/
 #
 # Default formal submission:
-#   27 kernel cells = 9 datasets x 3 configured seeds
+#    9 kernel cells = 3 primary datasets x 3 configured seeds
 #    3 STT cells    = 3 datasets x 1 deterministic run
 # At most three one-GPU array cells run concurrently. A dependent one-GPU
 # finalize job performs cache-only analyses and builds both reports.
@@ -39,6 +39,7 @@ Targets (default: all):
 Options:
   --stage NAME              all, collect, evaluate, analyze, or report
   --dataset NAME            Restrict submission to one dataset
+  --all-datasets            Run kernel analysis on all nine datasets
   --smoke                   Use isolated smoke matrices
   --max-samples INT         STT smoke sample count (requires --smoke)
   --device DEVICE           Task device (default: cuda)
@@ -48,6 +49,7 @@ Environment overrides:
   ANALYSIS_MAX_GPUS         Array concurrency, 1, 2, or 3 (default: 3)
   ANALYSIS_CACHE_ROOT       Cache root (default: analysis_cache)
   ANALYSIS_RESULT_ROOT      Result root (default: analysis_result)
+  ANALYSIS_ALL_DATASETS     true restores all nine kernel datasets
   ANALYSIS_PYTHON           Python used to build manifests
   ANALYSIS_EXTRA_ARGS       Extra flags passed to every task CLI
   PBS_DEPENDENCY_OPERATOR   afterokarray (default) or afterok
@@ -57,6 +59,7 @@ EOF
 ANALYSIS_TARGET="${ANALYSIS_TARGET:-all}"
 ANALYSIS_STAGE="${ANALYSIS_STAGE:-all}"
 DATASET="${DATASET:-}"
+ALL_DATASETS_MODE="${ANALYSIS_ALL_DATASETS:-false}"
 ANALYSIS_SMOKE="${ANALYSIS_SMOKE:-false}"
 MAX_SAMPLES="${MAX_SAMPLES:-}"
 DEVICE="${DEVICE:-cuda}"
@@ -158,6 +161,7 @@ while [[ $# -gt 0 ]]; do
         --stt) ANALYSIS_TARGET="stt"; shift ;;
         --stage) ANALYSIS_STAGE="$2"; shift 2 ;;
         --dataset) DATASET="$2"; shift 2 ;;
+        --all-datasets) ALL_DATASETS_MODE="true"; shift ;;
         --smoke) ANALYSIS_SMOKE="true"; shift ;;
         --max-samples) MAX_SAMPLES="$2"; shift 2 ;;
         --device) DEVICE="$2"; shift 2 ;;
@@ -170,12 +174,21 @@ done
 case "${ANALYSIS_TARGET}" in all|kernel|stt) ;; *) echo "ERROR: invalid target" >&2; exit 2 ;; esac
 case "${ANALYSIS_STAGE}" in all|collect|evaluate|analyze|report) ;; *) echo "ERROR: invalid stage" >&2; exit 2 ;; esac
 case "${ANALYSIS_SMOKE}" in true|false) ;; *) echo "ERROR: ANALYSIS_SMOKE must be true or false" >&2; exit 2 ;; esac
+case "${ALL_DATASETS_MODE}" in true|false) ;; *) echo "ERROR: ANALYSIS_ALL_DATASETS must be true or false" >&2; exit 2 ;; esac
 case "${DRY_RUN}" in true|false) ;; *) echo "ERROR: DRY_RUN must be true or false" >&2; exit 2 ;; esac
 case "${ANALYSIS_MAX_GPUS}" in 1|2|3) ;; *) echo "ERROR: ANALYSIS_MAX_GPUS must be 1, 2, or 3" >&2; exit 2 ;; esac
 case "${DEPENDENCY_OPERATOR}" in afterokarray|afterok) ;; *) echo "ERROR: invalid PBS dependency operator" >&2; exit 2 ;; esac
 if [[ -n "${MAX_SAMPLES}" ]]; then
     [[ "${ANALYSIS_SMOKE}" == true ]] || { echo "ERROR: --max-samples requires --smoke" >&2; exit 2; }
     [[ "${MAX_SAMPLES}" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: --max-samples must be positive" >&2; exit 2; }
+fi
+if [[ "${ALL_DATASETS_MODE}" == true && -n "${DATASET}" ]]; then
+    echo "ERROR: --all-datasets conflicts with --dataset" >&2
+    exit 2
+fi
+if [[ "${ALL_DATASETS_MODE}" == true && "${ANALYSIS_TARGET}" == stt ]]; then
+    echo "ERROR: --all-datasets is only valid for --all or --kernel" >&2
+    exit 2
 fi
 if [[ ! -d analysis ]]; then echo "ERROR: run from the repository root" >&2; exit 1; fi
 
@@ -193,6 +206,7 @@ JOB_DIR="analysis/jobs/${RUN_ID}"
 BUILD=("${PYTHON_BIN}" analysis/pbs/build_dataset_run_matrix.py
        --target "${ANALYSIS_TARGET}" --stage "${ANALYSIS_STAGE}" --output "${JOB_DIR}")
 [[ -n "${DATASET}" ]] && BUILD+=(--dataset "${DATASET}")
+[[ "${ALL_DATASETS_MODE}" == true ]] && BUILD+=(--all-datasets)
 [[ "${ANALYSIS_SMOKE}" == true ]] && BUILD+=(--smoke)
 [[ -n "${MAX_SAMPLES}" ]] && BUILD+=(--max-samples "${MAX_SAMPLES}")
 [[ "${DRY_RUN}" == true ]] && BUILD+=(--dry-run)

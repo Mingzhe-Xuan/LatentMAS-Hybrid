@@ -1,5 +1,10 @@
 # Progress updates
 
+- 2026-09-11: Restricted the default `analysis.sh` workflow to AIME2024,
+  ARC-Challenge, and HumanEval+, reducing the default compute array from 30 to
+  12 cells (9 kernel + 3 STT). Added `--all-datasets` for the former 30-cell
+  scope and isolated report identities/sources by selected dataset set.
+
 - 2026-09-10: Reworked root `analysis.sh` into a single-file self-submitting
   PBS array. The same script now handles submission, indexed compute bundles,
   and dependent cache-only finalization through explicit execution modes while

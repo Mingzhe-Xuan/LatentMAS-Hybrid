@@ -72,10 +72,20 @@ def _generation_fields(config: dict[str, Any], dataset: str) -> dict[str, Any]:
 
 
 def build_matrices(config_path: str | Path, *, smoke: bool = False,
-                   dataset_filter: str | None = None) -> dict[str, list[dict[str, Any]]]:
+                   dataset_filter: str | tuple[str, ...] | None = None
+                   ) -> dict[str, list[dict[str, Any]]]:
     config = load_config(config_path).raw
     seeds = config["generation"]["seeds"]
-    datasets = [d for d in ALL_DATASETS if dataset_filter in (None, d)]
+    if dataset_filter is None:
+        datasets = list(ALL_DATASETS)
+    elif isinstance(dataset_filter, str):
+        datasets = [d for d in ALL_DATASETS if d == dataset_filter]
+    else:
+        selected = set(dataset_filter)
+        unknown = selected - set(ALL_DATASETS)
+        if unknown:
+            raise ValueError(f"unknown datasets: {sorted(unknown)}")
+        datasets = [d for d in ALL_DATASETS if d in selected]
     primary = [d for d in PRIMARY_DATASETS if d in datasets]
     result = {name: [] for name in MATRIX_TASKS}
 
@@ -177,9 +187,11 @@ def build_matrices(config_path: str | Path, *, smoke: bool = False,
             result[filename].append(_row(task, cid, dataset=dataset, cache_only=True,
                                          max_samples=1 if smoke else None, smoke=smoke,
                                          selection_policy="first-1" if smoke else "all"))
-    result["report.jsonl"].append(_row("build_kernel_analysis_report",
-                                               f"report-{stable_hash({'protocol': 'kernel-analysis-v1', 'smoke': smoke})[:24]}",
-                                               cache_only=True, smoke=smoke))
+    result["report.jsonl"].append(_row(
+        "build_kernel_analysis_report",
+        f"report-{stable_hash({'protocol': 'kernel-analysis-v1', 'smoke': smoke, 'datasets': datasets})[:24]}",
+        cache_only=True, smoke=smoke, datasets=datasets,
+    ))
     return result
 
 
