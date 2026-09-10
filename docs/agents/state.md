@@ -1,5 +1,23 @@
 # Agent state
 
+## 2026-09-10 single-file analysis array entry point
+
+- Current state: refactoring is complete; root `analysis.sh` is both the
+  submission entry point and the PBS compute/finalize worker, rather than
+  delegating execution to two separate `.pbs` worker files.
+- Plan: local acceptance is complete; submit from the repository root on the
+  intended PBS login node when a real analysis run is desired.
+- Change record: 2026-09-10 task started after auditing the current submitter,
+  worker scripts, bundle runner, and scheduler tests. No cluster job has been
+  submitted.
+- Change record: 2026-09-10 implemented explicit submit/compute/finalize modes,
+  self-submission through dynamic `qsub -J`, one-GPU PBS directives, strict
+  worker validation, and same-script dependent finalization. All 42 analysis
+  tests and the formal/AIME smoke manifest checks pass locally.
+- Change record: 2026-09-10 raised the user-requested compute-array throttle
+  from two to three one-GPU cells; the default submission now uses `%3` while
+  retaining one GPU per cell and accepting explicit limits of 1, 2, or 3.
+
 ## 2026-09-05 repository-level analysis entry point
 
 - Current state: the root `analysis.sh` is now a dynamic PBS compute-array

@@ -1,5 +1,13 @@
 # Progress updates
 
+- 2026-09-10: Reworked root `analysis.sh` into a single-file self-submitting
+  PBS array. The same script now handles submission, indexed compute bundles,
+  and dependent cache-only finalization through explicit execution modes while
+  retaining the 30-cell formal matrix, output roots, and
+  fail-closed manifest validation. The complete 42-test analysis suite passes.
+- 2026-09-10: Increased the `analysis.sh` compute-array concurrency cap to
+  three GPUs by default (`1-N%3`); each array cell still requests one GPU.
+
 - 2026-09-05: Refactored the repository-level PBS `analysis.sh` into a dynamic
   dataset/run array submitter. Its formal compute manifest contains 27 kernel
   dataset/seed cells plus 3 deterministic STT dataset cells, each with one GPU,

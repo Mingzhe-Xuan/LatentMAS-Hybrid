@@ -1,5 +1,27 @@
 # Analysis test record
 
+## 2026-09-10 single-file `analysis.sh` array test plan
+
+- Shell contract: `analysis.sh` must contain the one-GPU PBS resource contract,
+  pass `bash -n`, and select submit/compute/finalize behavior explicitly.
+- Submission contract: a normal Bash invocation must build submission-scoped
+  manifests, submit `analysis.sh` itself as `1-N%ANALYSIS_MAX_GPUS`, and submit
+  the same script once in finalize mode with the existing dependency operator.
+- Worker contract: compute mode must require and validate `PBS_ARRAY_INDEX`;
+  finalize mode must execute manifest row 1; both must retain environment,
+  state-log, cache-root, result-root, and bundle validation behavior.
+- Regression scope: targeted PBS tests, complete `analysis/tests`, formal and
+  AIME smoke dry-runs, Python compileall, shell syntax, and `git diff --check`.
+- Actual: `bash -n analysis.sh`, Python compileall, and `git diff --check` pass.
+  The complete `analysis/tests` suite passes 42/42. Formal manifest validation
+  reports 30 compute rows (27 kernel + 3 STT) and one 26-task finalizer; the
+  AIME first-four combined smoke reports 4 compute rows and one 8-task
+  finalizer. Worker modes return exit 2 before environment setup when their
+  required manifest is absent. No PBS/GPU job was submitted.
+- GPU-throttle update: expect the default to be 3, permit only 1/2/3, and keep
+  the dynamic submission form `1-N%ANALYSIS_MAX_GPUS`. Targeted PBS tests and
+  shell syntax must remain green after the change.
+
 ## 2026-09-05 array `analysis.sh` test plan
 
 - Array contract: the formal combined manifest must contain exactly 27 unique

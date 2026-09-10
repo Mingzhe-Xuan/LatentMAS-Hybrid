@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -32,17 +33,38 @@ def test_pbs_scripts_have_valid_shell_syntax() -> None:
     subprocess.run([bash, "-n", str(ROOT / "analysis.sh")], check=True)
 
 
-def test_repository_analysis_entrypoint_submits_two_gpu_array_and_finalizer() -> None:
+def test_repository_analysis_entrypoint_submits_three_gpu_array_and_finalizer() -> None:
     text = (ROOT / "analysis.sh").read_text(encoding="utf-8")
     assert 'ANALYSIS_TARGET="${ANALYSIS_TARGET:-all}"' in text
-    assert 'ANALYSIS_MAX_GPUS="${ANALYSIS_MAX_GPUS:-2}"' in text
-    assert 'case "${ANALYSIS_MAX_GPUS}" in 1|2)' in text
+    assert 'ANALYSIS_MAX_GPUS="${ANALYSIS_MAX_GPUS:-3}"' in text
+    assert 'case "${ANALYSIS_MAX_GPUS}" in 1|2|3)' in text
+    assert "#PBS -l select=1:ncpus=12:ngpus=1" in text
+    assert 'ANALYSIS_EXECUTION_MODE="${ANALYSIS_EXECUTION_MODE:-submit}"' in text
+    assert "compute|finalize)" in text
     assert '-J "1-${COMPUTE_ROWS}%${ANALYSIS_MAX_GPUS}"' in text
+    assert 'ANALYSIS_EXECUTION_MODE=compute,RUN_MANIFEST=${COMPUTE_MANIFEST}' in text
+    assert 'ANALYSIS_EXECUTION_MODE=finalize,FINALIZE_MANIFEST=${FINALIZE_MANIFEST}' in text
+    assert text.count('"${BASH_SOURCE[0]}"') == 2
     assert 'depend=${DEPENDENCY_OPERATOR}:${COMPUTE_JOB}' in text
     assert 'PBS_DEPENDENCY_OPERATOR:-afterokarray' in text
     for worker in ("analysis_dataset_run.pbs", "analysis_finalize.pbs"):
         worker_text = (ROOT / "analysis/pbs" / worker).read_text(encoding="utf-8")
         assert "#PBS -l select=1:ncpus=12:ngpus=1" in worker_text
+
+
+def test_self_submitting_analysis_worker_modes_fail_closed_without_manifest() -> None:
+    bash = shutil.which("bash")
+    if bash is None:
+        return
+    for mode, expected in (("compute", "RUN_MANIFEST"),
+                           ("finalize", "FINALIZE_MANIFEST")):
+        completed = subprocess.run(
+            [bash, str(ROOT / "analysis.sh")], cwd=ROOT,
+            env={**os.environ, "ANALYSIS_EXECUTION_MODE": mode},
+            capture_output=True, text=True,
+        )
+        assert completed.returncode == 2
+        assert expected in completed.stderr
 
 
 def test_dataset_run_manifest_has_one_cell_per_dataset_run() -> None:
