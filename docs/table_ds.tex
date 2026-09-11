@@ -1,0 +1,110 @@
+\documentclass{article}
+
+\usepackage[margin=0.6in]{geometry}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{adjustbox}
+\usepackage[table]{xcolor}
+
+\definecolor{settinggray}{RGB}{242,242,242}
+\definecolor{taskpink}{RGB}{252,241,241}
+\definecolor{taskcream}{RGB}{252,247,239}
+\definecolor{kernelgreen}{RGB}{211,239,211}
+
+\newcommand{\best}[1]{\textbf{#1}}
+\newcommand{\highlight}[1]{\cellcolor{kernelgreen}#1}
+\newcommand{\gain}[1]{\cellcolor{kernelgreen}\textbf{#1}}
+\newcommand{\experimentnote}{%
+  \par\smallskip
+  \parbox{\textwidth}{\footnotesize\raggedright
+    \textit{Note.} Values are computed from \texttt{result\_ds}. Acc. is
+    accuracy (\%); Token is the mean number of generated text tokens per
+    problem; Time is the mean elapsed time per sample in seconds. Unless
+    marked with $\dagger$, entries are averages over eight repetitions
+    (seeds 42--49). $\dagger$ denotes a currently incomplete aggregate:
+    Identical--Hierarchical on AIME25 uses three repetitions and
+    Soft--Sequential on AIME25 uses two. Improve compares the better of
+    Kernel and Kernel-ES with TextMAS; missing experiment combinations are
+    denoted by $-$.}}
+\newcommand{\taskstart}[2]{\cellcolor{#1} & #2}
+\newcommand{\taskend}[3]{%
+  \cellcolor{#1}\multirow{-3}{*}{\textbf{#2}} & #3}
+
+\begin{document}
+
+\begin{table*}[p]
+  \centering
+  \caption{Sequential MAS results for DeepSeek-R1-Distill-Llama-8B.
+  Best results in each row are bold. Kernel and Kernel-ES are highlighted.}
+  \label{tab:seq-ds-8b-all-latentmas}
+  \begin{adjustbox}{max width=\textwidth}
+  \begingroup
+  \setlength{\tabcolsep}{3.8pt}
+  \renewcommand{\arraystretch}{0.94}
+  \begin{tabular}{@{}l|l|cc|ccccc|c@{}}
+    \toprule
+    \multirow{2}{*}{\textbf{Tasks}} & \multirow{2}{*}{\textbf{Metrics}}
+      & \multicolumn{2}{c|}{\textbf{Baselines}}
+      & \multicolumn{5}{c|}{\textbf{LatentMAS variants}}
+      & \multirow{2}{*}{\textbf{Improve}} \\
+    \cmidrule(lr){3-4}\cmidrule(lr){5-9}
+      & & Single & TextMAS & Identical & Linear
+      & \cellcolor{kernelgreen}\textbf{Kernel}
+      & \cellcolor{kernelgreen}\textbf{Kernel-ES} & Soft & \\
+    \midrule
+    \multicolumn{10}{c}{\cellcolor{settinggray}
+      \textbf{\textit{Sequential MAS Setting}}} \\
+    \midrule
+    \taskstart{taskpink}{Acc.} & \best{45.00} & 34.58 & 12.50 & 0.00 & \highlight{13.33} & \highlight{12.92} & 12.92 & $\downarrow$ 21.3 \\
+    \cellcolor{taskpink} & Token & \best{10809} & 12138 & 12249 & 20000 & \highlight{11642} & \highlight{11992} & 33557 & \gain{$\downarrow$ 4.1\%} \\
+    \taskend{taskpink}{AIME24}{Time} & \best{217.3} & 377.8 & 296.7 & 330.6 & \highlight{288.4} & \highlight{303.3} & 835.4 & \gain{$\times$ 1.3} \\
+    \midrule
+    \taskstart{taskcream}{Acc.} & \best{35.42} & 27.08 & 10.83 & 12.08 & \highlight{10.00} & \highlight{8.33} & 8.33$^{\dagger}$ & $\downarrow$ 17.1 \\
+    \cellcolor{taskcream} & Token & \best{11844} & 12822 & 12719 & 12727 & \highlight{12767} & \highlight{12923} & 32396$^{\dagger}$ & \gain{$\downarrow$ 0.4\%} \\
+    \taskend{taskcream}{AIME25}{Time} & \best{243.9} & 398.1 & 300.7 & 302.0 & \highlight{297.3} & \highlight{334.0} & 850.0$^{\dagger}$ & \gain{$\times$ 1.3} \\
+    \bottomrule
+  \end{tabular}
+  \endgroup
+  \end{adjustbox}
+  \experimentnote
+\end{table*}
+
+\clearpage
+\begin{table*}[p]
+  \centering
+  \caption{Hierarchical MAS results for DeepSeek-R1-Distill-Llama-8B.
+  Best results in each row are bold. Kernel and Kernel-ES are highlighted.}
+  \label{tab:hier-ds-8b-all-latentmas}
+  \begin{adjustbox}{max width=\textwidth}
+  \begingroup
+  \setlength{\tabcolsep}{3.8pt}
+  \renewcommand{\arraystretch}{0.94}
+  \begin{tabular}{@{}l|l|cc|ccccc|c@{}}
+    \toprule
+    \multirow{2}{*}{\textbf{Tasks}} & \multirow{2}{*}{\textbf{Metrics}}
+      & \multicolumn{2}{c|}{\textbf{Baselines}}
+      & \multicolumn{5}{c|}{\textbf{LatentMAS variants}}
+      & \multirow{2}{*}{\textbf{Improve}} \\
+    \cmidrule(lr){3-4}\cmidrule(lr){5-9}
+      & & Single & TextMAS & Identical & Linear
+      & \cellcolor{kernelgreen}\textbf{Kernel}
+      & \cellcolor{kernelgreen}\textbf{Kernel-ES} & Soft & \\
+    \midrule
+    \multicolumn{10}{c}{\cellcolor{settinggray}
+      \textbf{\textit{Hierarchical MAS Setting}}} \\
+    \midrule
+    \taskstart{taskpink}{Acc.} & \best{47.08} & 45.00 & 15.00 & 0.00 & \highlight{13.75} & \highlight{15.42} & 15.00 & $\downarrow$ 29.6 \\
+    \cellcolor{taskpink} & Token & \best{11114} & 30999 & 12662 & 20000 & \highlight{12422} & \highlight{12271} & 33308 & \gain{$\downarrow$ 60.4\%} \\
+    \taskend{taskpink}{AIME24}{Time} & \best{228.4} & 715.6 & 299.3 & 331.6 & \highlight{302.2} & \highlight{310.9} & 871.1 & \gain{$\times$ 2.4} \\
+    \midrule
+    \taskstart{taskcream}{Acc.} & 31.67 & \best{32.92} & 8.89$^{\dagger}$ & $-$ & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \cellcolor{taskcream} & Token & \best{11936} & 33376 & 14145$^{\dagger}$ & $-$ & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \taskend{taskcream}{AIME25}{Time} & \best{250.3} & 799.4 & 321.8$^{\dagger}$ & $-$ & \highlight{$-$} & \highlight{$-$} & $-$ & $-$ \\
+    \bottomrule
+  \end{tabular}
+  \endgroup
+  \end{adjustbox}
+  \experimentnote
+\end{table*}
+
+\end{document}
