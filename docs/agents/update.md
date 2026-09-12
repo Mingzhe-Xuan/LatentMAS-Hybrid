@@ -1,5 +1,11 @@
 # Progress updates
 
+- 2026-09-12: Removed the login-node PyTorch dependency from `analysis.sh`
+  submission. Manifest hashing now lives in a standard-library-only module and
+  the submit branch invokes its builder with Python `-S`; module loading and
+  `.venv` activation remain internal to compute/finalize PBS workers. All 44
+  analysis tests and manifest dry-runs pass.
+
 - 2026-09-11: Restricted the default `analysis.sh` workflow to AIME2024,
   ARC-Challenge, and HumanEval+, reducing the default compute array from 30 to
   12 cells (9 kernel + 3 STT). Added `--all-datasets` for the former 30-cell

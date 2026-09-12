@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from analysis.pbs.build_dataset_run_matrix import build_dataset_run_manifests
@@ -47,9 +48,21 @@ def test_repository_analysis_entrypoint_submits_three_gpu_array_and_finalizer() 
     assert text.count('"${BASH_SOURCE[0]}"') == 2
     assert 'depend=${DEPENDENCY_OPERATOR}:${COMPUTE_JOB}' in text
     assert 'PBS_DEPENDENCY_OPERATOR:-afterokarray' in text
+    assert 'BUILD=("${PYTHON_BIN}" -S analysis/pbs/build_dataset_run_matrix.py' in text
+    assert 'source "${analysis_venv}/bin/activate"' in text
     for worker in ("analysis_dataset_run.pbs", "analysis_finalize.pbs"):
         worker_text = (ROOT / "analysis/pbs" / worker).read_text(encoding="utf-8")
         assert "#PBS -l select=1:ncpus=12:ngpus=1" in worker_text
+
+
+def test_manifest_builder_dry_run_needs_only_the_python_standard_library() -> None:
+    completed = subprocess.run(
+        [sys.executable, "-S", "analysis/pbs/build_dataset_run_matrix.py",
+         "--dry-run", "--smoke", "--dataset", "aime2024"],
+        cwd=ROOT, capture_output=True, text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert '"compute_array_rows": 4' in completed.stdout
 
 
 def test_self_submitting_analysis_worker_modes_fail_closed_without_manifest() -> None:

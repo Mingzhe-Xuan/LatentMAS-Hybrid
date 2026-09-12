@@ -16,7 +16,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from analysis.core.config import PRIMARY_DATASETS, load_stt_config
-from analysis.core.schemas import stable_hash
+from analysis.core.hashing import stable_hash
 
 
 MATRIX_TASKS = {

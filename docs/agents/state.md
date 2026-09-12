@@ -1,5 +1,17 @@
 # Agent state
 
+## 2026-09-12 dependency-free analysis submission
+
+- Current state: implementation and local verification are complete. The
+  login-node branch builds manifests with standard-library-only Python, while
+  PyTorch and the project virtual environment remain confined to PBS workers.
+- Plan: submit from the repository root with `bash analysis.sh`; no external
+  virtual-environment activation is required.
+- Change record: 2026-09-12 task started; no PBS/GPU job has been submitted.
+- Change record: 2026-09-12 extracted dependency-free hashing, switched matrix
+  builders to that module, made the submit path run Python with `-S`, and added
+  a regression test. All 44 analysis tests and formal/smoke dry-runs pass.
+
 ## 2026-09-11 primary-dataset default analysis scope
 
 - Current state: the default combined analysis scope is now restricted from all nine

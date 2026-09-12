@@ -14,7 +14,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from analysis.core.config import ALL_DATASETS, PRIMARY_DATASETS, SPLITS, load_config
-from analysis.core.schemas import stable_hash
+from analysis.core.hashing import stable_hash
 
 
 MODEL_8B = "Qwen/Qwen3-8B"

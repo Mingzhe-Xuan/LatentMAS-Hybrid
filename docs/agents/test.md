@@ -1,5 +1,19 @@
 # Analysis test record
 
+## 2026-09-12 dependency-free submission test plan
+
+- Submission contract: importing and dry-running the manifest builder with
+  Python site packages disabled must not import or require PyTorch.
+- Worker contract: compute/finalize modes must continue to load the Python
+  module and activate `ANALYSIS_VENV` inside the PBS allocation before running
+  task code.
+- Regression scope: shell syntax, targeted PBS tests, complete analysis tests,
+  Python compileall, manifest dry-runs, and `git diff --check`.
+- Actual: `bash -n`, compileall, `git diff --check`, a site-disabled entry-point
+  smoke dry-run, and formal/all-dataset manifest dry-runs pass. The targeted PBS
+  tests pass 10/10 and the complete analysis suite passes 44/44. No PBS/GPU job
+  was submitted.
+
 ## 2026-09-11 primary-dataset default test plan
 
 - Default contract: combined and kernel-only manifests without a dataset flag

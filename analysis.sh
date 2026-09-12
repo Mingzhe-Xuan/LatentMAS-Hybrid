@@ -11,6 +11,10 @@
 ###############################################################################
 # analysis.sh - self-submitting PBS dataset/run array for analysis/
 #
+# The login-node branch uses only a standard-library Python interpreter to
+# build manifests and submit the array. Module loading and virtual-environment
+# activation are confined to compute/finalize PBS workers below.
+#
 # Default formal submission:
 #    9 kernel cells = 3 primary datasets x 3 configured seeds
 #    3 STT cells    = 3 datasets x 1 deterministic run
@@ -50,7 +54,7 @@ Environment overrides:
   ANALYSIS_CACHE_ROOT       Cache root (default: analysis_cache)
   ANALYSIS_RESULT_ROOT      Result root (default: analysis_result)
   ANALYSIS_ALL_DATASETS     true restores all nine kernel datasets
-  ANALYSIS_PYTHON           Python used to build manifests
+  ANALYSIS_PYTHON           Standard-library Python used to build manifests
   ANALYSIS_EXTRA_ARGS       Extra flags passed to every task CLI
   PBS_DEPENDENCY_OPERATOR   afterokarray (default) or afterok
 EOF
@@ -203,7 +207,7 @@ fi
 RUN_ID="${ANALYSIS_RUN_ID:-$(date +%Y%m%d_%H%M%S)_$$}"
 RUN_ID="$(printf '%s' "${RUN_ID}" | tr -c 'A-Za-z0-9._-' '_')"
 JOB_DIR="analysis/jobs/${RUN_ID}"
-BUILD=("${PYTHON_BIN}" analysis/pbs/build_dataset_run_matrix.py
+BUILD=("${PYTHON_BIN}" -S analysis/pbs/build_dataset_run_matrix.py
        --target "${ANALYSIS_TARGET}" --stage "${ANALYSIS_STAGE}" --output "${JOB_DIR}")
 [[ -n "${DATASET}" ]] && BUILD+=(--dataset "${DATASET}")
 [[ "${ALL_DATASETS_MODE}" == true ]] && BUILD+=(--all-datasets)
