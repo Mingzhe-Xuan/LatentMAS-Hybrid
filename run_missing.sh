@@ -4,7 +4,7 @@
 #PBS -q gpu_ded
 #PBS -l walltime=72:00:00
 #PBS -l select=1:ncpus=12:ngpus=1
-#PBS -J 1-35%1
+#PBS -J 1-29%1
 #PBS -j oe
 
 set -euo pipefail
@@ -43,12 +43,6 @@ done
 # task|model|prompt|alignment
 CONFIGS=(
     # Qwen3-8B, sequential
-    "aime2024|Qwen/Qwen3-8B|sequential|identical"
-    "aime2025|Qwen/Qwen3-8B|sequential|identical"
-    "arc_challenge|Qwen/Qwen3-8B|sequential|soft"
-    "arc_easy|Qwen/Qwen3-8B|sequential|soft"
-    "gpqa|Qwen/Qwen3-8B|sequential|identical"
-    "gpqa|Qwen/Qwen3-8B|sequential|soft"
     "gsm8k|Qwen/Qwen3-8B|sequential|soft"
     "mbppplus|Qwen/Qwen3-8B|sequential|identical"
 
