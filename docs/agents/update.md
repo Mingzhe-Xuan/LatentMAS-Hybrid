@@ -1,5 +1,11 @@
 # Progress updates
 
+- 2026-09-13: Changed `analysis.sh` to submit exactly one dynamic PBS array,
+  matching the `run_all.sh` launch model. Removed the incompatible dependent
+  `qsub -W` finalizer; every compute cell now records a submission-scoped
+  status, and the final successful cell exclusively runs analysis/report
+  finalization after all cells succeed. All 44 analysis tests pass.
+
 - 2026-09-12: Removed the login-node PyTorch dependency from `analysis.sh`
   submission. Manifest hashing now lives in a standard-library-only module and
   the submit branch invokes its builder with Python `-S`; module loading and

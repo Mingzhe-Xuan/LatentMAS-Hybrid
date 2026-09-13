@@ -1,5 +1,18 @@
 # Agent state
 
+## 2026-09-13 single-array analysis submission
+
+- Current state: implementation and local verification are complete. One
+  self-submitted PBS array now owns compute and finalization, with no dependent
+  scheduler job.
+- Plan: submit from the repository root with `bash analysis.sh`, matching the
+  `run_all.sh` entry-point pattern.
+- Change record: 2026-09-13 task started after the target PBS rejected the
+  `afterokarray` dependency value; no new PBS/GPU job has been submitted.
+- Change record: 2026-09-13 removed the dependent `qsub -W` path, added a
+  submission-scoped success barrier and single-winner in-array finalizer, and
+  updated the PBS contract test. All 44 analysis tests pass locally.
+
 ## 2026-09-12 dependency-free analysis submission
 
 - Current state: implementation and local verification are complete. The

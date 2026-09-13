@@ -34,7 +34,7 @@ def test_pbs_scripts_have_valid_shell_syntax() -> None:
     subprocess.run([bash, "-n", str(ROOT / "analysis.sh")], check=True)
 
 
-def test_repository_analysis_entrypoint_submits_three_gpu_array_and_finalizer() -> None:
+def test_repository_analysis_entrypoint_submits_one_three_gpu_array() -> None:
     text = (ROOT / "analysis.sh").read_text(encoding="utf-8")
     assert 'ANALYSIS_TARGET="${ANALYSIS_TARGET:-all}"' in text
     assert 'ANALYSIS_MAX_GPUS="${ANALYSIS_MAX_GPUS:-3}"' in text
@@ -44,10 +44,14 @@ def test_repository_analysis_entrypoint_submits_three_gpu_array_and_finalizer() 
     assert "compute|finalize)" in text
     assert '-J "1-${COMPUTE_ROWS}%${ANALYSIS_MAX_GPUS}"' in text
     assert 'ANALYSIS_EXECUTION_MODE=compute,RUN_MANIFEST=${COMPUTE_MANIFEST}' in text
-    assert 'ANALYSIS_EXECUTION_MODE=finalize,FINALIZE_MANIFEST=${FINALIZE_MANIFEST}' in text
+    assert 'FINALIZE_ROWS=${FINALIZE_ROWS},FINALIZE_MANIFEST=${FINALIZE_MANIFEST}' in text
+    assert 'coordination/${ANALYSIS_RUN_ID}' in text
+    assert "claim_finalizer" in text
+    assert 'finalize.started' in text and 'finalize.done' in text
     assert text.count('"${BASH_SOURCE[0]}"') == 2
-    assert 'depend=${DEPENDENCY_OPERATOR}:${COMPUTE_JOB}' in text
-    assert 'PBS_DEPENDENCY_OPERATOR:-afterokarray' in text
+    assert "FINALIZE_COMMAND" not in text
+    assert "depend=" not in text
+    assert "qsub -W" not in text
     assert 'BUILD=("${PYTHON_BIN}" -S analysis/pbs/build_dataset_run_matrix.py' in text
     assert 'source "${analysis_venv}/bin/activate"' in text
     for worker in ("analysis_dataset_run.pbs", "analysis_finalize.pbs"):

@@ -1,5 +1,23 @@
 # Analysis test record
 
+## 2026-09-13 single-array submission test plan
+
+- Submission contract: `bash analysis.sh` must issue exactly one dynamic
+  `qsub -J 1-N%ANALYSIS_MAX_GPUS` command and must not use `qsub -W` or submit
+  a separate finalizer.
+- Worker contract: every array cell runs its indexed compute bundle and writes
+  one submission-scoped status marker; exactly the final successful cell claims
+  and executes the finalize manifest after all cells have succeeded.
+- Failure contract: a failed compute cell records failure, prevents finalization,
+  and leaves the PBS array failed rather than producing partial reports.
+- Regression scope: targeted PBS tests, the complete analysis suite, shell
+  syntax, Python compileall, formal/smoke manifest dry-runs, and
+  `git diff --check`.
+- Actual: `bash -n`, Python compileall, `git diff --check`, formal and AIME smoke
+  dry-runs pass. Targeted PBS tests pass 10/10 and the complete analysis suite
+  passes 44/44. The formal manifest remains 12 compute cells plus one in-array
+  20-task finalize bundle; no PBS/GPU job was submitted.
+
 ## 2026-09-12 dependency-free submission test plan
 
 - Submission contract: importing and dry-running the manifest builder with
