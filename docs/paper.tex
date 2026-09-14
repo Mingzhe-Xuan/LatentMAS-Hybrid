@@ -1,0 +1,137 @@
+\documentclass{article} % For LaTeX2e
+
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{natbib}
+\usepackage{multirow}
+\usepackage{adjustbox}
+\usepackage{makecell}
+\usepackage{placeins}
+\usepackage{comment}
+\usepackage{capt-of}
+
+
+\definecolor{table_green}{RGB}{34,139,34}
+\newcommand{\xiyan}[1]{\textcolor{table_green}{#1}}
+
+\begin{document}
+
+% Required packages:
+% \usepackage{booktabs,multirow,makecell,graphicx}
+
+\begin{table*}[t]
+\centering
+\caption{\xiyan{Performance and computational efficiency of Qwen3-8B under the sequential configuration. Acc. ($\uparrow$) denotes task accuracy (\%), or pass@1 (\%) for code generation; Dec. ($\downarrow$) denotes the number of explicit vocabulary-decoding operations per problem; and Time ($\downarrow$) denotes end-to-end inference time (seconds per problem). AVG denotes the unweighted mean across all nine benchmarks. The highest accuracy of training free latent alignment on each benchmark is shown in bold.}}
+\label{tab:main_results}
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.12}
+\small
+\resizebox{\textwidth}{!}{%
+\xiyan{%
+\begin{tabular}{@{}ll*{8}{c}@{}}
+\toprule
+Method & Metric
+& \makecell{AIME\\2024} 
+& \makecell{AIME\\2025} 
+& \makecell{Human\\Eval+}
+& MBPP+
+& ARC-C
+& \makecell{GPQA-\\Diamond}
+& MedQA
+& AVG \\
+\midrule
+Text
+& Acc. & 53.30 & 53.30 & 89.63 & 79.89 & 94.97 & 43.40 & 75.67 & \\
+& Dec. & & & & & & & & \\
+& Time & & & & & & & &  \\
+\midrule\midrule
+Normed Align
+& Acc.  & - & - & 84.15 & - & 94.54 & - & \textbf{76.33} & \\
+& Dec. & & & & & & & & \\
+& Time & & & & & & & & \\
+\midrule
+\multirow{3}{*}{\makecell[l]{Linear Align\\\citep{latentmas}}}
+& Acc.  & 56.70 & \textbf{53.30} & 80.50 & 74.60 & 94.40 & 45.50 & 75.30 & \\
+& Dec. & & & & & & & & \\
+& Time & & & & & & & &  \\
+\midrule
+\multirow{3}{*}{\makecell[l]{Exact-Soft Align \\\citep{soft_thinking}}}
+& Acc. & 63.75 & 49.17 & 82.62 & 73.15  & - & - & 66.67 & \\
+& Dec.  & & & & & & & & \\
+& Time  & & & & & & & & \\
+\midrule
+Kernel Align
+& Acc. & \textbf{66.25} & 49.58 & \textbf{83.54} & \textbf{75.26} & \textbf{94.80} & \textbf{48.74} & 73.67 & \\
+& Dec. & & & & & & & &  \\
+& Time & & & & & & & &  \\
+\bottomrule
+\end{tabular}%
+}%
+}
+\end{table*}
+
+\begin{table*}[t]
+\centering
+\caption{\xiyan{Performance and computational efficiency of cross-model communication between Qwen3-8B and Qwen3-14B. Arrows indicate the sender-to-receiver direction. Acc. ($\uparrow$) denotes task accuracy (\%), or pass@1 (\%) for code generation; Dec. ($\downarrow$) denotes the number of explicit vocabulary-decoding operations per problem; and Time ($\downarrow$) denotes end-to-end inference time (seconds per problem). Receiver-only answers the original question without sender representations, using the same receiver generation settings. AVG denotes the unweighted mean across all nine benchmarks. A dash indicates an unavailable result.}}
+\label{tab:cross_model_results}
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.12}
+\small
+\resizebox{\textwidth}{!}{%
+\xiyan{%
+\begin{tabular}{@{}ll*{8}{c}@{}}
+\toprule
+Method & Metric
+& \makecell{AIME\\2024}
+& \makecell{AIME\\2025}
+& \makecell{Human\\Eval+}
+& MBPP+
+& ARC-C
+& \makecell{GPQA-\\Diamond}
+& MedQA
+& AVG \\
+\midrule
+\multicolumn{10}{@{}l}{\textit{Qwen3-14B $\rightarrow$ Qwen3-8B}} \\
+\midrule
+Linear Align
+& Acc.  & -- & -- & -- & -- & -- & -- & -- & --  \\
+& Dec.  & -- & -- & -- & -- & -- & -- & -- & -- \\
+& Time  & -- & -- & -- & -- & -- & -- & -- & --  \\
+\midrule
+Exact-Soft Align
+& Acc.  & -- & -- & -- & -- & -- & -- & -- & --  \\
+& Dec.  & -- & -- & -- & -- & -- & -- & -- & --  \\
+& Time  & -- & -- & -- & -- & -- & -- & -- & -- \\
+\midrule
+Kernel Align
+& Acc.  & -- & -- & -- & -- & -- & -- & -- & -- \\
+& Dec.  & -- & -- & -- & -- & -- & -- & -- & --  \\
+& Time  & -- & -- & -- & -- & -- & -- & -- & -- \\
+\midrule\midrule
+\multicolumn{10}{@{}l}{\textit{Qwen3-8B $\rightarrow$ Qwen3-14B}} \\
+\midrule
+Linear Align
+& Acc.  & -- & -- & -- & -- & -- & -- & -- & --  \\
+& Dec.  & -- & -- & -- & -- & -- & -- & -- & -- \\
+& Time  & -- & -- & -- & -- & -- & -- & -- & --  \\
+\midrule
+Exact-Soft Align
+& Acc.  & -- & -- & -- & -- & -- & -- & -- & --  \\
+& Dec.  & -- & -- & -- & -- & -- & -- & -- & --  \\
+& Time  & -- & -- & -- & -- & -- & -- & -- & --  \\
+\midrule
+Kernel Align
+& Acc.  & -- & -- & -- & -- & -- & -- & -- & -- \\
+& Dec.  & -- & -- & -- & -- & -- & -- & -- & -- \\
+& Time  & -- & -- & -- & -- & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}%
+}%
+}
+\end{table*}
+
+
+\end{document}

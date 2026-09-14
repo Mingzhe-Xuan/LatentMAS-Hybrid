@@ -367,7 +367,7 @@ def main():
     
     # Hybrid method arguments
     parser.add_argument("--agent_models", type=str, nargs="+", default=None,
-                        help="List of models for each agent in hybrid mode (e.g., 'Qwen/Qwen2.5-0.5B-Instruct Qwen/Qwen3-8B Qwen/Qwen2.5-0.5B-Instruct')")
+                        help="Two models select Planner/Judger mode; four models map to Planner/Critic/Refiner/Judger.")
 
     args = parser.parse_args()
 

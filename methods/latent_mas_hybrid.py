@@ -1,7 +1,7 @@
 from typing import Dict, List, Optional, Tuple
 import copy
 
-from . import default_agents
+from . import Agent, default_agents
 from models import ModelWrapper, _AlignmentTimer, _past_length, _sync_cuda
 from prompts import build_agent_message_sequential_latent_mas, build_agent_message_hierarchical_latent_mas
 from reasoning_models import append_manual_reasoning_cue, resolve_manual_think
@@ -51,7 +51,6 @@ class LatentMASMethod:
         self.temperature = temperature
         self.top_p = top_p
         self.generate_bs = max(1, generate_bs)
-        self.agents = default_agents()
         self.method_name = 'latent_mas_hybrid'
         self.vllm_device = args.device
         self.HF_device = args.device2
@@ -71,10 +70,20 @@ class LatentMASMethod:
 
         # NEW: Agent-to-model mapping
         if agent_models is None:
+            self.agents = default_agents()
             # Default: all agents use same model
             self.agent_models = [model.model_name] * len(self.agents)
+        elif len(agent_models) == 2:
+            # Analysis-compatible Sender Planner -> Receiver Judger protocol.
+            self.agents = [
+                Agent(name="Planner", role="planner"),
+                Agent(name="Judger", role="judger"),
+            ]
+            self.agent_models = agent_models
         else:
-            assert len(agent_models) == len(self.agents), "Must specify model for each agent"
+            self.agents = default_agents()
+            if len(agent_models) != len(self.agents):
+                raise ValueError("agent_models must contain either two or four model IDs")
             self.agent_models = agent_models
 
         if model.use_vllm:

@@ -37,6 +37,7 @@ SINGLE_CONFIG="${SINGLE_CONFIG:-false}"
 CONFIG_METHOD="${CONFIG_METHOD:-}"
 CONFIG_PROMPT="${CONFIG_PROMPT:-}"
 CONFIG_ALIGNMENT="${CONFIG_ALIGNMENT:-identical}"
+AGENT_MODELS="${AGENT_MODELS:-}"
 CAPTURE_ALL_OUTPUT="${CAPTURE_ALL_OUTPUT:-false}"
 RUN_OUTPUT_WRAPPED="${RUN_OUTPUT_WRAPPED:-false}"
 for ARG in "$@"; do
@@ -58,7 +59,7 @@ if [ "${SINGLE_CONFIG}" = true ]; then
                 exit 2
             fi
             ;;
-        latent_mas)
+        latent_mas|latent_mas_hybrid)
             case "${CONFIG_ALIGNMENT}" in
                 identical|linear|kernel|kernel_early_stopping|soft) ;;
                 *) echo "ERROR: invalid CONFIG_ALIGNMENT=${CONFIG_ALIGNMENT}"; exit 2 ;;
@@ -78,7 +79,7 @@ fi
 if [ "${CAPTURE_ALL_OUTPUT}" = true ] && [ "${RUN_OUTPUT_WRAPPED}" != true ]; then
     mkdir -p "$(dirname "${STATE_FILE}")"
     export FULL_EXP TASK_ONLY STATE_FILE RUN_SCRIPT RESULT_ROOT LOG_ROOT
-    export SINGLE_CONFIG CONFIG_METHOD CONFIG_PROMPT CONFIG_ALIGNMENT
+    export SINGLE_CONFIG CONFIG_METHOD CONFIG_PROMPT CONFIG_ALIGNMENT AGENT_MODELS
     export GENERATE_BS GENERATE_BS_DIVISOR
     export CAPTURE_ALL_OUTPUT RUN_OUTPUT_WRAPPED=true
     exec bash "${BASH_SOURCE[0]}" "$@" > "${STATE_FILE}" 2>&1
@@ -363,7 +364,7 @@ run_repeated() {
 
     # Alignment is part of the effective LatentMAS method. Without it, the
     # identical/linear/kernel/kernel_early_stopping/soft suites would overwrite one another.
-    if [ "${method}" = "latent_mas" ]; then
+    if [[ "${method}" = "latent_mas" || "${method}" = "latent_mas_hybrid" ]]; then
         method_slug="${method}_${align_method}"
     fi
     config_name="${TASK}_${method_slug}_${prompt}_${MODEL_SLUG}_${RUN_TIME}"
@@ -383,8 +384,20 @@ run_repeated() {
         echo "Running ${method}/${prompt}/${align_method}, repeat ${repeat_index}/${RESOLVED_TIMES}, seed=${run_seed}"
         command=(python3 "${RUN_SCRIPT}" --method "${method}" --prompt "${prompt}" \
             --result_path "${result_path}" --log_path "${log_path}" "${COMMON[@]}")
-        if [ "${method}" = "latent_mas" ]; then
+        if [[ "${method}" = "latent_mas" || "${method}" = "latent_mas_hybrid" ]]; then
             command+=(--align_method "${align_method}" "${LATENT_CACHE_ARGS[@]}")
+            if [ "${method}" = "latent_mas_hybrid" ]; then
+                if [ -z "${AGENT_MODELS}" ]; then
+                    echo "ERROR: AGENT_MODELS is required for latent_mas_hybrid." >&2
+                    return 2
+                fi
+                read -r -a HYBRID_AGENT_MODELS <<< "${AGENT_MODELS}"
+                if (( ${#HYBRID_AGENT_MODELS[@]} != 2 && ${#HYBRID_AGENT_MODELS[@]} != 4 )); then
+                    echo "ERROR: AGENT_MODELS must contain either two or four model IDs." >&2
+                    return 2
+                fi
+                command+=(--agent_models "${HYBRID_AGENT_MODELS[@]}")
+            fi
             if [ "${EARLY_STOPPING_LENGTH_THRESHOLD}" != "auto" ]; then
                 command+=(--early_stopping_length_threshold "${EARLY_STOPPING_LENGTH_THRESHOLD}")
             fi

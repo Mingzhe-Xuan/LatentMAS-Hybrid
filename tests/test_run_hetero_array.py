@@ -1,0 +1,81 @@
+import re
+from argparse import Namespace
+from pathlib import Path
+from unittest.mock import patch
+
+from methods.latent_mas_hybrid import LatentMASMethod
+
+
+ROOT = Path(__file__).resolve().parents[1]
+HETERO = (ROOT / "run_hetero.sh").read_text(encoding="utf-8")
+RUN = (ROOT / "run.sh").read_text(encoding="utf-8")
+HYBRID = (ROOT / "methods" / "latent_mas_hybrid.py").read_text(encoding="utf-8")
+
+
+def _bash_array(name: str) -> list[str]:
+    match = re.search(rf"{name}=\((.*?)\)", HETERO, re.DOTALL)
+    assert match is not None
+    return re.findall(r'"([^"]+)"|([A-Za-z0-9_]+)', match.group(1))
+
+
+def _values(name: str) -> list[str]:
+    return [quoted or bare for quoted, bare in _bash_array(name)]
+
+
+def test_default_cross_model_matrix_matches_table_two_scope() -> None:
+    assert _values("DATASETS") == [
+        "aime2024", "aime2025", "gpqa", "humanevalplus", "mbppplus", "medqa",
+    ]
+    assert _values("SENDERS") == ["Qwen/Qwen3-14B", "Qwen/Qwen3-8B"]
+    assert _values("RECEIVERS") == ["Qwen/Qwen3-8B", "Qwen/Qwen3-14B"]
+    assert _values("ALIGNMENTS") == ["linear", "soft", "kernel"]
+    assert "TOTAL_COUNT=$((DATASET_COUNT * DIRECTION_COUNT * ALIGNMENT_COUNT))" in HETERO
+    assert "#PBS -J 1-36%3" in HETERO
+    assert 'qsub -J "1-${TOTAL_COUNT}%${MAX_CONCURRENT_GPUS}"' in HETERO
+
+
+def test_hybrid_role_mapping_and_run_sh_forwarding() -> None:
+    assert 'AGENT_MODELS="${SENDER_MODEL} ${RECEIVER_MODEL}"' in HETERO
+    assert "CONFIG_METHOD=latent_mas_hybrid" in HETERO
+    assert "latent_mas|latent_mas_hybrid)" in RUN
+    assert 'command+=(--agent_models "${HYBRID_AGENT_MODELS[@]}")' in RUN
+    assert 'elif len(agent_models) == 2:' in HYBRID
+    assert 'Agent(name="Planner", role="planner")' in HYBRID
+    assert 'Agent(name="Judger", role="judger")' in HYBRID
+
+
+def test_two_model_mode_constructs_only_planner_and_judger() -> None:
+    model = type("FakeModel", (), {"model_name": "sender", "use_vllm": False})()
+    args = Namespace(
+        device="cpu",
+        device2="cpu",
+        max_new_tokens=16,
+        task="aime2024",
+        latent_only=False,
+        sequential_info_only=False,
+    )
+    with (
+        patch.object(LatentMASMethod, "_load_additional_models"),
+        patch.object(LatentMASMethod, "_validate_alignment_chain"),
+    ):
+        method = LatentMASMethod(
+            model,
+            agent_models=["sender", "receiver"],
+            args=args,
+        )
+
+    assert [(agent.name, agent.role) for agent in method.agents] == [
+        ("Planner", "planner"),
+        ("Judger", "judger"),
+    ]
+    assert method.agent_models == ["sender", "receiver"]
+
+
+def test_task_parameters_remain_owned_by_params_dict() -> None:
+    assert 'RESOLVED_MAX_NEW_TOKENS="$(resolve_max_new_tokens "${TASK}")"' in RUN
+    assert 'RESOLVED_GENERATE_BS="$(resolve_generate_bs "${TASK}")"' in RUN
+    assert 'RESOLVED_TIMES="$(resolve_times "${TASK}")"' in RUN
+    assert 'RESOLVED_LATENT_STEPS="$(resolve_latent_steps "${TASK}" "${prompt}")"' in RUN
+    assert "MAX_NEW_TOKENS=" not in HETERO
+    assert "LATENT_STEPS=" not in HETERO
+    assert "TIMES=" not in HETERO
