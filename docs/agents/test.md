@@ -168,3 +168,19 @@
 实际：21 项 analysis tests passed；PBS/Slurm 两套 shell 均通过 `bash -n`；Slurm AIME2024 smoke dry-run 正确生成 2/9/42/12 个 Sender/scaling/perturbation/model-pair array rows 和完整 afterok 链，未提交作业。
 
 - Guqq 首次 `--stage collect`：提交前失败（exit 1），原因是 login shell 无全局 `python`；未创建 Slurm job。新增 `.venv/bin/python` fallback 回归测试后重试。
+
+## 2026-09-14 primary dataset ARC-C to MedQA test plan
+
+- Configuration contract: Kernel and STT primary datasets must be exactly
+  AIME2024, HumanEval+, and MedQA, while ARC-Challenge remains supported by
+  the nine-dataset Kernel matrix.
+- Matrix contract: the default combined manifest must remain 9 Kernel cells
+  plus 3 deterministic STT cells, contain no ARC-Challenge cell, and include
+  MedQA for all three Kernel seeds and the deterministic STT run.
+- Regression/static checks: run all `analysis/tests`, both formal and dry-run
+  dataset-manifest checks, Python compilation, shell syntax, and
+  `git diff --check`; no GPU execution is required.
+- Actual: `analysis/tests` passes 44/44 with a workspace-local pytest temp
+  directory. Default/all-datasets/MedQA-smoke dry-runs report respectively
+  12 (`9+3`), 30 (`27+3`), and 4 (`3+1`) compute cells; Python compilation,
+  shell syntax, and `git diff --check` pass.

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 
-PRIMARY_DATASETS = ("aime2024", "humanevalplus", "arc_challenge")
+PRIMARY_DATASETS = ("aime2024", "humanevalplus", "medqa")
 ALL_DATASETS = (
     "aime2024", "aime2025", "arc_challenge", "arc_easy", "gpqa",
     "gsm8k", "humanevalplus", "mbppplus", "medqa",
@@ -36,6 +36,8 @@ class AnalysisConfig:
             raise ValueError("formal model list must be Qwen3-8B, Qwen3-14B")
         if tuple(self.raw["generation"]["seeds"]) != (42, 43, 44):
             raise ValueError("generation seeds must be exactly 42--44")
+        if tuple(self.raw["experiments"]["primary_datasets"]) != PRIMARY_DATASETS:
+            raise ValueError(f"primary datasets must be exactly {PRIMARY_DATASETS}")
         kernel = self.raw["kernel"]
         if (kernel["features"], kernel["temperature"], kernel["seed"], kernel["chunk_size"]) != (2048, .6, 101, 4096):
             raise ValueError("canonical Kernel parameters do not match the protocol")

@@ -1,5 +1,10 @@
 # Progress updates
 
+- 2026-09-14: Replaced ARC-Challenge with MedQA in the default three-dataset
+  Kernel and STT analysis scope. ARC-Challenge remains available through the
+  explicit nine-dataset Kernel mode. Synchronized configs, protocol docs, and
+  regression contracts; all 44 analysis tests and formal dry-runs pass.
+
 - 2026-09-13: Changed `analysis.sh` to submit exactly one dynamic PBS array,
   matching the `run_all.sh` launch model. Removed the incompatible dependent
   `qsub -W` finalizer; every compute cell now records a submission-scoped

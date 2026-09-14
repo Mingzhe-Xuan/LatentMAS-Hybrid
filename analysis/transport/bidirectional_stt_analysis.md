@@ -85,7 +85,7 @@
 | Dataset | Split | 类型 | 主指标 |
 |---|---|---|---|
 | `aime2024` | `train` | 数学推理 | accuracy |
-| `arc_challenge` | `test` | 多项选择 | accuracy |
+| `medqa` | `train` | 医学多项选择 | accuracy |
 | `humanevalplus` | `test` | 代码生成 | pass@1 |
 
 所有系统必须复用：

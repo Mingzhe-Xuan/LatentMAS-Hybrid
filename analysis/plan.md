@@ -34,7 +34,7 @@ Implementation must follow the workflow and development rules in
 | --- | --- | ---: | ---: |
 | AIME 2024 | `train` | all 30 | 3, seeds 42--44 |
 | HumanEval+ | `test` | all 164 | 3, seeds 42--44 |
-| ARC-Challenge | `test` | all test questions | 3, seeds 42--44 |
+| MedQA | `train` | all repository-local questions | 3, seeds 42--44 |
 
 Dataset order and contents are fingerprinted before trajectory collection. The
 same ordered questions are used by every downstream condition.
@@ -274,7 +274,7 @@ collected:
 | --- | ---: |
 | AIME 2024 | 30 |
 | HumanEval+ | 164 |
-| ARC-Challenge | all test questions |
+| MedQA | all repository-local questions |
 | **Dataset-level cache count** | **3** |
 
 Each question is an independently validated cache shard. A failed job resumes
@@ -345,8 +345,8 @@ dataset at a usable `K>=40`:
 2 Sender models * 9 datasets = 18 logical Sender sources
 ```
 
-The existing Qwen3-8B `Kmax=160` caches for AIME 2024, HumanEval+, and
-ARC-Challenge already provide their `K=40` prefix. Therefore only 15 new Sender
+The existing Qwen3-8B `Kmax=160` caches for AIME 2024, HumanEval+, and MedQA
+already provide their `K=40` prefix. Therefore only 15 new Sender
 caches are collected:
 
 ```text

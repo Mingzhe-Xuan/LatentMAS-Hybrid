@@ -46,7 +46,7 @@ perturbation rows.
 ## Submit
 
 The repository-level PBS submitter builds one dataset/run compute array. Its
-default scope is AIME2024, ARC-Challenge, and HumanEval+: 9 kernel cells
+default scope is AIME2024, HumanEval+, and MedQA: 9 kernel cells
 (3 datasets x 3 seeds) and 3 deterministic STT cells. Every cell requests one
 GPU, and the `%3` throttle permits at most three concurrent GPUs.
 After the compute array succeeds, one dependent finalize job performs all

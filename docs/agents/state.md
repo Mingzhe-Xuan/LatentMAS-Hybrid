@@ -1,5 +1,17 @@
 # Agent state
 
+## 2026-09-14 primary dataset ARC-C to MedQA
+
+- Current state: implementation and local verification are complete. The
+  default Kernel/STT scope is now AIME2024, HumanEval+, and MedQA.
+- Plan: use the updated default for future submissions; use `--all-datasets`
+  when ARC-Challenge and the other six Kernel datasets are required.
+- Change record: 2026-09-14 task started at user request; no cluster job has
+  been submitted and no existing cache or result has been changed.
+- Change record: 2026-09-14 synchronized the primary constant, Kernel/STT
+  configs, protocol docs, and tests while retaining ARC-Challenge in the
+  nine-dataset registry. All 44 analysis tests and matrix dry-runs pass.
+
 ## 2026-09-13 single-array analysis submission
 
 - Current state: implementation and local verification are complete. One

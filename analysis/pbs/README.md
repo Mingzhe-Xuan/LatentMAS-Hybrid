@@ -7,7 +7,7 @@ dependency chain and supports dry-run, stage, dataset, and smoke filtering.
 At repository root, `analysis.sh` is the PBS array submitter. It uses
 `build_dataset_run_matrix.py` to group every selected kernel dataset/seed and
 deterministic STT dataset run into one auditable bundle. By default it selects
-AIME2024, ARC-Challenge, and HumanEval+, producing 12 cells submitted as
+AIME2024, HumanEval+, and MedQA, producing 12 cells submitted as
 `1-12%3`, with one GPU per cell. The same `analysis.sh` executes each bundle
 and later runs the dependent cache-only finalizer. Cross-process locks protect
 shared immutable Sender caches.

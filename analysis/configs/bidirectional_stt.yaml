@@ -11,7 +11,7 @@
   "datasets": {
     "aime2024": {"split": "train", "family": "math", "max_new_tokens": 20000, "generation_batch_size": 1},
     "humanevalplus": {"split": "test", "family": "code", "max_new_tokens": 4096, "generation_batch_size": 1},
-    "arc_challenge": {"split": "test", "family": "multiple_choice", "max_new_tokens": 2048, "generation_batch_size": 1}
+    "medqa": {"split": "train", "family": "multiple_choice", "max_new_tokens": 4096, "generation_batch_size": 1}
   },
   "generation": {"sender_budget": 1024, "do_sample": false},
   "transport": {

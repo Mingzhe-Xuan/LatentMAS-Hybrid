@@ -13,6 +13,9 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_formal_config_contract() -> None:
     config = load_config(ROOT / "analysis/configs/kernel_analysis.yaml")
     assert config.models == ("Qwen/Qwen3-8B", "Qwen/Qwen3-14B")
+    assert config.raw["experiments"]["primary_datasets"] == [
+        "aime2024", "humanevalplus", "medqa",
+    ]
 
 
 def test_clean_and_receiver_only_cache_identity_is_canonical() -> None:

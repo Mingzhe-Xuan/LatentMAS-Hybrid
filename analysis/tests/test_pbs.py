@@ -88,14 +88,14 @@ def test_dataset_run_manifest_has_one_cell_per_dataset_run() -> None:
     kernel_matrices, stt_matrices, compute, finalize = build_dataset_run_manifests()
     kernel = [row for row in compute if row["protocol"] == "kernel"]
     stt = [row for row in compute if row["protocol"] == "stt"]
-    primary = {"aime2024", "humanevalplus", "arc_challenge"}
+    primary = {"aime2024", "humanevalplus", "medqa"}
     assert len(kernel) == 9
     assert len({(row["dataset"], row["seed"]) for row in kernel}) == 9
     assert {row["dataset"] for row in kernel} == primary
     assert {row["dataset"] for name, rows in kernel_matrices.items()
             if name != "report.jsonl" for row in rows} <= primary
     assert kernel_matrices["report.jsonl"][0]["datasets"] == [
-        "aime2024", "arc_challenge", "humanevalplus",
+        "aime2024", "humanevalplus", "medqa",
     ]
     assert {row["run"] for row in kernel} == {1, 2, 3}
     assert len(stt) == 3
@@ -122,7 +122,9 @@ def test_all_datasets_restores_nine_dataset_kernel_scope() -> None:
     kernel = [row for row in compute if row["protocol"] == "kernel"]
     stt = [row for row in compute if row["protocol"] == "stt"]
     assert len(kernel) == 27
-    assert len({row["dataset"] for row in kernel}) == 9
+    datasets = {row["dataset"] for row in kernel}
+    assert len(datasets) == 9
+    assert {"arc_challenge", "medqa"} <= datasets
     assert len(stt) == 3
     assert len(finalize) == 1
 

@@ -22,7 +22,7 @@ def test_formal_matrix_counts_and_uniqueness() -> None:
 
 def test_model_pair_matrix_reuses_primary_cells() -> None:
     matrices = build_matrices(CONFIG)
-    primary = {"aime2024", "humanevalplus", "arc_challenge"}
+    primary = {"aime2024", "humanevalplus", "medqa"}
     rows = matrices["model_pairs.jsonl"]
     assert not any(row["dataset"] in primary and row["sender_model"] == row["receiver_model"] == "Qwen/Qwen3-8B" for row in rows)
     assert not any(row["dataset"] in primary and row["k"] == 0 and row["receiver_model"] == "Qwen/Qwen3-8B" for row in rows)
