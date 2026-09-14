@@ -257,8 +257,8 @@ except (OSError, json.JSONDecodeError):
 PY
 }
 TRUST_REMOTE_CODE=true      # Pass --trust_remote_code when the model requires it.
-SEQUENTIAL_INFO_ONLY=false   # Retain only each agent's own prompt + latent KV before the next agent.
-LATENT_ONLY=false            # Retain only latent KV before the next agent (implies SEQUENTIAL_INFO_ONLY).
+SEQUENTIAL_INFO_ONLY="${SEQUENTIAL_INFO_ONLY:-false}" # Retain only each agent's own prompt + latent KV before the next agent.
+LATENT_ONLY="${LATENT_ONLY:-false}"                   # Retain only latent KV before the next agent (implies SEQUENTIAL_INFO_ONLY).
 THINK="${THINK:-auto}"      # auto uses the reasoning-model registry in run.py.
 
 ## --- Alignment settings ---

@@ -44,6 +44,17 @@ def test_hybrid_role_mapping_and_run_sh_forwarding() -> None:
     assert 'Agent(name="Judger", role="judger")' in HYBRID
 
 
+def test_hetero_explicitly_preserves_complete_context_in_order() -> None:
+    assert 'SEQUENTIAL_INFO_ONLY="${SEQUENTIAL_INFO_ONLY:-false}"' in RUN
+    assert 'LATENT_ONLY="${LATENT_ONLY:-false}"' in RUN
+    assert "SEQUENTIAL_INFO_ONLY=false" in HETERO
+    assert "LATENT_ONLY=false" in HETERO
+    assert "export SEQUENTIAL_INFO_ONLY LATENT_ONLY" in HETERO
+    assert "sender prompt states || sender latent-output states || receiver prompt" in HETERO
+    assert "torch.cat([prefill_hidden, latent_hidden_states], dim=1)" in HYBRID
+    assert "torch.cat([aligned_context, prompt_embeds], dim=1)" in HYBRID
+
+
 def test_two_model_mode_constructs_only_planner_and_judger() -> None:
     model = type("FakeModel", (), {"model_name": "sender", "use_vllm": False})()
     args = Namespace(

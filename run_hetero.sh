@@ -28,6 +28,14 @@ SOFT_TEMPERATURE="${SOFT_TEMPERATURE:-0.6}"
 SOFT_CHUNK_SIZE="${SOFT_CHUNK_SIZE:-32}"
 PROGRESS_FILE="${PROGRESS_FILE:-${SUBMIT_DIR}/state_hetero.txt}"
 
+# Heterogeneous Planner -> Judger experiments use the complete hidden-state
+# sequence in this exact order:
+#   sender prompt states || sender latent-output states || receiver prompt
+# Keep these explicit so run.sh cannot switch this matrix to a truncated
+# sequential-info-only or latent-only protocol through inherited defaults.
+SEQUENTIAL_INFO_ONLY=false
+LATENT_ONLY=false
+
 for arg in "$@"; do
     case "${arg}" in
         --force_all) FORCE_ALL=true ;;
@@ -63,7 +71,7 @@ if [[ -z "${PBS_ARRAY_INDEX:-}" ]]; then
         echo "ERROR: qsub was not found in PATH." >&2
         exit 127
     fi
-    variables="FORCE_ALL=${FORCE_ALL},MAX_SAMPLES=${MAX_SAMPLES},MAX_CONCURRENT_GPUS=${MAX_CONCURRENT_GPUS},RESULT_ROOT=${RESULT_ROOT},KERNEL_FEATURES=${KERNEL_FEATURES},KERNEL_TEMPERATURE=${KERNEL_TEMPERATURE},KERNEL_CHUNK_SIZE=${KERNEL_CHUNK_SIZE},ALIGN_RIDGE=${ALIGN_RIDGE},SOFT_TEMPERATURE=${SOFT_TEMPERATURE},SOFT_CHUNK_SIZE=${SOFT_CHUNK_SIZE}"
+    variables="FORCE_ALL=${FORCE_ALL},MAX_SAMPLES=${MAX_SAMPLES},MAX_CONCURRENT_GPUS=${MAX_CONCURRENT_GPUS},RESULT_ROOT=${RESULT_ROOT},KERNEL_FEATURES=${KERNEL_FEATURES},KERNEL_TEMPERATURE=${KERNEL_TEMPERATURE},KERNEL_CHUNK_SIZE=${KERNEL_CHUNK_SIZE},ALIGN_RIDGE=${ALIGN_RIDGE},SOFT_TEMPERATURE=${SOFT_TEMPERATURE},SOFT_CHUNK_SIZE=${SOFT_CHUNK_SIZE},SEQUENTIAL_INFO_ONLY=${SEQUENTIAL_INFO_ONLY},LATENT_ONLY=${LATENT_ONLY}"
     job_id="$(cd "${SCRIPT_DIR}" && qsub -J "1-${TOTAL_COUNT}%${MAX_CONCURRENT_GPUS}" -v "${variables}" "${BASH_SOURCE[0]}")"
     echo "Submitted ${job_id}: ${TOTAL_COUNT} configs, one config per GPU, maximum ${MAX_CONCURRENT_GPUS} concurrent GPU jobs."
     exit 0
@@ -143,6 +151,7 @@ export TASK MODEL_NAME AGENT_MODELS CONFIG_METHOD CONFIG_PROMPT CONFIG_ALIGNMENT
 export STATE_FILE="${STATE_PATH}" MAX_SAMPLES RESULT_ROOT
 export KERNEL_FEATURES KERNEL_TEMPERATURE KERNEL_CHUNK_SIZE ALIGN_RIDGE
 export SOFT_TEMPERATURE SOFT_CHUNK_SIZE
+export SEQUENTIAL_INFO_ONLY LATENT_ONLY
 if bash "${RUN_SCRIPT}"; then
     append_progress COMPLETED "state file: ${STATE_PATH}"
 else
