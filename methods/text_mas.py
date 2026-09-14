@@ -1,6 +1,7 @@
-from typing import Dict, List
+import copy
+from typing import Dict, List, Optional
 
-from . import default_agents
+from . import Agent, default_agents
 from models import ModelWrapper
 # from prompts import build_agent_messages, build_agent_messages_v6, build_agent_messages_v6_text_mas
 from prompts import build_agent_messages_hierarchical_text_mas, build_agent_messages_sequential_text_mas
@@ -13,6 +14,7 @@ class TextMASMethod:
         self,
         model: ModelWrapper,
         *,
+        agent_models: Optional[List[str]] = None,
         max_new_tokens_each: int = 256,
         temperature: float = 0.7,
         top_p: float = 0.95,
@@ -25,10 +27,38 @@ class TextMASMethod:
         self.temperature = temperature
         self.top_p = top_p
         self.generate_bs = max(1, generate_bs)
-        self.agents = default_agents()
         self.args = args
         self.method_name = "text_mas"
         self.task = args.task
+
+        if agent_models is None:
+            self.agents = default_agents()
+            self.agent_models = [model.model_name] * len(self.agents)
+        elif len(agent_models) == 2:
+            self.agents = [
+                Agent(name="Planner", role="planner"),
+                Agent(name="Judger", role="judger"),
+            ]
+            self.agent_models = agent_models
+        else:
+            self.agents = default_agents()
+            if len(agent_models) != len(self.agents):
+                raise ValueError("agent_models must contain either two or four model IDs")
+            self.agent_models = agent_models
+
+        if model.use_vllm and len(set(self.agent_models)) > 1:
+            raise ValueError("heterogeneous TextMAS requires the HF backend")
+
+        self.models: Dict[str, ModelWrapper] = {model.model_name: model}
+        for model_name in set(self.agent_models):
+            if model_name not in self.models:
+                print(f"Loading additional model: {model_name}")
+                self.models[model_name] = ModelWrapper(
+                    model_name,
+                    args.device,
+                    use_vllm=False,
+                    args=args,
+                )
 
     def run_batch(self, items: List[Dict]) -> List[Dict]:
         if len(items) > self.generate_bs:
@@ -40,7 +70,11 @@ class TextMASMethod:
         agent_traces: List[List[Dict]] = [[] for _ in range(batch_size)]
         final_texts = ["" for _ in range(batch_size)]
 
-        for agent in self.agents:
+        for agent_index, agent in enumerate(self.agents):
+            agent_model_name = self.agent_models[agent_index]
+            agent_model = self.models[agent_model_name]
+            prompt_args = copy.copy(self.args)
+            prompt_args.model_name = agent_model_name
 
             if self.args.prompt == "hierarchical":
                 batch_messages = [
@@ -49,7 +83,7 @@ class TextMASMethod:
                         question=item["question"],
                         context=contexts[idx],
                         method=self.method_name,
-                        args=self.args,
+                        args=prompt_args,
                     )
                     for idx, item in enumerate(items)
                 ]
@@ -60,24 +94,24 @@ class TextMASMethod:
                         question=item["question"],
                         context=contexts[idx],
                         method=self.method_name,
-                        args=self.args,
+                        args=prompt_args,
                     )
                     for idx, item in enumerate(items)
                 ]
 
-            prompts, input_ids, attention_mask, tokens_batch = self.model.prepare_chat_batch(
+            prompts, input_ids, attention_mask, tokens_batch = agent_model.prepare_chat_batch(
                 batch_messages, add_generation_prompt=True
             )
 
-            if self.model.use_vllm:
-                generated_texts = self.model.vllm_generate_text_batch(
+            if agent_model.use_vllm:
+                generated_texts = agent_model.vllm_generate_text_batch(
                     prompts,
                     max_new_tokens=self.max_new_tokens_each,
                     temperature=self.temperature,
                     top_p=self.top_p,
                 )
             else:
-                generated_texts, _ = self.model.generate_text_batch(
+                generated_texts, _ = agent_model.generate_text_batch(
                     input_ids,
                     attention_mask,
                     max_new_tokens=self.max_new_tokens_each,
@@ -85,7 +119,7 @@ class TextMASMethod:
                     top_p=self.top_p,
                 )
 
-            generation_metrics = self.model.last_generation_metrics
+            generation_metrics = agent_model.last_generation_metrics
             agent_name_map_for_prompt_hierarchical = {
                 "Planner": "Math Agent",
                 "Critic": "Science Agent",
@@ -118,6 +152,7 @@ class TextMASMethod:
                     {
                         "name": agent.name,
                         "role": agent.role,
+                        "model": agent_model_name,
                         "input": prompts[idx],
                         "input_ids": trimmed_ids,
                         "input_tokens": tokens_batch[idx],

@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from methods.latent_mas_hybrid import LatentMASMethod
+from methods.text_mas import TextMASMethod
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,17 +29,27 @@ def test_default_cross_model_matrix_matches_table_two_scope() -> None:
     ]
     assert _values("SENDERS") == ["Qwen/Qwen3-14B", "Qwen/Qwen3-8B"]
     assert _values("RECEIVERS") == ["Qwen/Qwen3-8B", "Qwen/Qwen3-14B"]
-    assert _values("ALIGNMENTS") == ["linear", "soft", "kernel"]
-    assert "TOTAL_COUNT=$((DATASET_COUNT * DIRECTION_COUNT * ALIGNMENT_COUNT))" in HETERO
-    assert "#PBS -J 1-36%3" in HETERO
+    assert _values("METHODS") == [
+        "text_mas", "latent_mas_hybrid", "latent_mas_hybrid", "latent_mas_hybrid",
+    ]
+    assert _values("ALIGNMENTS") == ["identical", "linear", "soft", "kernel"]
+    assert "TOTAL_COUNT=$((DATASET_COUNT * DIRECTION_COUNT * EXPERIMENT_COUNT))" in HETERO
+    assert "#PBS -J 1-48%3" in HETERO
     assert 'qsub -J "1-${TOTAL_COUNT}%${MAX_CONCURRENT_GPUS}"' in HETERO
+
+
+def test_hetero_reruns_completed_configs_by_default() -> None:
+    assert 'FORCE_ALL="${FORCE_ALL:-true}"' in HETERO
+    assert '[[ "${FORCE_ALL}" != true ]] && state_file_completed' in HETERO
 
 
 def test_hybrid_role_mapping_and_run_sh_forwarding() -> None:
     assert 'AGENT_MODELS="${SENDER_MODEL} ${RECEIVER_MODEL}"' in HETERO
-    assert "CONFIG_METHOD=latent_mas_hybrid" in HETERO
+    assert 'CONFIG_METHOD="${METHODS[${EXPERIMENT_INDEX}]}"' in HETERO
+    assert "text_mas" in HETERO
+    assert "latent_mas_hybrid" in HETERO
     assert "latent_mas|latent_mas_hybrid)" in RUN
-    assert 'command+=(--agent_models "${HYBRID_AGENT_MODELS[@]}")' in RUN
+    assert 'command+=(--agent_models "${HETERO_AGENT_MODELS[@]}")' in RUN
     assert 'elif len(agent_models) == 2:' in HYBRID
     assert 'Agent(name="Planner", role="planner")' in HYBRID
     assert 'Agent(name="Judger", role="judger")' in HYBRID
@@ -80,6 +91,45 @@ def test_two_model_mode_constructs_only_planner_and_judger() -> None:
         ("Judger", "judger"),
     ]
     assert method.agent_models == ["sender", "receiver"]
+
+
+def test_heterogeneous_text_mas_constructs_only_planner_and_judger() -> None:
+    model = type(
+        "FakeModel",
+        (),
+        {"model_name": "sender", "use_vllm": False},
+    )()
+    args = Namespace(task="aime2024", device="cpu")
+    with patch("methods.text_mas.ModelWrapper"):
+        method = TextMASMethod(
+            model,
+            agent_models=["sender", "receiver"],
+            args=args,
+        )
+
+    assert [(agent.name, agent.role) for agent in method.agents] == [
+        ("Planner", "planner"),
+        ("Judger", "judger"),
+    ]
+    assert method.agent_models == ["sender", "receiver"]
+    assert set(method.models) == {"sender", "receiver"}
+
+
+def test_default_text_mas_keeps_original_four_agent_single_model_mode() -> None:
+    model = type(
+        "FakeModel",
+        (),
+        {"model_name": "single", "use_vllm": False},
+    )()
+    method = TextMASMethod(
+        model,
+        args=Namespace(task="aime2024", device="cpu"),
+    )
+
+    assert [agent.role for agent in method.agents] == [
+        "planner", "critic", "refiner", "judger",
+    ]
+    assert method.agent_models == ["single"] * 4
 
 
 def test_task_parameters_remain_owned_by_params_dict() -> None:

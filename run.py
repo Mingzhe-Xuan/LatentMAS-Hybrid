@@ -365,7 +365,7 @@ def main():
     parser.add_argument("--tensor_parallel_size", type=int, default=1, help="How many GPUs vLLM should shard the model across")
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9, help="Target GPU memory utilization for vLLM")
     
-    # Hybrid method arguments
+    # Heterogeneous TextMAS / LatentMAS arguments
     parser.add_argument("--agent_models", type=str, nargs="+", default=None,
                         help="Two models select Planner/Judger mode; four models map to Planner/Critic/Refiner/Judger.")
 
@@ -432,6 +432,7 @@ def main():
     elif args.method == "text_mas":
         method = TextMASMethod(
             model,
+            agent_models=args.agent_models,
             max_new_tokens_each=args.max_new_tokens,
             **common_kwargs,
             generate_bs=args.generate_bs,

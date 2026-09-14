@@ -4,17 +4,20 @@
 #PBS -q gpu_ded
 #PBS -l walltime=72:00:00
 #PBS -l select=1:ncpus=12:ngpus=1
-#PBS -J 1-36%3
+#PBS -J 1-48%3
 #PBS -j oe
 
-# Cross-model matrix used to populate docs/paper.tex table 2.
+# Cross-model TextMAS and latent-alignment matrix used to populate
+# docs/paper.tex table 2.
 # The only agents are a Sender Planner and a Receiver Judger, matching analysis/.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBMIT_DIR="${PBS_O_WORKDIR:-${SCRIPT_DIR}}"
-FORCE_ALL="${FORCE_ALL:-false}"
+# Heterogeneous runs rerun every selected configuration by default. Set
+# FORCE_ALL=false explicitly to reuse successful state files and skip them.
+FORCE_ALL="${FORCE_ALL:-true}"
 WORKER_MODE="${WORKER_MODE:-false}"
 CONFIG_OFFSET="${CONFIG_OFFSET:-}"
 MAX_SAMPLES="${MAX_SAMPLES:--1}"
@@ -51,13 +54,14 @@ done
 DATASETS=(aime2024 aime2025 gpqa humanevalplus mbppplus medqa)
 SENDERS=("Qwen/Qwen3-14B" "Qwen/Qwen3-8B")
 RECEIVERS=("Qwen/Qwen3-8B" "Qwen/Qwen3-14B")
-ALIGNMENTS=(linear soft kernel)
+METHODS=(text_mas latent_mas_hybrid latent_mas_hybrid latent_mas_hybrid)
+ALIGNMENTS=(identical linear soft kernel)
 PROMPT=sequential
 
 DATASET_COUNT=${#DATASETS[@]}
 DIRECTION_COUNT=${#SENDERS[@]}
-ALIGNMENT_COUNT=${#ALIGNMENTS[@]}
-TOTAL_COUNT=$((DATASET_COUNT * DIRECTION_COUNT * ALIGNMENT_COUNT))
+EXPERIMENT_COUNT=${#METHODS[@]}
+TOTAL_COUNT=$((DATASET_COUNT * DIRECTION_COUNT * EXPERIMENT_COUNT))
 
 if ! [[ "${MAX_CONCURRENT_GPUS}" =~ ^[1-9][0-9]*$ ]]; then
     echo "ERROR: MAX_CONCURRENT_GPUS must be a positive integer." >&2
@@ -91,16 +95,16 @@ if ! [[ "${CONFIG_OFFSET}" =~ ^[0-9]+$ ]] || (( CONFIG_OFFSET >= TOTAL_COUNT ));
     exit 2
 fi
 
-ALIGNMENT_INDEX=$((CONFIG_OFFSET % ALIGNMENT_COUNT))
-DATASET_DIRECTION_INDEX=$((CONFIG_OFFSET / ALIGNMENT_COUNT))
+EXPERIMENT_INDEX=$((CONFIG_OFFSET % EXPERIMENT_COUNT))
+DATASET_DIRECTION_INDEX=$((CONFIG_OFFSET / EXPERIMENT_COUNT))
 DATASET_INDEX=$((DATASET_DIRECTION_INDEX % DATASET_COUNT))
 DIRECTION_INDEX=$((DATASET_DIRECTION_INDEX / DATASET_COUNT))
 
 TASK="${DATASETS[${DATASET_INDEX}]}"
 SENDER_MODEL="${SENDERS[${DIRECTION_INDEX}]}"
 RECEIVER_MODEL="${RECEIVERS[${DIRECTION_INDEX}]}"
-CONFIG_ALIGNMENT="${ALIGNMENTS[${ALIGNMENT_INDEX}]}"
-CONFIG_METHOD=latent_mas_hybrid
+CONFIG_METHOD="${METHODS[${EXPERIMENT_INDEX}]}"
+CONFIG_ALIGNMENT="${ALIGNMENTS[${EXPERIMENT_INDEX}]}"
 CONFIG_PROMPT="${PROMPT}"
 MODEL_NAME="${SENDER_MODEL}"
 AGENT_MODELS="${SENDER_MODEL} ${RECEIVER_MODEL}"
@@ -108,7 +112,12 @@ AGENT_MODELS="${SENDER_MODEL} ${RECEIVER_MODEL}"
 sender_slug="$(printf '%s' "${SENDER_MODEL}" | tr -c 'A-Za-z0-9._-' '_')"
 receiver_slug="$(printf '%s' "${RECEIVER_MODEL}" | tr -c 'A-Za-z0-9._-' '_')"
 STATE_DIR="${SUBMIT_DIR}/state/hetero"
-STATE_PATH="${STATE_DIR}/${TASK}_${CONFIG_ALIGNMENT}_${sender_slug}_to_${receiver_slug}_state.txt"
+if [[ "${CONFIG_METHOD}" = "text_mas" ]]; then
+    state_config_slug=textmas
+else
+    state_config_slug="${CONFIG_ALIGNMENT}"
+fi
+STATE_PATH="${STATE_DIR}/${TASK}_${state_config_slug}_${sender_slug}_to_${receiver_slug}_state.txt"
 mkdir -p "${STATE_DIR}"
 
 append_progress() {
@@ -143,7 +152,7 @@ if [[ ! -f "${RUN_SCRIPT}" ]]; then
     exit 2
 fi
 
-echo "Array ${PBS_JOBID:-unknown}[${PBS_ARRAY_INDEX}]: ${TASK} ${SENDER_MODEL} -> ${RECEIVER_MODEL} ${CONFIG_ALIGNMENT}"
+echo "Array ${PBS_JOBID:-unknown}[${PBS_ARRAY_INDEX}]: ${TASK} ${SENDER_MODEL} -> ${RECEIVER_MODEL} ${CONFIG_METHOD}/${CONFIG_ALIGNMENT}"
 cd "${SUBMIT_DIR}" || exit 1
 append_progress STARTED "state file: ${STATE_PATH}"
 export FULL_EXP=false TASK_ONLY=true SINGLE_CONFIG=true CAPTURE_ALL_OUTPUT=true

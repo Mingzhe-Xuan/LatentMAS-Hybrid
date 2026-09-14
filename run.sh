@@ -346,7 +346,7 @@ fi
 ##   --enable_prefix_caching  default: false; only relevant with vLLM.
 ##   --use_second_HF_model    default: false; only relevant with latent_mas + vLLM.
 ##   --device2 DEVICE         default: None, then run.py uses --device.
-##   --agent_models MODEL...  default: None; only used by latent_mas_hybrid.
+##   --agent_models MODEL...  default: None; used by heterogeneous text_mas and latent_mas_hybrid.
 ##
 ## --align_method choices/default: identical (default), linear, kernel, kernel_early_stopping, soft.
 ## The current suite runs all five methods explicitly below.
@@ -384,20 +384,20 @@ run_repeated() {
         echo "Running ${method}/${prompt}/${align_method}, repeat ${repeat_index}/${RESOLVED_TIMES}, seed=${run_seed}"
         command=(python3 "${RUN_SCRIPT}" --method "${method}" --prompt "${prompt}" \
             --result_path "${result_path}" --log_path "${log_path}" "${COMMON[@]}")
+        if [[ "${method}" = "latent_mas_hybrid" && -z "${AGENT_MODELS}" ]]; then
+            echo "ERROR: AGENT_MODELS is required for latent_mas_hybrid." >&2
+            return 2
+        fi
+        if [[ ("${method}" = "text_mas" || "${method}" = "latent_mas_hybrid") && -n "${AGENT_MODELS}" ]]; then
+            read -r -a HETERO_AGENT_MODELS <<< "${AGENT_MODELS}"
+            if (( ${#HETERO_AGENT_MODELS[@]} != 2 && ${#HETERO_AGENT_MODELS[@]} != 4 )); then
+                echo "ERROR: AGENT_MODELS must contain either two or four model IDs." >&2
+                return 2
+            fi
+            command+=(--agent_models "${HETERO_AGENT_MODELS[@]}")
+        fi
         if [[ "${method}" = "latent_mas" || "${method}" = "latent_mas_hybrid" ]]; then
             command+=(--align_method "${align_method}" "${LATENT_CACHE_ARGS[@]}")
-            if [ "${method}" = "latent_mas_hybrid" ]; then
-                if [ -z "${AGENT_MODELS}" ]; then
-                    echo "ERROR: AGENT_MODELS is required for latent_mas_hybrid." >&2
-                    return 2
-                fi
-                read -r -a HYBRID_AGENT_MODELS <<< "${AGENT_MODELS}"
-                if (( ${#HYBRID_AGENT_MODELS[@]} != 2 && ${#HYBRID_AGENT_MODELS[@]} != 4 )); then
-                    echo "ERROR: AGENT_MODELS must contain either two or four model IDs." >&2
-                    return 2
-                fi
-                command+=(--agent_models "${HYBRID_AGENT_MODELS[@]}")
-            fi
             if [ "${EARLY_STOPPING_LENGTH_THRESHOLD}" != "auto" ]; then
                 command+=(--early_stopping_length_threshold "${EARLY_STOPPING_LENGTH_THRESHOLD}")
             fi
