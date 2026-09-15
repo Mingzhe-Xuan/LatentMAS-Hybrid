@@ -24,49 +24,194 @@
 
 \begin{table*}[t]
 \centering
-\caption{\xiyan{Performance and computational efficiency of Qwen3-8B under the sequential configuration. Acc. ($\uparrow$) denotes task accuracy (\%), or pass@1 (\%) for code generation; Dec. ($\downarrow$) denotes the number of explicit vocabulary-decoding operations per problem; and Time ($\downarrow$) denotes end-to-end inference time (seconds per problem). AVG denotes the unweighted mean across all nine benchmarks. The highest accuracy of training free latent alignment on each benchmark is shown in bold.}}
+\caption{\xiyan{Performance and computational efficiency of Qwen3-8B under the sequential configuration. Acc. ($\uparrow$) denotes task accuracy (\%), or pass@1 (\%) for code generation; Token ($\downarrow$) denotes tokens per problem; and Time ($\downarrow$) denotes inference time (seconds per problem). Single, Text, and Linear Align times are converted to the Kernel machine's throughput. AVG denotes the unweighted mean across all six benchmarks. The highest accuracy among training-free latent alignment methods, the lowest token count, and the shortest inference time in each column (including AVG) are shown in bold.}}
 \label{tab:main_results}
 \setlength{\tabcolsep}{3pt}
 \renewcommand{\arraystretch}{1.12}
 \small
 \resizebox{\textwidth}{!}{%
 \xiyan{%
-\begin{tabular}{@{}ll*{8}{c}@{}}
+\begin{tabular}{@{}ll*{7}{c}@{}}
 \toprule
 Method & Metric
-& \makecell{AIME\\2024} 
-& \makecell{AIME\\2025} 
+& \makecell{AIME\\2024}
+& \makecell{AIME\\2025}
 & \makecell{Human\\Eval+}
 & MBPP+
-& ARC-C
 & \makecell{GPQA-\\Diamond}
 & MedQA
 & AVG \\
 \midrule
-Text
-& Acc. & 53.30 & 53.30 & 89.63 & 79.89 & 94.97 & 43.40 & 75.67 & \\
-& Dec. & & & & & & & & \\
-& Time & & & & & & & &  \\
-\midrule\midrule
-Normed Align
-& Acc.  & - & - & 84.15 & - & 94.54 & - & \textbf{76.33} & \\
-& Dec. & & & & & & & & \\
-& Time & & & & & & & & \\
+Single & Acc. & 50.00 & 46.70 & 74.40 & 64.80 & 39.90 & 53.00 & 54.80 \\
+ & Token & 12891 & 14692 & 2507 & 2053 & 6435 & 2098 & 6779.33 \\
+ & Time & 340.2 & 377.8 & 31.5 & 28.9 & 104.6 & 18.3 & 150.22 \\
 \midrule
-\multirow{3}{*}{\makecell[l]{Linear Align\\\citep{latentmas}}}
-& Acc.  & 56.70 & \textbf{53.30} & 80.50 & 74.60 & 94.40 & 45.50 & 75.30 & \\
-& Dec. & & & & & & & & \\
-& Time & & & & & & & &  \\
+Text & Acc. & 53.30 & 53.30 & 80.50 & 69.50 & 43.40 & 75.00 & 62.50 \\
+ & Token & 38596 & 45088 & 4593 & 3695 & 17986 & 4260 & 19036.33 \\
+ & Time & 1018.6 & 1159.4 & 57.7 & 52.1 & 292.2 & 37.1 & 436.18 \\
 \midrule
-\multirow{3}{*}{\makecell[l]{Exact-Soft Align \\\citep{soft_thinking}}}
-& Acc. & 63.75 & 49.17 & 82.62 & 73.15  & - & - & 66.67 & \\
-& Dec.  & & & & & & & & \\
-& Time  & & & & & & & & \\
+\multirow{3}{*}{\makecell[l]{Linear Align\\\citep{latentmas}}} & Acc. & 56.70 & \textbf{53.30} & 80.50 & 74.60 & 45.50 & \textbf{75.30} & 64.32 \\
+ & Token & 8953 & \textbf{8699} & 1866 & \textbf{1164} & 4571 & 1555 & 4468.00 \\
+ & Time & 236.3 & \textbf{223.7} & 23.4 & \textbf{16.4} & 74.3 & 13.5 & \textbf{97.93} \\
 \midrule
-Kernel Align
-& Acc. & \textbf{66.25} & 49.58 & \textbf{83.54} & \textbf{75.26} & \textbf{94.80} & \textbf{48.74} & 73.67 & \\
-& Dec. & & & & & & & &  \\
-& Time & & & & & & & &  \\
+\multirow{3}{*}{\makecell[l]{Exact-Soft Align\\\citep{soft_thinking}}} & Acc. & 63.75 & 49.17 & 82.62 & 73.15 & \textbf{49.24} & 66.67 & 64.10 \\
+ & Token & 22342 & 24557 & 15055 & 14388 & 13076 & 15972 & 17565.00 \\
+ & Time & 549.0 & 597.0 & 112.4 & 101.6 & 257.6 & 111.1 & 288.12 \\
+\midrule
+Kernel Align & Acc. & \textbf{66.25} & 49.58 & \textbf{83.54} & \textbf{75.26} & 48.74 & 73.67 & \textbf{66.17} \\
+ & Token & \textbf{8548} & 10158 & \textbf{1637} & 1462 & \textbf{3588} & \textbf{1139} & \textbf{4422.00} \\
+ & Time & \textbf{225.6} & 261.2 & \textbf{18.8} & 17.9 & \textbf{58.3} & \textbf{12.5} & 99.05 \\
+\midrule
+Kernel-ES Align & Acc. & 64.17 & 50.42 & 83.38 & 75.20 & 48.61 & 72.00 & 65.63 \\
+ & Token & 8770 & 9830 & 1696 & 1528 & 3846 & 1154 & 4470.67 \\
+ & Time & 225.8 & 255.5 & 21.5 & 19.6 & 59.4 & 13.6 & 99.23 \\
+\bottomrule
+\end{tabular}%
+}%
+}
+\end{table*}
+
+\begin{table*}[t]
+\centering
+\caption{\xiyan{Performance and computational efficiency of Qwen3-8B under the hierarchical configuration. Acc. ($\uparrow$) denotes task accuracy (\%), or pass@1 (\%) for code generation; Token ($\downarrow$) denotes tokens per problem; and Time ($\downarrow$) denotes inference time (seconds per problem). Single, Text, and Linear Align times are converted to the Kernel machine's throughput. AVG denotes the unweighted mean across all six benchmarks. The highest accuracy among training-free latent alignment methods, the lowest token count, and the shortest inference time in each column (including AVG) are shown in bold. A dash indicates an unavailable result; AVG is reported only when all six benchmark results are available.}}
+\label{tab:hier_8b_results}
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.12}
+\small
+\resizebox{\textwidth}{!}{%
+\xiyan{%
+\begin{tabular}{@{}ll*{7}{c}@{}}
+\toprule
+Method & Metric
+& \makecell{AIME\\2024}
+& \makecell{AIME\\2025}
+& \makecell{Human\\Eval+}
+& MBPP+
+& \makecell{GPQA-\\Diamond}
+& MedQA
+& AVG \\
+\midrule
+Single & Acc. & 50.00 & 46.70 & 74.40 & 64.80 & 39.90 & 53.00 & 54.80 \\
+ & Token & 12891 & 14692 & 2507 & 2053 & 6435 & 2098 & 6779.33 \\
+ & Time & 335.6 & 379.0 & 30.7 & 33.8 & 102.7 & 25.1 & 151.15 \\
+\midrule
+Text & Acc. & 53.30 & 50.00 & 76.80 & 71.90 & 43.00 & 76.30 & 61.88 \\
+ & Token & 42629 & 53929 & 8768 & 7703 & 22450 & 6893 & 23728.67 \\
+ & Time & 1109.7 & 1391.2 & 107.5 & 126.8 & 358.4 & 82.5 & 529.35 \\
+\midrule
+\multirow{3}{*}{\makecell[l]{Linear Align\\\citep{latentmas}}} & Acc. & 53.30 & 50.00 & 78.00 & 72.20 & 46.90 & \textbf{77.00} & 62.90 \\
+ & Token & \textbf{7526} & 13230 & \textbf{1274} & \textbf{1264} & \textbf{3395} & \textbf{1007} & \textbf{4616.00} \\
+ & Time & \textbf{195.9} & 341.3 & \textbf{15.6} & 20.8 & \textbf{54.2} & \textbf{12.1} & \textbf{106.65} \\
+\midrule
+\multirow{3}{*}{\makecell[l]{Exact-Soft Align\\\citep{soft_thinking}}} & Acc. & -- & -- & -- & \textbf{73.21} & -- & -- & -- \\
+ & Token & -- & -- & -- & 12768 & -- & -- & -- \\
+ & Time & -- & -- & -- & 92.2 & -- & -- & -- \\
+\midrule
+Kernel Align & Acc. & 60.00 & \textbf{53.33} & \textbf{83.84} & 72.75 & \textbf{51.39} & 73.33 & 65.77 \\
+ & Token & 9926 & \textbf{11207} & 1681 & 1502 & 3752 & 1351 & 4903.17 \\
+ & Time & 258.4 & \textbf{289.1} & 20.1 & \textbf{20.1} & 59.9 & 15.7 & 110.55 \\
+\midrule
+Kernel-ES Align & Acc. & \textbf{65.83} & 52.50 & 83.23 & 72.16 & 49.75 & 72.67 & \textbf{66.02} \\
+ & Token & 9898 & 11300 & 1637 & 1460 & 3964 & 1336 & 4932.50 \\
+ & Time & 257.9 & 291.9 & 21.0 & 20.2 & 61.5 & 14.8 & 111.22 \\
+\bottomrule
+\end{tabular}%
+}%
+}
+\end{table*}
+
+\begin{table*}[t]
+\centering
+\caption{\xiyan{Performance and computational efficiency of Qwen3-14B under the sequential configuration. Acc. ($\uparrow$) denotes task accuracy (\%), or pass@1 (\%) for code generation; Token ($\downarrow$) denotes tokens per problem; and Time ($\downarrow$) denotes inference time (seconds per problem). Single, Text, and Linear Align times are converted to the Kernel machine's throughput. AVG denotes the unweighted mean across all six benchmarks. The highest accuracy among training-free latent alignment methods, the lowest token count, and the shortest inference time in each column (including AVG) are shown in bold. A dash indicates an unavailable result; AVG is reported only when all six benchmark results are available.}}
+\label{tab:seq_14b_results}
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.12}
+\small
+\resizebox{\textwidth}{!}{%
+\xiyan{%
+\begin{tabular}{@{}ll*{7}{c}@{}}
+\toprule
+Method & Metric
+& \makecell{AIME\\2024}
+& \makecell{AIME\\2025}
+& \makecell{Human\\Eval+}
+& MBPP+
+& \makecell{GPQA-\\Diamond}
+& MedQA
+& AVG \\
+\midrule
+Single & Acc. & 63.30 & 56.70 & 76.80 & 68.50 & 48.50 & 64.70 & 63.08 \\
+ & Token & 11263 & 11298 & 2366 & 1858 & 5547 & 1746 & 5679.67 \\
+ & Time & 348.6 & 369.2 & 31.8 & 28.5 & 109.5 & 21.1 & 151.45 \\
+\midrule
+Text & Acc. & 63.30 & 60.00 & 81.10 & 72.80 & 51.50 & 80.30 & 68.17 \\
+ & Token & 32092 & 44618 & 5934 & 4971 & 12676 & 3444 & 17289.17 \\
+ & Time & 993.2 & 1458.1 & 79.7 & 76.2 & 250.2 & 41.6 & 483.17 \\
+\midrule
+\multirow{3}{*}{\makecell[l]{Linear Align\\\citep{latentmas}}} & Acc. & 66.70 & \textbf{63.30} & 86.50 & 75.70 & 52.00 & 80.70 & 70.82 \\
+ & Token & 10593 & 11402 & 2042 & 1621 & 5454 & 1841 & 5492.17 \\
+ & Time & 327.8 & 372.6 & 27.4 & 24.9 & 107.7 & 22.2 & 147.10 \\
+\midrule
+\multirow{3}{*}{\makecell[l]{Exact-Soft Align\\\citep{soft_thinking}}} & Acc. & -- & 49.58 & \textbf{90.70} & -- & 53.54 & 79.00 & -- \\
+ & Token & -- & 21403 & 19587 & -- & 18528 & 22875 & -- \\
+ & Time & -- & 575.5 & 157.3 & -- & 222.9 & 151.0 & -- \\
+\midrule
+Kernel Align & Acc. & \textbf{72.08} & 56.67 & 88.11 & 78.11 & \textbf{55.81} & \textbf{81.67} & \textbf{72.08} \\
+ & Token & \textbf{8259} & \textbf{10266} & \textbf{1594} & \textbf{1336} & 3009 & 922 & \textbf{4231.00} \\
+ & Time & \textbf{255.6} & \textbf{335.5} & \textbf{24.1} & \textbf{21.5} & \textbf{59.4} & \textbf{13.2} & \textbf{118.22} \\
+\midrule
+Kernel-ES Align & Acc. & 69.58 & 60.00 & 86.43 & \textbf{79.43} & 54.42 & 79.33 & 71.53 \\
+ & Token & 8489 & 10402 & 1607 & 1346 & \textbf{2995} & \textbf{912} & 4291.83 \\
+ & Time & 283.4 & 350.6 & 28.1 & 25.5 & 67.2 & 14.3 & 128.18 \\
+\bottomrule
+\end{tabular}%
+}%
+}
+\end{table*}
+
+\begin{table*}[t]
+\centering
+\caption{\xiyan{Performance and computational efficiency of Qwen3-14B under the hierarchical configuration. Acc. ($\uparrow$) denotes task accuracy (\%), or pass@1 (\%) for code generation; Token ($\downarrow$) denotes tokens per problem; and Time ($\downarrow$) denotes inference time (seconds per problem). Single, Text, and Linear Align times are converted to the Kernel machine's throughput. AVG denotes the unweighted mean across all six benchmarks. The highest accuracy among training-free latent alignment methods, the lowest token count, and the shortest inference time in each column (including AVG) are shown in bold. A dash indicates an unavailable result; AVG is reported only when all six benchmark results are available.}}
+\label{tab:hier_14b_results}
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.12}
+\small
+\resizebox{\textwidth}{!}{%
+\xiyan{%
+\begin{tabular}{@{}ll*{7}{c}@{}}
+\toprule
+Method & Metric
+& \makecell{AIME\\2024}
+& \makecell{AIME\\2025}
+& \makecell{Human\\Eval+}
+& MBPP+
+& \makecell{GPQA-\\Diamond}
+& MedQA
+& AVG \\
+\midrule
+Single & Acc. & 63.30 & 56.70 & 76.80 & 68.50 & 48.50 & 64.70 & 63.08 \\
+ & Token & 11263 & 11298 & 2366 & 1858 & 5547 & 1746 & 5679.67 \\
+ & Time & 357.6 & 364.4 & 26.4 & 16.3 & 123.2 & 31.6 & 153.25 \\
+\midrule
+Text & Acc. & 70.00 & 66.70 & 84.10 & 73.00 & 52.00 & 78.00 & 70.63 \\
+ & Token & 29025 & 50003 & 8114 & 7458 & 20931 & 5473 & 20167.33 \\
+ & Time & 921.7 & 1612.8 & 90.6 & 65.4 & 464.9 & 99.0 & 542.40 \\
+\midrule
+\multirow{3}{*}{\makecell[l]{Linear Align\\\citep{latentmas}}} & Acc. & \textbf{73.30} & \textbf{66.70} & 86.60 & 73.80 & 53.00 & 78.30 & \textbf{71.95} \\
+ & Token & 10230 & \textbf{9527} & 1512 & 1187 & 3606 & 899 & 4493.50 \\
+ & Time & 324.8 & \textbf{307.3} & \textbf{16.9} & \textbf{10.4} & 80.1 & 16.3 & 125.97 \\
+\midrule
+\multirow{3}{*}{\makecell[l]{Exact-Soft Align\\\citep{soft_thinking}}} & Acc. & 71.25 & -- & \textbf{91.16} & -- & 54.55 & 48.33 & -- \\
+ & Token & 23924 & -- & 21403 & -- & 20909 & 23700 & -- \\
+ & Time & 639.9 & -- & 185.6 & -- & 287.8 & 173.7 & -- \\
+\midrule
+Kernel Align & Acc. & 69.17 & 59.17 & 87.04 & 78.04 & 54.80 & \textbf{79.00} & 71.20 \\
+ & Token & \textbf{8947} & 10755 & 1454 & \textbf{1132} & 2769 & \textbf{860} & \textbf{4319.50} \\
+ & Time & \textbf{284.1} & 346.9 & 24.0 & 21.6 & \textbf{61.5} & \textbf{12.4} & \textbf{125.08} \\
+\midrule
+Kernel-ES Align & Acc. & 69.58 & 57.92 & 86.74 & \textbf{78.31} & \textbf{55.81} & 77.67 & 71.01 \\
+ & Token & 9017 & 11122 & \textbf{1430} & 1182 & \textbf{2755} & 875 & 4396.83 \\
+ & Time & 291.0 & 365.7 & 25.4 & 23.7 & 63.6 & 13.8 & 130.53 \\
 \bottomrule
 \end{tabular}%
 }%
