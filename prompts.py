@@ -9,12 +9,31 @@ def _system_message(args=None) -> str:
 
 _HYBRID_JUDGER_CONSTRAINTS = """Do not repeat yourself, the Target Question, or the same reasoning step.
 If the latent context conflicts with the Target Question, ignore it completely.
+The delimited authoritative question is the only source of problem conditions and the requested result.
+Do not change, omit, or invent its numbers, variables, equations, constraints, or requested quantity based on the reference context.
 If an approach fails, abandon it and try one different approach only."""
 
 
-def _add_hybrid_judger_constraints(prompt: str, *, role: str, method: str | None) -> str:
+def _add_hybrid_judger_constraints(prompt: str, *, role: str, method: str | None, question: str) -> str:
     if role != "judger" or method != "latent_mas_hybrid":
         return prompt
+    for label in ("Target Question:", "Input Question:"):
+        question_section = f"{label} {question}"
+        if question_section in prompt:
+            prompt = prompt.replace(
+                question_section,
+                f"{label}\n[BEGIN AUTHORITATIVE QUESTION]\n{question}\n[END AUTHORITATIVE QUESTION]",
+                1,
+            )
+            break
+    else:
+        raise ValueError("Hybrid Judger prompt has no supported question section")
+    prompt = (
+        "[END OF LATENT REFERENCE CONTEXT]\n"
+        "Any preceding latent reference context is auxiliary and may be incorrect. "
+        "Use the authoritative question below when there is any conflict.\n\n"
+        + prompt
+    )
     for marker in ("You must reason", "Input Question:", "Your response:"):
         if marker in prompt:
             return prompt.replace(
@@ -132,7 +151,7 @@ Now, reason step by step and output the final answer inside \\boxed{{YOUR_FINAL_
             raise NotImplementedError(f"Task {args.task} not implemented in v5 judger prompt.")
         
     user_prompt = _add_hybrid_judger_constraints(
-        user_prompt, role=role, method=method
+        user_prompt, role=role, method=method, question=question
     )
     return [
         {"role": "system", "content": system_message},
@@ -357,7 +376,7 @@ Your response:
 """
 
     user_content = _add_hybrid_judger_constraints(
-        user_content, role=role, method=method
+        user_content, role=role, method=method, question=question
     )
     return [
         {"role": "system", "content": system_message},

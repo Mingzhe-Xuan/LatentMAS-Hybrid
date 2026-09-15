@@ -38,6 +38,27 @@ def _args(model_name: str, method: str) -> SimpleNamespace:
 
 
 class PromptModelFamilyTests(unittest.TestCase):
+    def test_hybrid_judger_delimiters_preserve_authoritative_question(self):
+        question = "Walk 9 km at s+2 km/h.\nUse t minutes; find time at s+1/2."
+        for builder in (
+            build_agent_message_sequential_latent_mas,
+            build_agent_message_hierarchical_latent_mas,
+        ):
+            for task in ("gsm8k", "aime2024", "aime2025", "arc_easy", "arc_challenge", "gpqa", "medqa", "humanevalplus", "mbppplus", "winogrande"):
+                with self.subTest(builder=builder.__name__, task=task):
+                    args = _args("Qwen/Qwen3-8B", "latent_mas_hybrid")
+                    args.task = task
+                    prompt = builder(
+                        "judger", question, method="latent_mas_hybrid", args=args
+                    )[1]["content"]
+                    self.assertTrue(prompt.startswith("[END OF LATENT REFERENCE CONTEXT]"))
+                    self.assertIn(
+                        f"[BEGIN AUTHORITATIVE QUESTION]\n{question}\n[END AUTHORITATIVE QUESTION]",
+                        prompt,
+                    )
+                    self.assertEqual(prompt.count(question), 1)
+                    self.assertIn("Do not change, omit, or invent", prompt)
+
     def test_hybrid_judger_prompt_contains_requested_repetition_guards(self):
         expected = (
             "Do not repeat yourself, the Target Question, or the same reasoning step.",
@@ -65,6 +86,8 @@ class PromptModelFamilyTests(unittest.TestCase):
             args=_args("Qwen/Qwen3-8B", "latent_mas"),
         )[1]["content"]
         self.assertNotIn("Do not repeat yourself", prompt)
+        self.assertNotIn("[BEGIN AUTHORITATIVE QUESTION]", prompt)
+        self.assertNotIn("[END OF LATENT REFERENCE CONTEXT]", prompt)
 
     def test_qwen_system_identity_is_preserved(self):
         messages = build_agent_messages_single_agent(
