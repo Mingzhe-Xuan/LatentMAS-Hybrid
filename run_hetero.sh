@@ -32,13 +32,13 @@ SOFT_CHUNK_SIZE="${SOFT_CHUNK_SIZE:-32}"
 REPETITION_PENALTY="${REPETITION_PENALTY:-1.10}"
 PROGRESS_FILE="${PROGRESS_FILE:-${SUBMIT_DIR}/state_hetero.txt}"
 
-# Heterogeneous Planner -> Judger experiments use the complete hidden-state
+# By default, heterogeneous Planner -> Judger experiments use the complete hidden-state
 # sequence in this exact order:
 #   sender prompt states || sender latent-output states || receiver prompt
-# Keep these explicit so run.sh cannot switch this matrix to a truncated
-# sequential-info-only or latent-only protocol through inherited defaults.
-SEQUENTIAL_INFO_ONLY=false
-LATENT_ONLY=false
+# Explicit environment overrides allow truncated-context ablations; the Kernel
+# wrapper defaults to latent-only communication.
+SEQUENTIAL_INFO_ONLY="${SEQUENTIAL_INFO_ONLY:-false}"
+LATENT_ONLY="${LATENT_ONLY:-false}"
 
 for arg in "$@"; do
     case "${arg}" in

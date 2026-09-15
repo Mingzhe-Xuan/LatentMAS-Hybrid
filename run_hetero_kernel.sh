@@ -21,6 +21,9 @@ KERNEL_FEATURES="${KERNEL_FEATURES:-1024}"
 KERNEL_TEMPERATURE="${KERNEL_TEMPERATURE:-0.6}"
 KERNEL_CHUNK_SIZE="${KERNEL_CHUNK_SIZE:-4096}"
 REPETITION_PENALTY=1.15
+# Keep only the sender's latent output when transferring context to the Judger.
+# LATENT_ONLY also implies SEQUENTIAL_INFO_ONLY in the method implementation.
+LATENT_ONLY="${LATENT_ONLY:-true}"
 
 # Kernel is the fourth entry in each four-experiment block in run_hetero.sh.
 FIRST_KERNEL_INDEX=4
@@ -36,6 +39,10 @@ if [[ "${FORCE_ALL}" != "true" && "${FORCE_ALL}" != "false" ]]; then
     echo "ERROR: FORCE_ALL must be true or false, got: ${FORCE_ALL}" >&2
     exit 2
 fi
+if [[ "${LATENT_ONLY}" != "true" && "${LATENT_ONLY}" != "false" ]]; then
+    echo "ERROR: LATENT_ONLY must be true or false, got: ${LATENT_ONLY}" >&2
+    exit 2
+fi
 if [[ ! -f "${TARGET_SCRIPT}" ]]; then
     echo "ERROR: missing worker script: ${TARGET_SCRIPT}" >&2
     exit 2
@@ -45,8 +52,8 @@ if ! command -v qsub >/dev/null 2>&1; then
     exit 127
 fi
 
-VARIABLES="FORCE_ALL=${FORCE_ALL},MAX_SAMPLES=${MAX_SAMPLES},MAX_CONCURRENT_GPUS=${MAX_GPU},RESULT_ROOT=${RESULT_ROOT},PROGRESS_FILE=${PROGRESS_FILE},KERNEL_FEATURES=${KERNEL_FEATURES},KERNEL_TEMPERATURE=${KERNEL_TEMPERATURE},KERNEL_CHUNK_SIZE=${KERNEL_CHUNK_SIZE},REPETITION_PENALTY=${REPETITION_PENALTY}"
+VARIABLES="FORCE_ALL=${FORCE_ALL},MAX_SAMPLES=${MAX_SAMPLES},MAX_CONCURRENT_GPUS=${MAX_GPU},RESULT_ROOT=${RESULT_ROOT},PROGRESS_FILE=${PROGRESS_FILE},KERNEL_FEATURES=${KERNEL_FEATURES},KERNEL_TEMPERATURE=${KERNEL_TEMPERATURE},KERNEL_CHUNK_SIZE=${KERNEL_CHUNK_SIZE},REPETITION_PENALTY=${REPETITION_PENALTY},LATENT_ONLY=${LATENT_ONLY}"
 ARRAY_SPEC="${FIRST_KERNEL_INDEX}-${LAST_ARRAY_INDEX}:${EXPERIMENTS_PER_BLOCK}%${MAX_GPU}"
 
 JOB_ID="$(cd "${SCRIPT_DIR}" && qsub -N x_hetero_k -J "${ARRAY_SPEC}" -v "${VARIABLES}" "${TARGET_SCRIPT}")"
-echo "Submitted ${JOB_ID}: ${KERNEL_JOB_COUNT} heterogeneous Kernel jobs, maximum ${MAX_GPU} concurrent GPU jobs, repetition_penalty=${REPETITION_PENALTY}."
+echo "Submitted ${JOB_ID}: ${KERNEL_JOB_COUNT} heterogeneous Kernel jobs, maximum ${MAX_GPU} concurrent GPU jobs, repetition_penalty=${REPETITION_PENALTY}, latent_only=${LATENT_ONLY}."
