@@ -1,6 +1,6 @@
 #!/bin/bash
 # Re-run the Qwen3-8B MedQA row from docs/table_new.tex.
-# Six array jobs cover Single, TextMAS, Linear, Kernel, Kernel-ES, and Soft.
+# Four array jobs cover Identical, Kernel, Kernel-ES, and Soft.
 # Every configuration uses the sequential prompt and runs two repetitions.
 # The MAS methods use the repository's default four-agent team.
 #
@@ -10,7 +10,7 @@
 #PBS -q gpu_ded
 #PBS -l walltime=72:00:00
 #PBS -l select=1:ncpus=12:ngpus=1
-#PBS -J 1-6%1
+#PBS -J 1-4%1
 #PBS -j oe
 
 set -euo pipefail
@@ -32,11 +32,9 @@ SOFT_CHUNK_SIZE="${SOFT_CHUNK_SIZE:-32}"
 EARLY_STOPPING_LENGTH_THRESHOLD="${EARLY_STOPPING_LENGTH_THRESHOLD:-auto}"
 EARLY_STOPPING_ENTROPY_THRESHOLD="${EARLY_STOPPING_ENTROPY_THRESHOLD:-auto}"
 
-# These are the six data columns in the MedQA row of docs/table_new.tex.
+# Rerun LatentMAS Identical plus the Kernel, Kernel-ES, and Soft columns.
 CONFIGS=(
-    "baseline|identical"                  # Single
-    "text_mas|identical"                  # TextMAS
-    "latent_mas|linear"                   # Linear
+    "latent_mas|identical"                # LatentMAS Identical
     "latent_mas|kernel"                   # Kernel
     "latent_mas|kernel_early_stopping"    # Kernel-ES
     "latent_mas|soft"                     # Soft
