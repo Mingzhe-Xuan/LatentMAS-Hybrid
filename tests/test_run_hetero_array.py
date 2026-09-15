@@ -43,6 +43,14 @@ def test_hetero_reruns_completed_configs_by_default() -> None:
     assert '[[ "${FORCE_ALL}" != true ]] && state_file_completed' in HETERO
 
 
+def test_hetero_enables_repetition_penalty_without_changing_global_default() -> None:
+    assert "REPETITION_PENALTY=1.05" in HETERO
+    assert "export REPETITION_PENALTY" in HETERO
+    assert "REPETITION_PENALTY=${REPETITION_PENALTY}" in HETERO
+    assert 'REPETITION_PENALTY="${REPETITION_PENALTY:-1.0}"' in RUN
+    assert '--repetition_penalty "${REPETITION_PENALTY}"' in RUN
+
+
 def test_hybrid_role_mapping_and_run_sh_forwarding() -> None:
     assert 'AGENT_MODELS="${SENDER_MODEL} ${RECEIVER_MODEL}"' in HETERO
     assert 'CONFIG_METHOD="${METHODS[${EXPERIMENT_INDEX}]}"' in HETERO

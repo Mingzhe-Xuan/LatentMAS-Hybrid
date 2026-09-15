@@ -286,12 +286,14 @@ class ModelWrapper:
         max_new_tokens: int = 256,
         temperature: float = 0.7,
         top_p: float = 0.95,
+        repetition_penalty: float = 1.0,
     ) -> List[str]:
         if not self.vllm_engine:
             raise RuntimeError("vLLM engine not initialized. Pass use_vllm=True to ModelWrapper.")
         sampling_params = SamplingParams(
             temperature=temperature,
             top_p=top_p,
+            repetition_penalty=repetition_penalty,
             max_tokens=max_new_tokens,
         )
         _sync_cuda(self.device)
@@ -405,6 +407,7 @@ class ModelWrapper:
         max_new_tokens: int = 256,
         temperature: float = 0.7,
         top_p: float = 0.95,
+        repetition_penalty: float = 1.0,
         past_key_values: Optional[Tuple] = None,
     ) -> Tuple[List[str], Optional[Tuple]]:
         if input_ids.dim() != 2:
@@ -436,6 +439,8 @@ class ModelWrapper:
             "temperature": temperature,
             "top_p": top_p,
         } if do_sample else {}
+        if repetition_penalty != 1.0:
+            generation_kwargs["repetition_penalty"] = repetition_penalty
         outputs = self.model.generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -478,6 +483,7 @@ class ModelWrapper:
         max_new_tokens: int = 256,
         temperature: float = 0.7,
         top_p: float = 0.95,
+        repetition_penalty: float = 1.0,
     ) -> Tuple[List[str], Optional[Tuple]]:
         """Generate after prefilling a decoder-only model from input embeddings."""
         if inputs_embeds.dim() != 3:
@@ -495,6 +501,8 @@ class ModelWrapper:
             "temperature": temperature,
             "top_p": top_p,
         } if do_sample else {}
+        if repetition_penalty != 1.0:
+            generation_kwargs["repetition_penalty"] = repetition_penalty
         outputs = self.model.generate(
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,

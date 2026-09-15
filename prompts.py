@@ -6,6 +6,22 @@ def _system_message(args=None) -> str:
         return "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
     return "You are a helpful assistant."
 
+
+_HYBRID_JUDGER_CONSTRAINTS = """Do not repeat yourself, the Target Question, or the same reasoning step.
+If the latent context conflicts with the Target Question, ignore it completely.
+If an approach fails, abandon it and try one different approach only."""
+
+
+def _add_hybrid_judger_constraints(prompt: str, *, role: str, method: str | None) -> str:
+    if role != "judger" or method != "latent_mas_hybrid":
+        return prompt
+    for marker in ("You must reason", "Input Question:", "Your response:"):
+        if marker in prompt:
+            return prompt.replace(
+                marker, f"{_HYBRID_JUDGER_CONSTRAINTS}\n\n{marker}", 1
+            )
+    raise ValueError("Hybrid Judger prompt has no supported instruction marker")
+
 def build_agent_message_sequential_latent_mas(role: str, question: str, context: str = "", method=None, args=None):
 
     system_message = _system_message(args)
@@ -115,6 +131,9 @@ Now, reason step by step and output the final answer inside \\boxed{{YOUR_FINAL_
         else: 
             raise NotImplementedError(f"Task {args.task} not implemented in v5 judger prompt.")
         
+    user_prompt = _add_hybrid_judger_constraints(
+        user_prompt, role=role, method=method
+    )
     return [
         {"role": "system", "content": system_message},
         {"role": "user", "content": user_prompt},
@@ -337,6 +356,9 @@ Input Question: {question}
 Your response:
 """
 
+    user_content = _add_hybrid_judger_constraints(
+        user_content, role=role, method=method
+    )
     return [
         {"role": "system", "content": system_message},
         {"role": "user", "content": user_content},

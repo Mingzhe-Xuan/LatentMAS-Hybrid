@@ -50,6 +50,7 @@ class LatentMASMethod:
         self.judger_max_new_tokens = judger_max_new_tokens
         self.temperature = temperature
         self.top_p = top_p
+        self.repetition_penalty = float(getattr(args, "repetition_penalty", 1.0))
         self.generate_bs = max(1, generate_bs)
         self.method_name = 'latent_mas_hybrid'
         self.vllm_device = args.device
@@ -64,6 +65,7 @@ class LatentMASMethod:
             self.sampling_params = SamplingParams(
                 temperature=temperature,
                 top_p=top_p,
+                repetition_penalty=self.repetition_penalty,
                 max_tokens=args.max_new_tokens,
             )
         self.task = args.task
@@ -455,6 +457,7 @@ class LatentMASMethod:
                     max_new_tokens=self.judger_max_new_tokens,
                     temperature=self.temperature,
                     top_p=self.top_p,
+                    repetition_penalty=self.repetition_penalty,
                 )
                 phase_metrics = dict(agent_model.last_generation_metrics)
                 phase_metrics["alignment_seconds"] = alignment_timer.seconds()

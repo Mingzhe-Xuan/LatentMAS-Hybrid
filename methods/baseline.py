@@ -21,6 +21,7 @@ class BaselineMethod:
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
         self.top_p = top_p
+        self.repetition_penalty = float(getattr(args, "repetition_penalty", 1.0))
         self.generate_bs = max(1, generate_bs)
         self.use_vllm = use_vllm
         self.method_name = "baseline"
@@ -44,6 +45,7 @@ class BaselineMethod:
                 max_new_tokens=self.max_new_tokens,
                 temperature=self.temperature,
                 top_p=self.top_p,
+                repetition_penalty=self.repetition_penalty,
             )
         else:
             generated_batch, _ = self.model.generate_text_batch(
@@ -52,6 +54,7 @@ class BaselineMethod:
                 max_new_tokens=self.max_new_tokens,
                 temperature=self.temperature,
                 top_p=self.top_p,
+                repetition_penalty=self.repetition_penalty,
             )
 
         generation_metrics = self.model.last_generation_metrics

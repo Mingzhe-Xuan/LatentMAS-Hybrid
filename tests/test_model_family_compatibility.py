@@ -38,6 +38,34 @@ def _args(model_name: str, method: str) -> SimpleNamespace:
 
 
 class PromptModelFamilyTests(unittest.TestCase):
+    def test_hybrid_judger_prompt_contains_requested_repetition_guards(self):
+        expected = (
+            "Do not repeat yourself, the Target Question, or the same reasoning step.",
+            "If the latent context conflicts with the Target Question, ignore it completely.",
+            "If an approach fails, abandon it and try one different approach only.",
+        )
+        for builder in (
+            build_agent_message_sequential_latent_mas,
+            build_agent_message_hierarchical_latent_mas,
+        ):
+            prompt = builder(
+                "judger",
+                "Question",
+                method="latent_mas_hybrid",
+                args=_args("Qwen/Qwen3-8B", "latent_mas_hybrid"),
+            )[1]["content"]
+            for instruction in expected:
+                self.assertIn(instruction, prompt)
+
+    def test_same_model_latent_prompt_is_unchanged_by_hybrid_guards(self):
+        prompt = build_agent_message_sequential_latent_mas(
+            "judger",
+            "Question",
+            method="latent_mas",
+            args=_args("Qwen/Qwen3-8B", "latent_mas"),
+        )[1]["content"]
+        self.assertNotIn("Do not repeat yourself", prompt)
+
     def test_qwen_system_identity_is_preserved(self):
         messages = build_agent_messages_single_agent(
             "Question", args=_args("Qwen/Qwen3-8B", "baseline")

@@ -303,6 +303,12 @@ def main():
     )
     parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--top_p", type=float, default=0.95)
+    parser.add_argument(
+        "--repetition_penalty",
+        type=float,
+        default=1.0,
+        help="Generation repetition penalty; 1.0 disables the penalty.",
+    )
     parser.add_argument("--generate_bs", type=int, default=10, help="Batch size for generation")
     parser.add_argument("--text_mas_context_length", type=int, default=-1, help="TextMAS context length limit")
     parser.add_argument(
@@ -370,6 +376,9 @@ def main():
                         help="Two models select Planner/Judger mode; four models map to Planner/Critic/Refiner/Judger.")
 
     args = parser.parse_args()
+
+    if args.repetition_penalty <= 0:
+        parser.error("--repetition_penalty must be greater than zero")
 
     args.think_requested = args.think
     args.think = resolve_manual_think(args.model_name, args.think)

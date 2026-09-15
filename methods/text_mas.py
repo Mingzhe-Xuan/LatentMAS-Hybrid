@@ -26,6 +26,7 @@ class TextMASMethod:
         self.max_new_tokens_judger = max_new_tokens_each
         self.temperature = temperature
         self.top_p = top_p
+        self.repetition_penalty = float(getattr(args, "repetition_penalty", 1.0))
         self.generate_bs = max(1, generate_bs)
         self.args = args
         self.method_name = "text_mas"
@@ -109,6 +110,7 @@ class TextMASMethod:
                     max_new_tokens=self.max_new_tokens_each,
                     temperature=self.temperature,
                     top_p=self.top_p,
+                    repetition_penalty=self.repetition_penalty,
                 )
             else:
                 generated_texts, _ = agent_model.generate_text_batch(
@@ -117,6 +119,7 @@ class TextMASMethod:
                     max_new_tokens=self.max_new_tokens_each,
                     temperature=self.temperature,
                     top_p=self.top_p,
+                    repetition_penalty=self.repetition_penalty,
                 )
 
             generation_metrics = agent_model.last_generation_metrics

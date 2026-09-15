@@ -173,6 +173,7 @@ PY
 }
 TEMPERATURE="${TEMPERATURE:-0.6}" # Sampling temperature; model wrappers may override.
 TOP_P="${TOP_P:-0.95}"             # Nucleus-sampling threshold; model wrappers may override.
+REPETITION_PENALTY="${REPETITION_PENALTY:-1.0}" # 1.0 preserves the original generation behavior.
 # Empty means use params_dict.json[TASK].generation_bs; fallback: 10.
 GENERATE_BS="${GENERATE_BS:-}"
 GENERATE_BS_DIVISOR="${GENERATE_BS_DIVISOR:-1}"
@@ -292,6 +293,7 @@ COMMON=(
     --max_new_tokens "${RESOLVED_MAX_NEW_TOKENS}" # Task default from params_dict.json; fallback: 20000
     --temperature "${TEMPERATURE}"           # run.py default: 0.6
     --top_p "${TOP_P}"                       # run.py default: 0.95
+    --repetition_penalty "${REPETITION_PENALTY}" # run.py default: 1.0 (disabled)
     --generate_bs "${RESOLVED_GENERATE_BS}"  # Task default from params_dict.json; fallback: 10
     --seed "${run_seed}"                     # Base seed plus repetition index
 
@@ -436,6 +438,7 @@ run_suite() {
     echo "  Max samples  : ${MAX_SAMPLES}"
     echo "  Repetitions  : ${RESOLVED_TIMES} (seeds ${SEED}..$((SEED + RESOLVED_TIMES - 1)))"
     echo "  Max tokens   : ${RESOLVED_MAX_NEW_TOKENS}"
+    echo "  Repetition penalty: ${REPETITION_PENALTY}"
     echo "  Latent steps : ${PROMPT_SEQUENTIAL}=${RESOLVED_SEQUENTIAL_LATENT_STEPS}, ${PROMPT_HIERARCHICAL}=${RESOLVED_HIERARCHICAL_LATENT_STEPS}"
     echo "  vLLM         : ${USE_VLLM}"
     echo "  CUDA devices : ${CUDA_VISIBLE_DEVICES:-unset}"
