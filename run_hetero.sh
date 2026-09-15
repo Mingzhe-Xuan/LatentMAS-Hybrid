@@ -32,13 +32,13 @@ SOFT_CHUNK_SIZE="${SOFT_CHUNK_SIZE:-32}"
 REPETITION_PENALTY="${REPETITION_PENALTY:-1.10}"
 PROGRESS_FILE="${PROGRESS_FILE:-${SUBMIT_DIR}/state_hetero.txt}"
 
-# By default, heterogeneous Planner -> Judger experiments use the complete hidden-state
-# sequence in this exact order:
+# With LATENT_ONLY=false and SEQUENTIAL_INFO_ONLY=false, Planner -> Judger
+# experiments use the complete hidden-state sequence in this exact order:
 #   sender prompt states || sender latent-output states || receiver prompt
-# Explicit environment overrides allow truncated-context ablations; the Kernel
-# wrapper defaults to latent-only communication.
+# LatentMAS Hybrid defaults to transferring only latent output states. Set
+# LATENT_ONLY=false to restore full context. TextMAS is unaffected by this flag.
 SEQUENTIAL_INFO_ONLY="${SEQUENTIAL_INFO_ONLY:-false}"
-LATENT_ONLY="${LATENT_ONLY:-false}"
+LATENT_ONLY="${LATENT_ONLY:-true}"
 
 for arg in "$@"; do
     case "${arg}" in
