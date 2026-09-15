@@ -10,7 +10,7 @@
 #PBS -q gpu_ded
 #PBS -l walltime=72:00:00
 #PBS -l select=1:ncpus=12:ngpus=1
-#PBS -J 1-6%3
+#PBS -J 1-6%1
 #PBS -j oe
 
 set -euo pipefail
