@@ -27,17 +27,17 @@ EARLY_STOPPING_ENTROPY_THRESHOLD="${EARLY_STOPPING_ENTROPY_THRESHOLD:-auto}"
 # Entries are model|dataset|prompt. AVG placeholders are not separate experiments.
 EXPERIMENTS=(
     # Table 2: Qwen3-8B, hierarchical.
-    "Qwen/Qwen3-8B|aime2024|hierarchical"
-    "Qwen/Qwen3-8B|aime2025|hierarchical"
-    "Qwen/Qwen3-8B|humanevalplus|hierarchical"
-    "Qwen/Qwen3-8B|gpqa|hierarchical"
-    "Qwen/Qwen3-8B|medqa|hierarchical"
+    # "Qwen/Qwen3-8B|aime2024|hierarchical"
+    # "Qwen/Qwen3-8B|aime2025|hierarchical"
+    # "Qwen/Qwen3-8B|humanevalplus|hierarchical"
+    # "Qwen/Qwen3-8B|gpqa|hierarchical"
+    # "Qwen/Qwen3-8B|medqa|hierarchical"
     # Table 3: Qwen3-14B, sequential.
     "Qwen/Qwen3-14B|aime2024|sequential"
     "Qwen/Qwen3-14B|mbppplus|sequential"
     # Table 4: Qwen3-14B, hierarchical.
-    "Qwen/Qwen3-14B|aime2025|hierarchical"
-    "Qwen/Qwen3-14B|mbppplus|hierarchical"
+    # "Qwen/Qwen3-14B|aime2025|hierarchical"
+    # "Qwen/Qwen3-14B|mbppplus|hierarchical"
 )
 
 if [[ ! "${PBS_ARRAY_INDEX:-}" =~ ^[0-9]+$ ]]; then
