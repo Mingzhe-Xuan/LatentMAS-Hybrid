@@ -1,5 +1,6 @@
 #!/bin/bash
-# Missing homogeneous Exact-Soft Align experiments from docs/paper.tex tables 2?4.
+# Missing homogeneous Exact-Soft Align experiments from
+# docs/paper_polished.tex Tables 2--4.
 # One array task per missing experiment; repetitions are handled by run.sh.
 # Submit with: qsub run_homo.sh
 #PBS -N x_homo
@@ -7,7 +8,7 @@
 #PBS -q gpu_ded
 #PBS -l walltime=72:00:00
 #PBS -l select=1:ncpus=12:ngpus=1
-#PBS -J 1-9%3
+#PBS -J 1-6%3
 #PBS -j oe
 
 set -euo pipefail
@@ -27,17 +28,16 @@ EARLY_STOPPING_ENTROPY_THRESHOLD="${EARLY_STOPPING_ENTROPY_THRESHOLD:-auto}"
 # Entries are model|dataset|prompt. AVG placeholders are not separate experiments.
 EXPERIMENTS=(
     # Table 2: Qwen3-8B, hierarchical.
-    # "Qwen/Qwen3-8B|aime2024|hierarchical"
-    # "Qwen/Qwen3-8B|aime2025|hierarchical"
-    # "Qwen/Qwen3-8B|humanevalplus|hierarchical"
-    # "Qwen/Qwen3-8B|gpqa|hierarchical"
-    # "Qwen/Qwen3-8B|medqa|hierarchical"
+    "Qwen/Qwen3-8B|aime2024|hierarchical"
+    "Qwen/Qwen3-8B|humanevalplus|hierarchical"
+    "Qwen/Qwen3-8B|gpqa|hierarchical"
+    "Qwen/Qwen3-8B|medqa|hierarchical"
+
     # Table 3: Qwen3-14B, sequential.
-    "Qwen/Qwen3-14B|aime2024|sequential"
     "Qwen/Qwen3-14B|mbppplus|sequential"
+
     # Table 4: Qwen3-14B, hierarchical.
-    # "Qwen/Qwen3-14B|aime2025|hierarchical"
-    # "Qwen/Qwen3-14B|mbppplus|hierarchical"
+    "Qwen/Qwen3-14B|mbppplus|hierarchical"
 )
 
 if [[ ! "${PBS_ARRAY_INDEX:-}" =~ ^[0-9]+$ ]]; then

@@ -1,7 +1,8 @@
 #!/bin/bash
-# Re-run the Qwen3-8B MedQA row from docs/table_new.tex.
-# Four array jobs cover Identical, Kernel, Kernel-ES, and Soft.
-# Every configuration uses the sequential prompt and runs two repetitions.
+# Run the missing MedQA repetitions for Tables 2 and 4 in
+# docs/paper_polished.tex.
+# Six array jobs cover Qwen3-8B and Qwen3-14B with hierarchical
+# Kernel, Kernel-ES, and Soft, using two repetitions per configuration.
 # The MAS methods use the repository's default four-agent team.
 #
 # Submit with: bash run_medqa_repeat2.sh
@@ -10,7 +11,7 @@
 #PBS -q gpu_ded
 #PBS -l walltime=72:00:00
 #PBS -l select=1:ncpus=12:ngpus=1
-#PBS -J 1-4%1
+#PBS -J 1-6%3
 #PBS -j oe
 
 set -euo pipefail
@@ -32,12 +33,17 @@ SOFT_CHUNK_SIZE="${SOFT_CHUNK_SIZE:-32}"
 EARLY_STOPPING_LENGTH_THRESHOLD="${EARLY_STOPPING_LENGTH_THRESHOLD:-auto}"
 EARLY_STOPPING_ENTROPY_THRESHOLD="${EARLY_STOPPING_ENTROPY_THRESHOLD:-auto}"
 
-# Rerun LatentMAS Identical plus the Kernel, Kernel-ES, and Soft columns.
+# Entries are model|prompt|alignment.
 CONFIGS=(
-    "latent_mas|identical"                # LatentMAS Identical
-    "latent_mas|kernel"                   # Kernel
-    "latent_mas|kernel_early_stopping"    # Kernel-ES
-    "latent_mas|soft"                     # Soft
+    # Table 2: Qwen3-8B, hierarchical.
+    "Qwen/Qwen3-8B|hierarchical|kernel"
+    "Qwen/Qwen3-8B|hierarchical|kernel_early_stopping"
+    "Qwen/Qwen3-8B|hierarchical|soft"
+
+    # Table 4: Qwen3-14B, hierarchical.
+    "Qwen/Qwen3-14B|hierarchical|kernel"
+    "Qwen/Qwen3-14B|hierarchical|kernel_early_stopping"
+    "Qwen/Qwen3-14B|hierarchical|soft"
 )
 TOTAL_COUNT=${#CONFIGS[@]}
 
@@ -56,7 +62,7 @@ if [[ -z "${PBS_ARRAY_INDEX:-}" ]]; then
 
     VARIABLES="RUN_TAG=${RUN_TAG},MAX_CONCURRENT=${MAX_CONCURRENT},MAX_SAMPLES=${MAX_SAMPLES},TIMES=${TIMES},KERNEL_FEATURES=${KERNEL_FEATURES},KERNEL_TEMPERATURE=${KERNEL_TEMPERATURE},KERNEL_CHUNK_SIZE=${KERNEL_CHUNK_SIZE},ALIGN_RIDGE=${ALIGN_RIDGE},SOFT_TEMPERATURE=${SOFT_TEMPERATURE},SOFT_CHUNK_SIZE=${SOFT_CHUNK_SIZE},EARLY_STOPPING_LENGTH_THRESHOLD=${EARLY_STOPPING_LENGTH_THRESHOLD},EARLY_STOPPING_ENTROPY_THRESHOLD=${EARLY_STOPPING_ENTROPY_THRESHOLD}"
     JOB_ID="$(cd "${SCRIPT_DIR}" && qsub -J "1-${TOTAL_COUNT}%${MAX_CONCURRENT}" -v "${VARIABLES}" "${BASH_SOURCE[0]}")"
-    echo "Submitted ${JOB_ID}: ${TOTAL_COUNT} MedQA sequential configs, two repetitions each, maximum ${MAX_CONCURRENT} concurrent GPU jobs."
+    echo "Submitted ${JOB_ID}: ${TOTAL_COUNT} MedQA hierarchical configs, two repetitions each, maximum ${MAX_CONCURRENT} concurrent GPU jobs."
     exit 0
 fi
 
@@ -66,18 +72,13 @@ if ! [[ "${PBS_ARRAY_INDEX}" =~ ^[0-9]+$ ]] ||
     exit 2
 fi
 
-IFS='|' read -r CONFIG_METHOD CONFIG_ALIGNMENT \
+IFS='|' read -r MODEL_NAME CONFIG_PROMPT CONFIG_ALIGNMENT \
     <<< "${CONFIGS[$((PBS_ARRAY_INDEX - 1))]}"
 
 TASK=medqa
-MODEL_NAME="Qwen/Qwen3-8B"
-CONFIG_PROMPT=sequential
+CONFIG_METHOD=latent_mas
 MODEL_SLUG="$(printf '%s' "${MODEL_NAME}" | tr -c 'A-Za-z0-9._-' '_')"
-if [[ "${CONFIG_METHOD}" == "latent_mas" ]]; then
-    STATE_METHOD="${CONFIG_METHOD}_${CONFIG_ALIGNMENT}"
-else
-    STATE_METHOD="${CONFIG_METHOD}"
-fi
+STATE_METHOD="${CONFIG_METHOD}_${CONFIG_ALIGNMENT}"
 STATE_DIR="${SUBMIT_DIR}/state/${RUN_TAG}"
 STATE_FILE="${STATE_DIR}/${TASK}_${STATE_METHOD}_${CONFIG_PROMPT}_${MODEL_SLUG}_state.txt"
 RUN_TIME="${RUN_TAG}"
