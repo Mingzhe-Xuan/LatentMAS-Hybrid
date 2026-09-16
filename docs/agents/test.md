@@ -184,3 +184,19 @@
   directory. Default/all-datasets/MedQA-smoke dry-runs report respectively
   12 (`9+3`), 30 (`27+3`), and 4 (`3+1`) compute cells; Python compilation,
   shell syntax, and `git diff --check` pass.
+# 2026-09-16 STT latent-only transport test plan
+
+- Config/matrix: require `transport.latent_only=true`, propagate it to every STT
+  evaluation row, and prove STT cache IDs change while formal counts remain 6/12/3/1.
+- Runtime: verify cross-model STT transports only generated-plan positions while the
+  planner cache may retain prompt+plan states; check prefix length, order, masks, and
+  diagnostics. Baselines remain receiver-prompt-only.
+- Isolation: run the complete `analysis/tests` suite and confirm the Kernel config and
+  matrix contracts are unchanged.
+- Static checks: compile `analysis`, run formal and smoke dry-runs, and run
+  `git diff --check`.
+- Actual: targeted STT tests pass 17/17 and the complete analysis suite passes 44/44
+  (one existing PyTorch sparse-invariant warning). Formal combined dry-run remains 12
+  compute cells (`9 kernel + 3 STT`) and 20 finalize tasks; AIME first-four STT smoke
+  remains one compute bundle with six tasks and two finalize tasks. `compileall` and
+  `git diff --check` pass.

@@ -67,6 +67,7 @@ def evaluation_cache_id(config: dict[str, Any], dataset: str, system: str,
         "receiver_revision": config["model_revisions"][receiver_key],
         "max_new_tokens": config["datasets"][dataset]["max_new_tokens"],
         "do_sample": False,
+        "latent_only": config["transport"]["latent_only"],
         "position_chunk_size": config["transport"]["position_chunk_size"],
         "target_chunk_size": config["transport"]["target_chunk_size"],
         "code_revision": _code_revision(),
@@ -78,7 +79,8 @@ def evaluation_cache_id(config: dict[str, Any], dataset: str, system: str,
                        planner_cache_id=planner_cache_id(
                            config, dataset, sender_key, selection_policy=selection_policy),
                        artifact=config["transport"]["artifacts"][system],
-                       tau=config["transport"]["tau"], causal_shift=False)
+                       tau=config["transport"]["tau"], causal_shift=False,
+                       latent_only=config["transport"]["latent_only"])
     else:
         payload.update(sender="receiver-only", planner_cache_id=None, artifact=None)
     return _cache_id("stt-receiver", payload)
@@ -124,6 +126,7 @@ def build_stt_matrices(config_path: str | Path, *, smoke: bool = False,
                 if sender_key else None,
                 "artifact": config["transport"]["artifacts"].get(system),
                 "tau": config["transport"]["tau"], "causal_shift": False,
+                "latent_only": config["transport"]["latent_only"],
                 "max_new_tokens": task["max_new_tokens"],
                 "generation_batch_size": task["generation_batch_size"],
                 "max_samples": max_samples,

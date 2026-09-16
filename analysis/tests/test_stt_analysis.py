@@ -25,7 +25,7 @@ def _row(item_id: int, correct: bool) -> ReceiverItemResult:
 
 def _write_condition(root: Path, system: str, values: list[bool], *, cache_id: str | None = None) -> None:
     identity = {
-        "schema_version": "stt-receiver-v2", "dataset": "aime2024", "split": "train",
+        "schema_version": "stt-receiver-v3", "dataset": "aime2024", "split": "train",
         "dataset_fingerprint": "dataset", "selection_policy": "first-1",
         "system": system,
     }

@@ -2,15 +2,15 @@
 
 ## 1. 实验目标
 
-本实验研究不同 tokenizer、不同 hidden size 的语言模型之间，能否通过 exact soft-token transport（STT）传递 planner 的完整上下文，并提高 judger 的最终任务表现。`planner` 和 `judger` 严格采用现有 `analysis` 的角色定义，不另外创建 `thinker` 角色。
+本实验研究不同 tokenizer、不同 hidden size 的语言模型之间，能否通过 exact soft-token transport（STT）传递 planner 新生成的 plan 状态，并提高 judger 的最终任务表现。`planner` 和 `judger` 严格采用现有 `analysis` 的角色定义，不另外创建 `thinker` 角色。
 
 实验只复用 `analysis/` 和仓库根目录中的公共实现，不导入 `exp/`。主协议遵循 `analysis/transport/T_algo.md`：
 
 - sender 先基于题目生成符合 `planner` 角色的求解计划；
-- 对 `sender prompt + sender plan` 的全部有效位置重新 forward；
-- 每个位置使用完整 sender vocabulary softmax；
+- 对 `sender prompt + sender plan` 的全部有效位置重新 forward，但只选择新生成的 plan 位置进行传输（`latent_only=true`）；
+- 每个被传输的 plan 位置使用完整 sender vocabulary softmax；
 - 使用全部有效稀疏 transport 边，不使用 top-k 或离散 source token；
-- aligned sender context 放在 receiver native judger prompt 之前；
+- aligned sender plan 放在 receiver native judger prompt 之前；
 - receiver native judger prompt 再次显式包含同一道题；
 - sender 和 receiver 都使用 greedy decoding；
 - 主协议不做 causal shift。
@@ -66,8 +66,8 @@
 |---|---|---|---|
 | `qwen_only` | 无 | Qwen3-8B | Qwen native judger prompt |
 | `mistral_only` | 无 | Mistral-Nemo | Mistral native judger prompt |
-| `qwen_to_mistral` | Qwen3-8B | Mistral-Nemo | aligned Qwen full context + Mistral native judger prompt |
-| `mistral_to_qwen` | Mistral-Nemo | Qwen3-8B | aligned Mistral full context + Qwen native judger prompt |
+| `qwen_to_mistral` | Qwen3-8B | Mistral-Nemo | aligned Qwen generated plan + Mistral native judger prompt |
+| `mistral_to_qwen` | Mistral-Nemo | Qwen3-8B | aligned Mistral generated plan + Qwen native judger prompt |
 
 其中：
 
@@ -199,8 +199,7 @@ receiver_prompt_text = render_role_prompt(
 正式 prefix 顺序只能是：
 
 ```text
-aligned sender prompt
-+ aligned sender planner output
+aligned sender planner output
 + receiver native judger prompt
 ```
 
@@ -255,7 +254,7 @@ Z_B = p_B @ E_B[target_token_ids]
 - transport 累加使用 FP32，最后才转换成 receiver embedding dtype；
 - 用小型 dense oracle 验证稀疏和分块实现。
 
-拼接 aligned sender context 和 receiver prompt 后，显式计算 attention mask 与 position IDs，先 prefill，再使用 receiver 自己生成的离散 token 和 KV cache 进行 greedy decode。
+拼接 aligned sender plan 和 receiver prompt 后，显式计算 attention mask 与 position IDs，先 prefill，再使用 receiver 自己生成的离散 token 和 KV cache 进行 greedy decode。
 
 Receiver cache identity 必须包含：
 
@@ -264,7 +263,7 @@ Receiver cache identity 必须包含：
 - source/target fingerprints；
 - sender/receiver model revisions；
 - `tau`、sender budget、receiver budget；
-- full-context、no-shift、greedy 等协议标志；
+- latent-only、no-shift、greedy 等协议标志；
 - receiver prompt hash；
 - dataset fingerprint、selection policy 和 evaluator version；
 - numeric dtype 与代码 revision。
@@ -282,7 +281,7 @@ Receiver cache identity 必须包含：
 1. 同时加载并验证 sender、receiver 和对应方向的 transport artifact；
 2. sender 生成 planner output，并对 `sender prompt + sender plan` 完整 forward；
 3. 使用仍在显存中的 sender LM head 立即执行 exact STT；
-4. 将 aligned full context 前置到 receiver native judger prompt；
+4. 从完整 forward 中切出 generated-plan 状态，并将 aligned plan 前置到 receiver native judger prompt；
 5. receiver 完成 prefill、greedy decode 和任务评测；
 6. 原子写入 planner context、receiver result、计时和 provenance cache。
 
@@ -337,6 +336,7 @@ Delta_M_to_Q = score(mistral_to_qwen) - score(qwen_only)
 每个样本同时记录：
 
 - sender prompt/plan/full-context token counts；
+- 实际 transferred plan token count 与 `latent_only=true` 标志；
 - aligned prefix length 与 transferred-length ratio；
 - `abs(sum(p_A)-1)` 和 `abs(sum(p_B)-1)`；
 - `H(p_A)`、`H(p_B)` 与 effective support size；
@@ -357,14 +357,15 @@ Delta_M_to_Q = score(mistral_to_qwen) - score(qwen_only)
 7. 验证任一方向不匹配时 fail closed；
 8. 验证 source vocabulary 完整覆盖和 target IDs 合法；
 9. 验证 sender full context 严格等于 planner prompt + planner output；
-10. 验证 no causal shift；
-11. 验证 batch 去 padding、prefix 顺序和 position IDs；
-12. 验证没有 sender token IDs 进入 receiver；
-13. 验证 cache identity 对方向、artifact、tau、模型 revision 和 prompt 敏感；
-14. 验证 STT task 可由现有 `analysis_job.slurm` worker 调度，并通过 submitter dry-run 的依赖图检查；
-15. Slurm 单题、双方向 GPU smoke；
-16. 使用 `--smoke --max-samples 4` 运行每个 primary dataset 前四题的 integration smoke；其 selection policy 固定为 `first-4`，不得复用 `first-1` cache；
-17. 运行 12 个正式主实验单元；
-18. cache-only 统计与最终报告。
+10. 验证只传输 planner output，sender prompt 状态不进入 receiver prefix；
+11. 验证 no causal shift；
+12. 验证 batch 去 padding、prefix 顺序和 position IDs；
+13. 验证没有 sender token IDs 进入 receiver；
+14. 验证 cache identity 对方向、artifact、tau、latent-only、模型 revision 和 prompt 敏感；
+15. 验证 STT task 可由现有 `analysis_job.slurm` worker 调度，并通过 submitter dry-run 的依赖图检查；
+16. Slurm 单题、双方向 GPU smoke；
+17. 使用 `--smoke --max-samples 4` 运行每个 primary dataset 前四题的 integration smoke；其 selection policy 固定为 `first-4`，不得复用 `first-1` cache；
+18. 运行 12 个正式主实验单元；
+19. cache-only 统计与最终报告。
 
 只有两个方向都通过同一套 strict artifact gate、协议测试和 GPU smoke 后，才能把双向结果作为对称实验进行比较。

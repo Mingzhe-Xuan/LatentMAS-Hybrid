@@ -163,28 +163,31 @@ class STTReceiverCondition:
     tau: float = 0.6
     sender_budget: int = 1024
     causal_shift: bool = False
+    latent_only: bool = True
     do_sample: bool = False
     accumulation_dtype: str = "float32"
     position_chunk_size: int = 32
     target_chunk_size: int = 8192
-    context_scope: str = "full-prompt-plus-plan"
-    prefix_order: str = "aligned-sender-then-native-judger"
+    context_scope: str = "generated-plan-only"
+    prefix_order: str = "aligned-sender-plan-then-native-judger"
     evaluator_version: str = "task-evaluator-v1"
     code_revision: str = "unknown"
-    schema_version: str = "stt-receiver-v2"
+    schema_version: str = "stt-receiver-v3"
 
     def __post_init__(self) -> None:
         cross = "_to_" in self.system
         if self.max_new_tokens <= 0 or self.sender_budget != 1024:
             raise ValueError("invalid STT generation budgets")
-        if self.tau != 0.6 or self.causal_shift or self.do_sample:
-            raise ValueError("STT receiver protocol must use tau=0.6, no shift and greedy decoding")
+        if self.tau != 0.6 or self.causal_shift or not self.latent_only or self.do_sample:
+            raise ValueError(
+                "STT receiver protocol must use tau=0.6, latent-only context, no shift and greedy decoding"
+            )
         if self.accumulation_dtype != "float32":
             raise ValueError("STT transport accumulation must use float32")
         if self.position_chunk_size <= 0 or self.target_chunk_size <= 0:
             raise ValueError("STT chunk sizes must be positive")
         if (self.context_scope, self.prefix_order) != (
-                "full-prompt-plus-plan", "aligned-sender-then-native-judger"):
+                "generated-plan-only", "aligned-sender-plan-then-native-judger"):
             raise ValueError("STT context scope or prefix order is invalid")
         if cross and any(value in {"receiver-only", "none", ""} for value in (
                 self.sender_manifest_hash, self.sender_model_id, self.sender_revision,

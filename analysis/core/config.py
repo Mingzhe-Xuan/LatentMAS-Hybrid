@@ -59,7 +59,7 @@ class STTAnalysisConfig:
         missing = required - set(self.raw)
         if missing or unknown:
             raise ValueError(f"STT configuration keys: missing={sorted(missing)}, unknown={sorted(unknown)}")
-        if self.raw["protocol_version"] != "bidirectional-stt-v1":
+        if self.raw["protocol_version"] != "bidirectional-stt-v2":
             raise ValueError("unsupported STT protocol version")
         models = self.raw["models"]
         if set(models) != {"qwen", "mistral"} or any(not isinstance(value, str) or not value for value in models.values()):
@@ -81,7 +81,8 @@ class STTAnalysisConfig:
             raise ValueError("STT requires sender_budget=1024 and greedy decoding")
         transport = self.raw["transport"]
         if (transport.get("tau"), transport.get("causal_shift"),
-                transport.get("accumulation_dtype")) != (0.6, False, "float32"):
+                transport.get("latent_only"), transport.get("accumulation_dtype")) \
+                != (0.6, False, True, "float32"):
             raise ValueError("STT transport parameters do not match the formal protocol")
         if (int(transport.get("position_chunk_size", 0)) <= 0
                 or int(transport.get("target_chunk_size", 0)) <= 0):

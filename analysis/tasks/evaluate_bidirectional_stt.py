@@ -43,7 +43,9 @@ def run(args) -> int:
             or int(job.get("max_new_tokens", 0))
             != int(config["datasets"].get(job.get("dataset"), {}).get("max_new_tokens", -1))
             or float(job.get("tau", -1)) != float(config["transport"]["tau"])
-            or bool(job.get("causal_shift"))):
+            or bool(job.get("causal_shift"))
+            or job.get("latent_only") is not True
+            or config["transport"].get("latent_only") is not True):
         raise ValueError("STT evaluation job does not match the formal configuration")
     expected_receiver_key = "qwen" if job["system"] in {"qwen_only", "mistral_to_qwen"} else "mistral"
     expected_sender_key = job["system"].split("_to_", 1)[0] if "_to_" in job["system"] else None
@@ -150,6 +152,7 @@ def run(args) -> int:
         artifact_target_fingerprint=artifact_target_fingerprint,
         artifact_source_name=artifact_source_name, artifact_target_name=artifact_target_name,
         tau=float(job["tau"]), sender_budget=int(config["generation"]["sender_budget"]),
+        latent_only=True,
         position_chunk_size=int(config["transport"]["position_chunk_size"]),
         target_chunk_size=int(config["transport"]["target_chunk_size"]),
         code_revision=code_revision,
@@ -175,6 +178,7 @@ def run(args) -> int:
                 item, receiver, receiver_model_id=job["receiver_model"],
                 max_new_tokens=int(job["max_new_tokens"]), planner=planner,
                 sender=sender, artifact=artifact, tau=float(job["tau"]),
+                latent_only=True,
                 position_chunk_size=int(config["transport"]["position_chunk_size"]),
                 target_chunk_size=int(config["transport"]["target_chunk_size"]),
             )

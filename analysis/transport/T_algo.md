@@ -8,9 +8,9 @@
 - receiver 模型 `B`（Mistral-Nemo-Instruct-2407）充当 `judger`；
 - 两个模型都显式接收题目，并在各自原生 chat template 中开启 CoT；
 - planner 先生成 `sender_plan`；
-- `sender_prompt + sender_plan` 的全部有效位置经过 exact soft-token
-  transport（STT）；
-- aligned sender context 拼在 receiver 原生提示词之前，最后由 judger 自己
+- `sender_prompt + sender_plan` 仍用于完整 forward，但 `latent_only=true`，
+  只有新生成的 `sender_plan` 位置经过 exact soft-token transport（STT）；
+- aligned sender plan 拼在 receiver 原生提示词之前，最后由 judger 自己
   思考并回答。
 
 记：
@@ -113,12 +113,14 @@ ALGORITHM PlannerJudgerSTT(problem, model_A, tokenizer_A,
         no_grad = true,
     ).last_hidden_state
 
-    # ---------- D. 对完整 sender context 执行 exact STT ----------
-    aligned_sender ← EMPTY([batch, sender_full_length, model_B.hidden_size])
+    # ---------- D. 只对新生成的 sender plan 执行 exact STT ----------
+    sender_plan_hidden ← sender_hidden AFTER sender_prompt_ids
+    sender_plan_mask ← sender_full_mask AFTER sender_prompt_ids
+    aligned_sender ← EMPTY([batch, sender_plan_length, model_B.hidden_size])
 
     FOR each batch item b:
-        FOR each position t WHERE sender_full_mask[b, t] == 1:
-            h ← sender_hidden[b, t]                         # [d_A]
+        FOR each position t WHERE sender_plan_mask[b, t] == 1:
+            h ← sender_plan_hidden[b, t]                    # [d_A]
             logits_A ← model_A.LM_HEAD(h)                  # [V_A]
             logits_A ← CROP_TRAILING_HARDWARE_PADDING(logits_A,
                                                        len(tokenizer_A))
@@ -136,7 +138,7 @@ ALGORITHM PlannerJudgerSTT(problem, model_A, tokenizer_A,
 
     # 当前 exact 主协议不做 causal shift：每个 sender 有效位置直接对齐。
     REQUIRE causal_shift == false
-    aligned_sender ← PACK_VALID(aligned_sender, sender_full_mask)
+    aligned_sender ← PACK_VALID(aligned_sender, sender_plan_mask)
 
     # ---------- E. 拼接 receiver 自己的原生提示词 ----------
     receiver_native_embeddings ← model_B.EMBED(receiver_prompt_ids)
@@ -144,8 +146,7 @@ ALGORITHM PlannerJudgerSTT(problem, model_A, tokenizer_A,
                                               receiver_prompt_mask)
 
     receiver_inputs_embeds ← CONCAT_ALONG_SEQUENCE(
-        aligned_sender,                  # aligned sender prompt
-                                         # + aligned sender think
+        aligned_sender,                  # aligned generated sender plan only
         receiver_native_embeddings,      # receiver native prompt，含同一道题
     )
 
@@ -157,7 +158,6 @@ ALGORITHM PlannerJudgerSTT(problem, model_A, tokenizer_A,
                                                   receiver_attention_mask)
 
     REQUIRE prefix order == [
-        "aligned_sender_prompt",
         "aligned_sender_plan",
         "receiver_native_prompt",
     ]
@@ -266,7 +266,8 @@ sender_role == "planner"
 receiver_role == "judger"
 sender_full_context == sender_prompt + sender_plan
 causal_shift == false
-receiver_prefix == aligned(sender_prompt + sender_plan) + receiver_native_prompt
+latent_only == true
+receiver_prefix == aligned(sender_plan) + receiver_native_prompt
 receiver_native_prompt explicitly contains problem
 do_sample == false                       # 当前正式 benchmark
 no discrete source IDs enter receiver
@@ -274,5 +275,5 @@ no dense materialization of full T
 ```
 
 任何 fingerprint、方向、shape、prompt prefix 或生成前缀检查失败都应立即停止，
-不能通过转置 T、删除校验、丢弃 sender prompt、跳过 receiver 原生题目或降低为
+不能通过转置 T、删除校验、把 sender prompt 加入传输前缀、跳过 receiver 原生题目或降低为
 hard token 映射来继续运行。

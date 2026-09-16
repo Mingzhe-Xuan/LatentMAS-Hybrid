@@ -63,6 +63,8 @@ def test_stt_config_is_separate_from_kernel_config() -> None:
         "qwen_only", "mistral_only", "qwen_to_mistral", "mistral_to_qwen"
     ]
     assert stt.raw["transport"]["target_chunk_size"] == 8192
+    assert stt.raw["transport"]["latent_only"] is True
+    assert stt.raw["protocol_version"] == "bidirectional-stt-v2"
     assert set(stt.raw["model_revisions"]) == {"qwen", "mistral"}
     assert all(len(value) == 40 for value in stt.raw["model_revisions"].values())
     assert load_config("analysis/configs/kernel_analysis.yaml").raw["protocol_version"] == "kernel-analysis-v1"
@@ -77,6 +79,10 @@ def test_stt_receiver_identity_is_chunk_sensitive() -> None:
     )
     assert condition.cache_id != dataclasses.replace(condition, target_chunk_size=1).cache_id
     assert condition.cache_id != dataclasses.replace(condition, position_chunk_size=1).cache_id
+    assert condition.context_scope == "generated-plan-only"
+    assert condition.prefix_order == "aligned-sender-plan-then-native-judger"
+    with pytest.raises(ValueError, match="latent-only"):
+        dataclasses.replace(condition, latent_only=False)
 
 
 def test_load_stt_artifact_validates_csc_and_revisions(tmp_path: Path) -> None:
@@ -221,11 +227,15 @@ def test_planner_collection_and_stt_receiver_runtime(tmp_path: Path) -> None:
         planner=planner, sender=sender, artifact=artifact, position_chunk_size=1,
     )
     assert row.correct
-    assert row.aligned_prefix_length == 3
+    assert row.aligned_prefix_length == 1
     assert row.receiver_decode_output_tokens == 1
     assert row.diagnostics["prefix_order"] == [
-        "aligned_sender_prompt", "aligned_sender_plan", "receiver_native_prompt"
+        "aligned_sender_plan", "receiver_native_prompt"
     ]
+    assert row.diagnostics["latent_only"] is True
+    assert row.diagnostics["sender_full_context_token_count"] == 3
+    assert row.diagnostics["sender_transferred_token_count"] == 1
+    assert row.diagnostics["prefill_attention_mask"] == [1, 1, 1]
     assert row.diagnostics["causal_shift"] is False
 
 
@@ -235,7 +245,7 @@ def test_stt_baseline_diagnostics_are_parquet_serializable(tmp_path: Path) -> No
         item, _Wrapper(), receiver_model_id="receiver", max_new_tokens=4)
     assert "transport" not in row.diagnostics
     store = ReceiverEvaluationStore(tmp_path, namespace="stt_receiver_evaluations")
-    identity = {"schema_version": "stt-receiver-v2", "system": "qwen_only"}
+    identity = {"schema_version": "stt-receiver-v3", "system": "qwen_only"}
     handle = store.resolve("baseline", identity)
     store.write(handle, identity, [row], {"accuracy": 1.0})
     assert store.validate(handle)["question_count"] == 1

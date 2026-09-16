@@ -1,5 +1,19 @@
 # Agent state
 
+## 2026-09-16 STT latent-only transport
+
+- Current state: implementation and local verification are complete. STT now keeps
+  the full planner context in its planner cache but transports only generated-plan
+  states, matching `run_hetero.sh`'s `LATENT_ONLY=true` scope.
+- Plan: use the versioned `bidirectional-stt-v2` matrices for future STT submissions;
+  old full-context STT receiver results cannot satisfy the new identities. Kernel and
+  non-analysis experiments remain unchanged.
+- Change record: 2026-09-16 task started at user request; no cache, result, or remote
+  job has been modified or submitted.
+- Change record: 2026-09-16 added the strict STT-only latent-only contract, plan-state
+  slicing, v2/v3 cache identity versions, diagnostics, tests, and protocol docs. All
+  44 analysis tests, formal/smoke dry-runs, compilation, and diff checks pass.
+
 ## 2026-09-14 primary dataset ARC-C to MedQA
 
 - Current state: implementation and local verification are complete. The

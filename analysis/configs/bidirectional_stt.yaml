@@ -1,5 +1,5 @@
 {
-  "protocol_version": "bidirectional-stt-v1",
+  "protocol_version": "bidirectional-stt-v2",
   "models": {
     "qwen": "Qwen/Qwen3-8B",
     "mistral": "mistralai/Mistral-Nemo-Instruct-2407"
@@ -17,6 +17,7 @@
   "transport": {
     "tau": 0.6,
     "causal_shift": false,
+    "latent_only": true,
     "accumulation_dtype": "float32",
     "position_chunk_size": 32,
     "target_chunk_size": 8192,

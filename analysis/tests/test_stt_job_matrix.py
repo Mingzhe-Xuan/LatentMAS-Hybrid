@@ -22,6 +22,7 @@ def test_formal_stt_matrix_counts_and_systems() -> None:
     assert all(len(row["receiver_revision"]) == 40 for row in evaluation)
     assert all(row["sender_revision"] is None or len(row["sender_revision"]) == 40
                for row in evaluation)
+    assert all(row["latent_only"] is True for row in evaluation)
     evaluations = {(row["dataset"], row["system"]): row["effective_cache_id"]
                    for row in evaluation}
     for row in matrices["stt_analysis.jsonl"]:

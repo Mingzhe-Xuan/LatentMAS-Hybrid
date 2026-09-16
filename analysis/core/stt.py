@@ -422,7 +422,8 @@ def greedy_decode_from_embeddings(wrapper: Any, inputs_embeds: torch.Tensor,
 def evaluate_stt_item(item: AnalysisItem, receiver: Any, *, receiver_model_id: str,
                       max_new_tokens: int, planner: STTPlannerItemContext | None = None,
                       sender: Any | None = None, artifact: ValidatedSTTArtifact | None = None,
-                      tau: float = 0.6, position_chunk_size: int | None = None,
+                      tau: float = 0.6, latent_only: bool = True,
+                      position_chunk_size: int | None = None,
                       target_chunk_size: int | None = None) -> ReceiverItemResult:
     cross = planner is not None or sender is not None or artifact is not None
     if cross and (planner is None or sender is None or artifact is None):
@@ -441,17 +442,25 @@ def evaluate_stt_item(item: AnalysisItem, receiver: Any, *, receiver_model_id: s
     alignment_seconds = 0.0
     transport_diagnostics: dict[str, Any] = {}
     if planner is not None and sender is not None and artifact is not None:
+        if not latent_only:
+            raise ValueError("formal STT requires latent-only planner transport")
+        plan_start = int(planner.prompt_token_count)
+        plan_stop = plan_start + int(planner.plan_token_count)
+        if plan_start < 0 or plan_stop != planner.hidden.shape[0]:
+            raise ValueError("planner prompt/plan boundary does not match stored context")
+        transferred_hidden = planner.hidden[plan_start:plan_stop]
+        transferred_mask = planner.attention_mask[plan_start:plan_stop]
         _sync(receiver.device)
         started = time.perf_counter()
         aligned, diagnostics = exact_stt(
-            planner.hidden.to(sender.device), _lm_head(_base_model(sender)), receiver_embedding_layer,
+            transferred_hidden.to(sender.device), _lm_head(_base_model(sender)), receiver_embedding_layer,
             artifact, tau=tau, position_chunk_size=position_chunk_size,
             target_chunk_size=target_chunk_size,
         )
         _sync(receiver.device)
         alignment_seconds = time.perf_counter() - started
         aligned = aligned.unsqueeze(0).to(device=receiver.device, dtype=receiver_embeddings.dtype)
-        sender_mask = planner.attention_mask.unsqueeze(0).to(receiver.device)
+        sender_mask = transferred_mask.unsqueeze(0).to(receiver.device)
         inputs_embeds, generation_mask, position_ids = pack_stt_prefix(
             aligned, sender_mask, receiver_embeddings, receiver_mask,
         )
@@ -471,7 +480,8 @@ def evaluate_stt_item(item: AnalysisItem, receiver: Any, *, receiver_model_id: s
     evaluation = evaluate_answer(getattr(receiver.args, "task", ""), raw, item.gold)
     evaluation_seconds = time.perf_counter() - started
     prompt_hash = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
-    prefix_length = int(planner.attention_mask.sum()) if planner is not None else 0
+    full_context_length = int(planner.attention_mask.sum()) if planner is not None else 0
+    prefix_length = int(planner.plan_token_count) if planner is not None else 0
     result_diagnostics = {
         "prompt_text": prompt_text, "prompt_hash": prompt_hash,
         "messages": messages, "messages_hash": stable_hash(messages),
@@ -479,12 +489,13 @@ def evaluate_stt_item(item: AnalysisItem, receiver: Any, *, receiver_model_id: s
         "receiver_attention_mask": receiver_mask[0].detach().cpu().tolist(),
         "prefill_attention_mask": generation_mask[0].detach().cpu().tolist(),
         "prefill_position_ids": position_ids[0].detach().cpu().tolist(),
-        "prefix_order": ["aligned_sender_prompt", "aligned_sender_plan", "receiver_native_prompt"]
+        "prefix_order": ["aligned_sender_plan", "receiver_native_prompt"]
         if planner is not None else ["receiver_native_prompt"],
-        "causal_shift": False, "do_sample": False,
+        "causal_shift": False, "latent_only": True, "do_sample": False,
         "sender_prompt_token_count": planner.prompt_token_count if planner is not None else 0,
         "sender_plan_token_count": planner.plan_token_count if planner is not None else 0,
-        "sender_full_context_token_count": prefix_length,
+        "sender_full_context_token_count": full_context_length,
+        "sender_transferred_token_count": prefix_length,
         "receiver_prompt_token_count": int(receiver_mask.sum()),
         "transferred_length_ratio": prefix_length / int(generation_mask.sum()),
         "planner_generation_seconds": planner.generation_seconds if planner is not None else 0.0,

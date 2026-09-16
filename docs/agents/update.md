@@ -60,3 +60,14 @@
 - 2026-09-03：完成独立分析框架：严格配置与 schema、数据快照、safetensor 分片缓存、精确 Sender 隐藏态捕获、批量 Receiver 前缀注入、任务评测、扰动与统计、五类分析、报告、PBS 矩阵/worker/提交链及本地测试。正式矩阵为 18 Sender + 324 去重 Receiver cells。
 - 2026-09-03：本地验收 20 tests passed；全仓遗留测试另有 13 个与本改动无关的既存失败，真实 GPU smoke 等待 Git 同步授权。
 - 2026-09-03：用户授权后推送验证提交 `af831ae`。远端确认仅部署 Slurm，新增 `analysis/slurm/` array worker 与依赖提交器，复用同一组严格 JSONL 矩阵和任务入口，并将 Guqq 默认并发设为单 GPU 一次一个 array cell。
+# 2026-09-16 STT latent-only transport
+
+- Started an STT-only protocol update: cross-model receivers will transport generated
+  planner-plan states only, corresponding to `run_hetero.sh` with
+  `LATENT_ONLY=true`. Planner prompts still condition plan generation but will not be
+  included in the transported prefix. Kernel and other experiment paths are outside
+  this change.
+- Completed the update: STT slices cached full-context states at
+  `prompt_token_count`, transports exactly `plan_token_count` positions, records both
+  full and transferred lengths, and uses versioned protocol/receiver identities.
+  The complete 44-test analysis suite and matrix/static checks pass.
