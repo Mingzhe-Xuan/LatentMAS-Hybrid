@@ -114,6 +114,21 @@ The newest `exp_result/latent_cot/runs/c6_prefix_alignment_*` directory contains
 - one `figures/c6_entropy_by_cached_k_<dataset>.pdf` per dataset;
 - `run_manifest.json` with trajectory hashes and exact analysis semantics.
 
+For a local input-only smoke test when a copied trajectory has no manifest, use
+the explicitly non-formal validation mode.  It loads every record and checks
+alignment coverage, hidden shapes, completion flags, and the text token/prompt/
+final-hidden fields, but does not load model weights or produce scientific
+metrics:
+
+```bash
+python exp/latent_cot/c6_prefix_alignment.py \
+  --trajectory_dir trajectories --datasets aime2025 \
+  --comparison_steps 100 --positions_per_trajectory 2 \
+  --allow_missing_manifest --skip_sha256 --validate_only --device cpu
+```
+
+Formal runs must not use `--allow_missing_manifest` or `--skip_sha256`.
+
 ## C1: sequential MAS entropy by agent
 
 C1 reuses the active root `methods/latent_mas.py` sequential organization. A

@@ -84,6 +84,16 @@ def parse_args(argv=None):
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--trust_remote_code", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--skip_sha256", action="store_true")
+    parser.add_argument(
+        "--allow_missing_manifest",
+        action="store_true",
+        help="Debug only: infer alignment settings from the filename when manifest is absent.",
+    )
+    parser.add_argument(
+        "--validate_only",
+        action="store_true",
+        help="Validate and summarize trajectory inputs without loading the model.",
+    )
     parser.add_argument("--skip_prefix_comparison", action="store_true")
     parser.add_argument("--skip_entropy", action="store_true")
     args = parser.parse_args(argv)
@@ -97,6 +107,8 @@ def parse_args(argv=None):
         parser.error("--prefix_cosine_tolerance must lie in [-1, 1]")
     if args.skip_prefix_comparison and args.skip_entropy:
         parser.error("both analyses cannot be skipped")
+    if args.allow_missing_manifest and not args.skip_sha256:
+        parser.error("--allow_missing_manifest requires --skip_sha256")
     args.device = auto_device(args.device)
     return args
 
@@ -178,6 +190,28 @@ def parse_trajectory_name(path):
     alignments = (
         tuple(alignments_match.group(1).split("-")) if alignments_match else tuple()
     )
+    scalar_patterns = {
+        "kernel_features": r"__km=(\d+)",
+        "kernel_temperature": r"__kt=v-([^_]+)",
+        "kernel_seed": r"__ks=(\d+)",
+        "kernel_chunk_size": r"__kc=(\d+)",
+        "linear_ridge": r"__lr=v-([^_]+)",
+    }
+    scalar_values = {
+        field: re.search(pattern, name) for field, pattern in scalar_patterns.items()
+    }
+    fallback_config = None
+    if all(scalar_values.values()):
+        fallback_config = {
+            "kernel_features": int(scalar_values["kernel_features"].group(1)),
+            "kernel_temperature": float(
+                scalar_values["kernel_temperature"].group(1)
+            ),
+            "kernel_seed": int(scalar_values["kernel_seed"].group(1)),
+            "kernel_chunk_size": int(scalar_values["kernel_chunk_size"].group(1)),
+            "linear_ridge": float(scalar_values["linear_ridge"].group(1)),
+            "soft_chunk_size": 32,
+        }
     return {
         "path": Path(path),
         "dataset": dataset_match.group(1),
@@ -186,10 +220,11 @@ def parse_trajectory_name(path):
         "questions": int(question_match.group(1)),
         "latent_steps": int(steps_match.group(1)),
         "alignments": alignments,
+        "fallback_alignment_config": fallback_config,
     }
 
 
-def discover_trajectories(directory, datasets):
+def discover_trajectories(directory, datasets, allow_missing_manifest=False):
     required = set(METHODS)
     discovered = defaultdict(dict)
     for path in sorted(Path(directory).glob("c0__*.pt")):
@@ -206,9 +241,11 @@ def discover_trajectories(directory, datasets):
                 f"{other} and {path}"
             )
         manifest = path.with_name(path.name[:-3] + ".manifest.json")
-        if not manifest.exists():
+        if not manifest.exists() and not allow_missing_manifest:
             raise FileNotFoundError(f"Trajectory manifest is missing: {manifest}")
-        info["manifest_path"] = manifest
+        if not manifest.exists() and info["fallback_alignment_config"] is None:
+            raise RuntimeError(f"Cannot infer alignment settings from filename: {path}")
+        info["manifest_path"] = manifest if manifest.exists() else None
         discovered[info["dataset"]][key] = info
     missing = [dataset for dataset in datasets if not discovered.get(dataset)]
     if missing:
@@ -220,7 +257,24 @@ def discover_trajectories(directory, datasets):
 
 
 def load_validated_trajectory(info, validate_sha256=True):
-    manifest = json.loads(info["manifest_path"].read_text(encoding="utf-8"))
+    if info["manifest_path"] is None:
+        if validate_sha256:
+            raise RuntimeError("A missing manifest cannot be SHA256-validated")
+        manifest = {
+            "schema_version": None,
+            "trajectory_sha256": None,
+            "debug_inferred_manifest": True,
+            "cache_identity": {
+                "dataset": info["dataset"],
+                "split": info["split"],
+                "model_name": info["model_name"],
+                "latent_steps": info["latent_steps"],
+                "alignments": list(info["alignments"]),
+                "alignment_config": info["fallback_alignment_config"],
+            },
+        }
+    else:
+        manifest = json.loads(info["manifest_path"].read_text(encoding="utf-8"))
     if validate_sha256:
         expected = manifest.get("trajectory_sha256")
         if not expected:
@@ -253,7 +307,55 @@ def load_validated_trajectory(info, validate_sha256=True):
                 f"Incomplete hidden trajectory for item={record.get('item_id')} "
                 f"alignment={record.get('alignment')} in {info['path']}"
             )
+        if record.get("alignment") == "text":
+            generated = record.get("generated_token_ids")
+            final_hidden = record.get("final_hidden")
+            prompt_ids = record.get("prompt_token_ids")
+            prompt_mask = record.get("prompt_attention_mask")
+            if not isinstance(generated, list) or len(generated) != info["latent_steps"]:
+                raise RuntimeError(
+                    f"Text trajectory item={record.get('item_id')} has an invalid token sequence"
+                )
+            if (
+                not torch.is_tensor(final_hidden)
+                or final_hidden.shape != hidden.shape[1:]
+            ):
+                raise RuntimeError(
+                    f"Text trajectory item={record.get('item_id')} has invalid final_hidden"
+                )
+            if (
+                not isinstance(prompt_ids, list)
+                or not isinstance(prompt_mask, list)
+                or not prompt_ids
+                or len(prompt_ids) != len(prompt_mask)
+            ):
+                raise RuntimeError(
+                    f"Text trajectory item={record.get('item_id')} has an invalid prompt"
+                )
     return trajectory, manifest
+
+
+def trajectory_summary(trajectory, info):
+    records = trajectory["records"]
+    by_alignment = defaultdict(int)
+    item_ids = set()
+    shapes = set()
+    for record in records:
+        by_alignment[str(record["alignment"])] += 1
+        item_ids.add(int(record["item_id"]))
+        shapes.add(tuple(int(value) for value in record["hidden_states"].shape))
+    return {
+        "dataset": info["dataset"],
+        "split": info["split"],
+        "model_name": info["model_name"],
+        "latent_steps": info["latent_steps"],
+        "questions": len(item_ids),
+        "records": len(records),
+        "records_by_alignment": dict(sorted(by_alignment.items())),
+        "hidden_shapes": [list(shape) for shape in sorted(shapes)],
+        "trajectory_is_complete": trajectory.get("trajectory_is_complete"),
+        "manifest_present": info["manifest_path"] is not None,
+    }
 
 
 def alignment_config(manifest):
@@ -303,17 +405,21 @@ def _past_length(past_key_values):
     return int(past_key_values[0][0].shape[-2])
 
 
-def expand_legacy_cache(past_key_values, batch_size):
-    """Share an immutable legacy tuple cache across one-step branches."""
+def expand_cache(past_key_values, batch_size):
+    """Return a batch-expanded cache without mutating the text-prefix cache."""
+    cache_class = None
     if hasattr(past_key_values, "to_legacy_cache"):
-        past_key_values = past_key_values.to_legacy_cache()
-    if not isinstance(past_key_values, (tuple, list)):
+        cache_class = type(past_key_values)
+        legacy_cache = past_key_values.to_legacy_cache()
+    else:
+        legacy_cache = past_key_values
+    if not isinstance(legacy_cache, (tuple, list)):
         raise TypeError(
-            "C6 currently requires the legacy tuple KV cache used by C0; "
+            "C6 requires a DynamicCache or legacy tuple KV cache; "
             f"received {type(past_key_values).__name__}."
         )
     expanded = []
-    for layer in past_key_values:
+    for layer in legacy_cache:
         expanded.append(
             tuple(
                 tensor.expand(batch_size, *tensor.shape[1:])
@@ -322,7 +428,12 @@ def expand_legacy_cache(past_key_values, batch_size):
                 for tensor in layer
             )
         )
-    return tuple(expanded)
+    expanded = tuple(expanded)
+    if cache_class is None:
+        return expanded
+    if not hasattr(cache_class, "from_legacy_cache"):
+        raise TypeError(f"{cache_class.__name__} cannot be reconstructed after batching")
+    return cache_class.from_legacy_cache(expanded)
 
 
 def pair_metrics(logits_by_method, sampled_tokens, top5, top10):
@@ -467,7 +578,7 @@ def collect_prefix_comparisons(
                 ],
                 dim=0,
             )
-            branch_past = expand_legacy_cache(past, len(METHODS))
+            branch_past = expand_cache(past, len(METHODS))
             branch_output = wrapper.model(
                 inputs_embeds=branch_inputs.to(dtype=dtype).unsqueeze(1),
                 attention_mask=torch.ones(
@@ -777,7 +888,21 @@ def create_run_dir(args):
 def main(argv=None):
     args = parse_args(argv)
     configure_plot_style()
-    discovered = discover_trajectories(args.trajectory_dir, args.datasets)
+    discovered = discover_trajectories(
+        args.trajectory_dir,
+        args.datasets,
+        allow_missing_manifest=args.allow_missing_manifest,
+    )
+    if args.validate_only:
+        summaries = []
+        for dataset in args.datasets:
+            for _, info in discovered[dataset].items():
+                trajectory, _ = load_validated_trajectory(
+                    info, validate_sha256=not args.skip_sha256
+                )
+                summaries.append(trajectory_summary(trajectory, info))
+        print(json.dumps({"validated_trajectories": summaries}, indent=2), flush=True)
+        return
     model_names = {
         info["model_name"]
         for dataset_entries in discovered.values()

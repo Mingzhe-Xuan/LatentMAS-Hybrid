@@ -20,6 +20,7 @@ def load_pure_functions():
         "stable_seed",
         "sample_prefix_positions",
         "deterministic_sample",
+        "expand_cache",
         "pair_metrics",
     }
     nodes = []
@@ -61,6 +62,17 @@ class C6TrajectoryDiscoveryTests(unittest.TestCase):
         self.assertEqual(
             parsed["alignments"], ("identical", "linear", "soft", "kernel", "text")
         )
+        self.assertEqual(
+            parsed["fallback_alignment_config"],
+            {
+                "kernel_features": 2048,
+                "kernel_temperature": 1.0,
+                "kernel_seed": 101,
+                "kernel_chunk_size": 4096,
+                "linear_ridge": 1e-5,
+                "soft_chunk_size": 32,
+            },
+        )
 
 
 class C6SamplingTests(unittest.TestCase):
@@ -88,6 +100,19 @@ class C6SamplingTests(unittest.TestCase):
 
 
 class C6MetricTests(unittest.TestCase):
+    def test_dynamic_cache_remains_a_cache_after_batch_expansion(self):
+        from transformers.cache_utils import DynamicCache
+
+        cache = DynamicCache()
+        key = torch.randn(1, 2, 3, 4)
+        value = torch.randn(1, 2, 3, 4)
+        cache.update(key, value, 0)
+        expanded = FUNCTIONS["expand_cache"](cache, 4)
+        self.assertIsInstance(expanded, DynamicCache)
+        self.assertEqual(expanded.get_seq_length(), 3)
+        self.assertEqual(expanded.to_legacy_cache()[0][0].shape, (4, 2, 3, 4))
+        self.assertEqual(cache.to_legacy_cache()[0][0].shape, (1, 2, 3, 4))
+
     def test_pair_metrics_report_requested_pairs_and_overlap_definitions(self):
         logits = {
             "linear": torch.tensor([4.0, 3.0, 2.0, 1.0, 0.0, -1.0]),
