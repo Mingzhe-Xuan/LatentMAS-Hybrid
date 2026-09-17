@@ -7,6 +7,7 @@
 #   qsub -v EXP_TARGET=approximator exp.sh
 #   qsub -v EXP_TARGET=approximator,STUDY=s3,DATASET=arc_easy,SPLIT=train exp.sh
 #   qsub -v EXP_TARGET=latent_cot exp.sh
+#   qsub -v EXP_TARGET=latent_cot_c6 exp.sh
 #   qsub -v EXP_TARGET=latent_comm,STUDY=m2,DATASET=arc_challenge exp.sh
 ###############################################################################
 
@@ -24,6 +25,7 @@ usage() {
 Usage:
   qsub -v EXP_TARGET=approximator[,NAME=value...] exp.sh
   qsub -v EXP_TARGET=latent_cot[,NAME=value...] exp.sh
+  qsub -v EXP_TARGET=latent_cot_c6[,NAME=value...] exp.sh
   qsub -v EXP_TARGET=latent_comm[,NAME=value...] exp.sh
 
 Options override the plan_v2 main-experiment defaults for the selected target:
@@ -147,6 +149,15 @@ case "${EXP_TARGET}" in
             MODEL_NAME="${MODEL_NAME:-Qwen/Qwen3-4B}"
             ARGS=(--study "${STUDY}" --model_name "${MODEL_NAME}" --dataset "${DATASET}" --split "${SPLIT}" --probe_seed "${PROBE_SEED}" --max_questions "${MAX_QUESTIONS}" --latent_steps "${LATENT_STEPS}" --kernel_features "${M}" --kernel_temperature "${TAU}" --kernel_seed "${ORF_SEED}" --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" --align_ridge "${ALIGN_RIDGE}" --device "${DEVICE}")
         fi
+        ;;
+    latent_cot_c6)
+        STUDY="c6"; MODEL_PAIR="cached-c0-text-prefix"
+        DATASET="aime2025+mbppplus"; SPLIT="dataset-specific"
+        METHOD="linear kernel soft text"; LATENT_STEPS="cached-K"
+        M="from-manifest"; TAU="from-manifest"; ORF_SEED="from-manifest"
+        ENTRY="exp/latent_cot/c6_prefix_alignment.py"
+        C6_TRAJECTORY_DIR="${C6_TRAJECTORY_DIR:-exp/cache/trajectories}"
+        ARGS=(--trajectory_dir "${C6_TRAJECTORY_DIR}" --device "${DEVICE}")
         ;;
     latent_comm)
         STUDY="${STUDY:-m0}"; MODEL_PAIR="${MODEL_PAIR:-all}"

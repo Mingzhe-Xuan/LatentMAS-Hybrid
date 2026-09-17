@@ -64,6 +64,56 @@ Each invocation writes under `exp_result/latent_cot/runs/`:
 
 Progress is appended to `exp_state.txt` in the invocation working directory.
 
+## C6: text-prefix one-step alignment agreement
+
+C6 is a cache-only extension of C0 for AIME 2025 and MBPP+.  For every
+question in the longest compatible cached C0 trajectory, it samples up to 100
+text-recurrence prefix lengths without replacement.  A position is a tokenizer
+token/recurrence step, not a Unicode character.  The cached greedy text prefix
+is replayed once to recover the exact KV state.  From the common hidden state at
+each sampled prefix, C6 branches one additional transformer step through
+`linear`, `kernel`, `soft`, and greedy hard-token (`text`) feedback, then applies
+the model output head.
+
+For `linear-text`, `kernel-text`, `linear-soft`, and `kernel-soft`, C6 reports
+categorical-sample token agreement, top-5 intersection fraction and any-overlap
+rate, top-10 intersection size, directional KL in both directions, and
+symmetric KL.  Categorical samples use a SHA256-keyed inverse-CDF uniform
+variate, so results do not depend on processing order.  Confidence intervals
+use question-cluster bootstrap resampling.  The primary KL follows the written
+pair order, e.g. `linear|text` means KL(linear || text).
+
+C6 also discovers every cached K that contains all four requested recurrences
+and plots separate entropy panels for each K.  Historical caches without
+`soft` or `text` are intentionally excluded.
+
+```bash
+python exp/latent_cot/c6_prefix_alignment.py \
+  --trajectory_dir exp/cache/trajectories \
+  --datasets aime2025 mbppplus \
+  --comparison_steps 150 \
+  --positions_per_trajectory 100 \
+  --position_seed 42 --token_sample_seed 42 \
+  --device cuda
+```
+
+PBS submission uses the same command through `exp.sh`:
+
+```bash
+qsub -v "EXP_TARGET=latent_cot_c6" exp.sh
+```
+
+The newest `exp_result/latent_cot/runs/c6_prefix_alignment_*` directory contains:
+
+- `metrics/c6_pair_metrics.parquet`;
+- `metrics/c6_entropy_by_step.parquet`;
+- `summaries/c6_pair_summary.json`;
+- `summaries/c6_entropy_summary.json`;
+- `figures/c6_top10_overlap_distribution.pdf`;
+- `figures/c6_kl_distribution.pdf`;
+- one `figures/c6_entropy_by_cached_k_<dataset>.pdf` per dataset;
+- `run_manifest.json` with trajectory hashes and exact analysis semantics.
+
 ## C1: sequential MAS entropy by agent
 
 C1 reuses the active root `methods/latent_mas.py` sequential organization. A
