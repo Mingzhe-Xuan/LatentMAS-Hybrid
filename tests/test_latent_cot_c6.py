@@ -143,6 +143,13 @@ class C6MetricTests(unittest.TestCase):
         self.assertIn("branch_output.hidden_states[-1][:, -1, :]", source)
         self.assertIn("branch_logits = output_head(branch_hidden)", source)
 
+    def test_alignment_sources_and_branch_cache_come_from_replay(self):
+        source = SOURCE.read_text(encoding="utf-8")
+        self.assertIn("apply_alignment(replay_sources, states[method])", source)
+        self.assertNotIn("apply_alignment(cached_sources, states[method])", source)
+        self.assertIn('"prefix_replay_below_tolerance": below_tolerance', source)
+        self.assertIn("if below_tolerance and args.strict_prefix_replay", source)
+
 
 if __name__ == "__main__":
     unittest.main()

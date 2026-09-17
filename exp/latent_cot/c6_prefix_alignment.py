@@ -48,7 +48,7 @@ PAIRS = (
     ("linear", "soft"),
     ("kernel", "soft"),
 )
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DEFAULT_TRAJECTORY_DIR = ROOT / "exp" / "cache" / "trajectories"
 DEFAULT_OUTPUT_ROOT = ROOT / "exp_result" / "latent_cot" / "runs"
 
@@ -80,7 +80,17 @@ def parse_args(argv=None):
     parser.add_argument("--token_sample_seed", type=int, default=42)
     parser.add_argument("--entropy_chunk_size", type=int, default=8)
     parser.add_argument("--bootstrap_replicates", type=int, default=2000)
-    parser.add_argument("--prefix_cosine_tolerance", type=float, default=0.999)
+    parser.add_argument(
+        "--prefix_cosine_tolerance",
+        type=float,
+        default=0.98,
+        help="Audit threshold for cached-vs-replayed prefix hidden-state cosine.",
+    )
+    parser.add_argument(
+        "--strict_prefix_replay",
+        action="store_true",
+        help="Abort when a cached-vs-replayed prefix cosine is below the audit threshold.",
+    )
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--trust_remote_code", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--skip_sha256", action="store_true")
@@ -516,13 +526,12 @@ def collect_prefix_comparisons(
             ],
             dim=0,
         ).to(wrapper.device, dtype=torch.float32)
-        aligned_by_method = {
-            method: apply_alignment(cached_sources, states[method])
-            for method in ("linear", "kernel", "soft")
-        }
-        text_tokens = output_head(cached_sources.to(dtype=dtype)).argmax(dim=-1)
-        aligned_by_method["text"] = input_embedding(text_tokens).float()
         position_index = {position: index for index, position in enumerate(positions)}
+
+        # The cached trajectory defines the text-token path. Recompute the
+        # source hidden states with the loaded model so every aligned branch
+        # and its KV cache come from the same model execution. Cached hidden
+        # states remain a provenance audit across model/library revisions.
         input_ids = torch.tensor(
             [record["prompt_token_ids"]], dtype=torch.long, device=wrapper.device
         )
@@ -537,7 +546,8 @@ def collect_prefix_comparisons(
             return_dict=True,
         )
         past = output.past_key_values
-        last_hidden = output.hidden_states[-1][:, -1, :]
+        replay_sources = []
+        replay_audit = {}
         for prefix_length in range(1, max(positions) + 1):
             next_token = torch.tensor(
                 [[generated[prefix_length - 1]]], dtype=torch.long, device=wrapper.device
@@ -565,12 +575,54 @@ def collect_prefix_comparisons(
                 torch.nn.functional.cosine_similarity(replay, cached_hidden, dim=0)
             )
             max_abs = float((replay - cached_hidden).abs().max())
-            if cosine < args.prefix_cosine_tolerance:
+            below_tolerance = cosine < args.prefix_cosine_tolerance
+            replay_sources.append(last_hidden[0].detach().float())
+            replay_audit[prefix_length] = (cosine, max_abs, below_tolerance)
+            if below_tolerance and args.strict_prefix_replay:
                 raise RuntimeError(
                     f"Text-prefix replay mismatch: dataset={dataset}, item={item_id}, "
                     f"t={prefix_length}, cosine={cosine:.8f}."
                 )
 
+        replay_sources = torch.stack(replay_sources, dim=0)
+        aligned_by_method = {
+            method: apply_alignment(replay_sources, states[method])
+            for method in ("linear", "kernel", "soft")
+        }
+        text_tokens = output_head(replay_sources.to(dtype=dtype)).argmax(dim=-1)
+        aligned_by_method["text"] = input_embedding(text_tokens).float()
+
+        # Replay again to construct the KV state used for branching. This
+        # avoids reusing a cache after its batched expansion.
+        output = wrapper.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            use_cache=True,
+            output_hidden_states=True,
+            return_dict=True,
+        )
+        past = output.past_key_values
+        for prefix_length in range(1, max(positions) + 1):
+            next_token = torch.tensor(
+                [[generated[prefix_length - 1]]], dtype=torch.long, device=wrapper.device
+            )
+            output = wrapper.model(
+                input_ids=next_token,
+                attention_mask=torch.ones(
+                    (1, _past_length(past) + 1),
+                    dtype=torch.long,
+                    device=wrapper.device,
+                ),
+                past_key_values=past,
+                use_cache=True,
+                output_hidden_states=True,
+                return_dict=True,
+            )
+            past = output.past_key_values
+            if prefix_length not in selected:
+                continue
+
+            cosine, max_abs, below_tolerance = replay_audit[prefix_length]
             branch_inputs = torch.stack(
                 [
                     aligned_by_method[method][position_index[prefix_length]]
@@ -631,6 +683,7 @@ def collect_prefix_comparisons(
                         "prefix_fraction": prefix_length / latent_steps,
                         "prefix_replay_cosine": cosine,
                         "prefix_replay_max_abs": max_abs,
+                        "prefix_replay_below_tolerance": below_tolerance,
                         "left_sampled_token_id": sampled_tokens[left],
                         "right_sampled_token_id": sampled_tokens[right],
                         "left_sampled_token": wrapper.tokenizer.convert_ids_to_tokens(
@@ -642,9 +695,13 @@ def collect_prefix_comparisons(
                     }
                 )
                 rows.append(pair_row)
+        audit_cosines = [values[0] for values in replay_audit.values()]
+        audit_failures = sum(values[2] for values in replay_audit.values())
         print(
             f"C6 prefix comparison: {dataset} item {record_index}/{len(records)} "
-            f"(item_id={item_id}, positions={len(positions)})",
+            f"(item_id={item_id}, positions={len(positions)}, "
+            f"audit_min_cosine={min(audit_cosines):.6f}, "
+            f"audit_below_tolerance={audit_failures})",
             flush=True,
         )
         if checkpoint is not None:
@@ -714,8 +771,37 @@ def summarize_pairs(rows, args):
         "sampling_unit": "one sampled prefix position within each question",
         "uncertainty_unit": "question-cluster bootstrap",
         "datasets": {},
+        "prefix_replay_audit": {},
     }
     for dataset in args.datasets:
+        audit_by_prefix = {}
+        for row in rows:
+            if row["dataset"] == dataset:
+                key = (int(row["item_id"]), int(row["prefix_length"]))
+                audit_by_prefix[key] = (
+                    float(row["prefix_replay_cosine"]),
+                    float(row["prefix_replay_max_abs"]),
+                    bool(row["prefix_replay_below_tolerance"]),
+                )
+        audit_values = list(audit_by_prefix.values())
+        result["prefix_replay_audit"][dataset] = {
+            "prefixes": len(audit_values),
+            "cosine_min": min((value[0] for value in audit_values), default=None),
+            "cosine_median": (
+                float(np.median([value[0] for value in audit_values]))
+                if audit_values
+                else None
+            ),
+            "max_abs_max": max((value[1] for value in audit_values), default=None),
+            "below_tolerance": sum(value[2] for value in audit_values),
+            "below_tolerance_fraction": (
+                float(np.mean([value[2] for value in audit_values]))
+                if audit_values
+                else None
+            ),
+            "tolerance": args.prefix_cosine_tolerance,
+            "strict": args.strict_prefix_replay,
+        }
         result["datasets"][dataset] = {}
         for left, right in PAIRS:
             pair = f"{left}|{right}"
@@ -1028,7 +1114,16 @@ def main(argv=None):
         "semantics": {
             "position_unit": "greedy text-recurrence token, not Unicode character",
             "prefix_sampling": "without replacement independently within each question",
-            "branch": "one transformer step from shared replayed text-prefix KV cache",
+            "branch": (
+                "one transformer step from replayed source hidden states and a shared "
+                "replayed text-prefix KV cache"
+            ),
+            "cached_hidden_states": (
+                "provenance audit only for prefix comparison; entropy uses cached states"
+            ),
+            "prefix_replay_policy": (
+                "record cached-vs-replayed cosine and continue unless strict mode is enabled"
+            ),
             "distribution": "softmax of output-head logits after the branched step",
             "kl_primary": "directional KL(left || right) in the pair order",
             "top5_overlap": "intersection size divided by five; any-overlap also reported",

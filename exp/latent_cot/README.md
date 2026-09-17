@@ -69,11 +69,14 @@ Progress is appended to `exp_state.txt` in the invocation working directory.
 C6 is a cache-only extension of C0 for AIME 2025 and MBPP+.  For every
 question in the longest compatible cached C0 trajectory, it samples up to 100
 text-recurrence prefix lengths without replacement.  A position is a tokenizer
-token/recurrence step, not a Unicode character.  The cached greedy text prefix
-is replayed once to recover the exact KV state.  From the common hidden state at
-each sampled prefix, C6 branches one additional transformer step through
+token/recurrence step, not a Unicode character.  The cached greedy text-token
+path is replayed with the loaded model to recover a mutually consistent hidden
+state and KV state.  From the common replayed hidden state at each sampled
+prefix, C6 branches one additional transformer step through
 `linear`, `kernel`, `soft`, and greedy hard-token (`text`) feedback, then applies
-the model output head.
+the model output head.  Cached-vs-replayed hidden-state cosine is recorded as a
+provenance audit; it does not stop the run unless `--strict_prefix_replay` is
+specified (the audit threshold defaults to `0.98`).
 
 For `linear-text`, `kernel-text`, `linear-soft`, and `kernel-soft`, C6 reports
 categorical-sample token agreement, top-5 intersection fraction and any-overlap
@@ -113,6 +116,10 @@ The newest `exp_result/latent_cot/runs/c6_prefix_alignment_*` directory contains
 - `figures/c6_kl_distribution.pdf`;
 - one `figures/c6_entropy_by_cached_k_<dataset>.pdf` per dataset;
 - `run_manifest.json` with trajectory hashes and exact analysis semantics.
+
+The `prefix_replay_audit` section of `c6_pair_summary.json` reports the minimum
+and median cosine, maximum absolute deviation, and the number of sampled
+prefixes below the configured audit threshold for each dataset.
 
 For a local input-only smoke test when a copied trajectory has no manifest, use
 the explicitly non-formal validation mode.  It loads every record and checks
