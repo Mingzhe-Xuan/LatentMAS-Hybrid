@@ -12,7 +12,7 @@
         "max_token": 20000,
         "generation_bs": 2,
         "latent_steps": {
-            "sequential": 10,
+            "sequential": 0,
             "hierarchical": 10
         },
         "times": 3
