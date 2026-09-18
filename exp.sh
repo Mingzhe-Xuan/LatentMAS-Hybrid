@@ -31,7 +31,9 @@ Usage:
 Options override the plan_v2 main-experiment defaults for the selected target:
   --study NAME              S0--S4, C0--C5, or M0--M4 study name
   --model-pair NAME         x1/x2 for operator/communication; c0/c1 for CoT
-  --model-name NAME         Single model used by latent_cot C0
+  --model-name NAME         Run one model in latent_cot C0
+  --model-names "NAMES"     Space-separated latent_cot C0 model matrix
+  --repeat-seeds "INTS"     Space-separated latent_cot C0 repeat seeds
   --agent-models "NAMES"    One or four space-separated models for approximator
   --dataset NAME --split NAME
   --method NAME             e.g. identical, linear, kernel, exact, all
@@ -51,6 +53,8 @@ MAX_QUESTIONS="${MAX_QUESTIONS:-}"; LATENT_STEPS="${LATENT_STEPS:-}"
 DEVICE="${DEVICE:-}"; EXP_EXTRA_ARGS="${EXP_EXTRA_ARGS:-}"
 AGENT_MODELS="${AGENT_MODELS:-}"
 MODEL_NAME="${MODEL_NAME:-}"
+C0_MODEL_NAMES="${C0_MODEL_NAMES:-}"
+C0_REPEAT_SEEDS="${C0_REPEAT_SEEDS:-}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -61,6 +65,8 @@ while [[ $# -gt 0 ]]; do
         --model-pair) MODEL_PAIR="$2"; shift 2 ;;
         --agent-models) AGENT_MODELS="$2"; shift 2 ;;
         --model-name) MODEL_NAME="$2"; shift 2 ;;
+        --model-names) C0_MODEL_NAMES="$2"; shift 2 ;;
+        --repeat-seeds) C0_REPEAT_SEEDS="$2"; shift 2 ;;
         --dataset) DATASET="$2"; shift 2 ;;
         --split) SPLIT="$2"; shift 2 ;;
         --method) METHOD="$2"; shift 2 ;;
@@ -146,8 +152,14 @@ case "${EXP_TARGET}" in
         else
             DATASET="${DATASET:-all}"
             MAX_QUESTIONS="${MAX_QUESTIONS:-50}"
-            MODEL_NAME="${MODEL_NAME:-Qwen/Qwen3-8B}"
-            ARGS=(--study "${STUDY}" --model_name "${MODEL_NAME}" --dataset "${DATASET}" --split "${SPLIT}" --probe_seed "${PROBE_SEED}" --max_questions "${MAX_QUESTIONS}" --latent_steps "${LATENT_STEPS}" --kernel_features "${M}" --kernel_temperature "${TAU}" --kernel_seed "${ORF_SEED}" --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" --align_ridge "${ALIGN_RIDGE}" --device "${DEVICE}")
+            if [[ -z "${C0_MODEL_NAMES}" ]]; then
+                C0_MODEL_NAMES="${MODEL_NAME:-Qwen/Qwen3-8B Qwen/Qwen3-14B}"
+            fi
+            C0_REPEAT_SEEDS="${C0_REPEAT_SEEDS:-42 43 44}"
+            read -r -a C0_MODEL_ARRAY <<< "${C0_MODEL_NAMES}"
+            read -r -a C0_SEED_ARRAY <<< "${C0_REPEAT_SEEDS}"
+            ARGS=(--study "${STUDY}" --model_names "${C0_MODEL_ARRAY[@]}" --repeat_seeds "${C0_SEED_ARRAY[@]}" --alignments soft kernel --dataset "${DATASET}" --split "${SPLIT}" --max_questions "${MAX_QUESTIONS}" --latent_steps "${LATENT_STEPS}" --kernel_features "${M}" --kernel_temperature "${TAU}" --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" --align_ridge "${ALIGN_RIDGE}" --device "${DEVICE}")
+            ORF_SEED="per-repeat:${C0_REPEAT_SEEDS}"
         fi
         ;;
     latent_cot_c6)
@@ -195,6 +207,8 @@ echo "PBS job       : ${PBS_JOBID:-interactive}"
 echo "Target/study  : ${EXP_TARGET}/${STUDY}"
 if [[ "${EXP_TARGET}" == "approximator" ]]; then
     echo "Agent models  : ${AGENT_MODELS}"
+elif [[ "${EXP_TARGET}" == "latent_cot" && "${STUDY}" == "c0" ]]; then
+    echo "Models        : ${C0_MODEL_NAMES}"
 else
     echo "Model pair    : ${MODEL_PAIR}"
 fi

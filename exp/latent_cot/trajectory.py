@@ -131,7 +131,9 @@ def _empty_hidden(hidden_size: int) -> torch.Tensor:
 
 
 def build_alignment_states(wrapper: C0Model, args) -> Dict[str, AlignmentState]:
+    requested_alignments = tuple(getattr(args, "alignments", ALIGNMENTS))
     key = (
+        requested_alignments,
         args.kernel_features,
         args.kernel_temperature,
         args.kernel_seed,
@@ -148,24 +150,24 @@ def build_alignment_states(wrapper: C0Model, args) -> Dict[str, AlignmentState]:
     input_weight = input_head.weight.detach().float()
     output_bias = getattr(output_head, "bias", None)
     output_bias = None if output_bias is None else output_bias.detach().float()
-    states = {
-        "identical": AlignmentState(
+    available = {
+        "identical": lambda: AlignmentState(
             method="identical",
             target_norm=wrapper.target_embedding_mean_norm,
         ),
-        "linear": build_linear_state(
+        "linear": lambda: build_linear_state(
             output_weight,
             input_weight,
             ridge=args.align_ridge,
         ),
-        "soft": build_soft_state(
+        "soft": lambda: build_soft_state(
             output_weight,
             input_weight,
             output_bias,
             temperature=args.kernel_temperature,
             query_chunk_size=args.soft_chunk_size,
         ),
-        "kernel": build_kernel_state(
+        "kernel": lambda: build_kernel_state(
             output_weight,
             input_weight,
             output_bias,
@@ -174,6 +176,11 @@ def build_alignment_states(wrapper: C0Model, args) -> Dict[str, AlignmentState]:
             seed=args.kernel_seed,
             chunk_size=args.kernel_chunk_size,
         ),
+    }
+    states = {
+        alignment: available[alignment]()
+        for alignment in requested_alignments
+        if alignment != "text"
     }
     wrapper._alignment_cache[key] = states
     return states
@@ -311,7 +318,7 @@ def collect(
             len(indexed_items),
             item_id,
         )
-        for alignment in ALIGNMENTS:
+        for alignment in args.alignments:
             record = collect_item(
                 wrapper,
                 item_id,

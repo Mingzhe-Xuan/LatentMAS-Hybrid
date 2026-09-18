@@ -2,6 +2,7 @@ import ast
 import hashlib
 import json
 import random
+import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -101,6 +102,21 @@ def load_cache_difference_functions():
         namespace,
     )
     return namespace
+
+
+def load_c0_cell_command():
+    tree = ast.parse(RUN_SOURCE.read_text(encoding="utf-8"))
+    selected = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "c0_cell_command"
+    ]
+    namespace = {"sys": sys, "Path": Path, "__file__": str(RUN_SOURCE)}
+    exec(
+        compile(ast.Module(body=selected, type_ignores=[]), str(RUN_SOURCE), "exec"),
+        namespace,
+    )
+    return namespace["c0_cell_command"]
 
 
 def load_collect_item():
@@ -455,6 +471,35 @@ class LatentCotTrajectoryCacheTests(unittest.TestCase):
     def test_c0_trajectory_files_are_kept_under_repository_trj(self):
         source = RUN_SOURCE.read_text(encoding="utf-8")
         self.assertIn('TRAJECTORY_DIR = ROOT / "trj"', source)
+
+    def test_matrix_cell_uses_repeat_seed_for_sampling_and_kernel(self):
+        args = SimpleNamespace(
+            dataset="all",
+            split="test",
+            max_questions=50,
+            latent_steps=150,
+            alignments=["soft", "kernel"],
+            bootstrap_replicates=1000,
+            entropy_chunk_size=8,
+            kernel_features=2048,
+            kernel_temperature=0.6,
+            kernel_chunk_size=4096,
+            soft_chunk_size=32,
+            align_ridge=1e-5,
+            max_new_tokens=4096,
+            temperature=0.6,
+            top_p=0.95,
+            device="cuda",
+            trust_remote_code=False,
+            think=True,
+            reuse_trajectory=False,
+            force_recollect=False,
+        )
+        command = load_c0_cell_command()(args, "Qwen/Qwen3-14B", 44)
+        self.assertIn("Qwen/Qwen3-14B", command)
+        self.assertEqual(command[command.index("--probe_seed") + 1], "44")
+        self.assertEqual(command[command.index("--kernel_seed") + 1], "44")
+        self.assertEqual(command[command.index("--repeat_seeds") + 1], "44")
 
     def test_legacy_implementation_hash_is_ignored(self):
         compare = load_cache_difference_functions()["trajectory_cache_differences"]

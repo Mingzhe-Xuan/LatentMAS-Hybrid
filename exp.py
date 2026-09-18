@@ -51,6 +51,16 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-pair", default=None)
     parser.add_argument("--model-name", default=None)
     parser.add_argument(
+        "--model-names",
+        default=None,
+        help="Space-separated C0 model matrix.",
+    )
+    parser.add_argument(
+        "--repeat-seeds",
+        default=None,
+        help="Space-separated C0 repeat seeds.",
+    )
+    parser.add_argument(
         "--agent-models",
         default=None,
         help="One or four space-separated model names.",
@@ -154,6 +164,16 @@ def build_command(
         model_pair = resolve("model_pair", "MODEL_PAIR", "c0")
         mas_study = study in {"c1", "c2", "c3"}
         model_name = resolve("model_name", "MODEL_NAME", "Qwen/Qwen3-8B")
+        c0_model_names_text = resolve("model_names", "C0_MODEL_NAMES")
+        if c0_model_names_text:
+            c0_model_names = shlex.split(c0_model_names_text)
+        elif namespace.model_name is not None or source_env.get("MODEL_NAME"):
+            c0_model_names = [model_name]
+        else:
+            c0_model_names = ["Qwen/Qwen3-8B", "Qwen/Qwen3-14B"]
+        c0_repeat_seeds = shlex.split(
+            resolve("repeat_seeds", "C0_REPEAT_SEEDS", "42 43 44")
+        )
         dataset = resolve(
             "dataset", "DATASET", "all"
         )
@@ -199,7 +219,13 @@ def build_command(
                     "--generation_seed", generation_seed,
                 ]
             )
-        model_summary = model_name
+        elif study == "c0":
+            args.extend(["--model_names", *c0_model_names])
+            args.extend(["--repeat_seeds", *c0_repeat_seeds])
+            args.extend(["--alignments", "soft", "kernel"])
+        model_summary = (
+            " ".join(c0_model_names) if study == "c0" else model_name
+        )
     else:
         study = resolve("study", "STUDY", "m0")
         model_pair = resolve("model_pair", "MODEL_PAIR", "all")
@@ -249,7 +275,11 @@ def build_command(
         "method": method,
         "m": m,
         "tau": tau,
-        "orf_seed": orf_seed,
+        "orf_seed": (
+            "per-repeat: " + " ".join(c0_repeat_seeds)
+            if target == "latent_cot" and study == "c0"
+            else orf_seed
+        ),
         "latent_steps": (
             (
                 "MBPP+=" + " ".join(latent_step_values)

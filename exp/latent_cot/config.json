@@ -1,16 +1,25 @@
 {
   "study": "c0",
   "model_name": "Qwen/Qwen3-8B",
+  "model_names": [
+    "Qwen/Qwen3-8B",
+    "Qwen/Qwen3-14B"
+  ],
   "dataset": "all",
   "split": "test",
   "max_questions": 50,
   "latent_steps": 150,
   "probe_seed": 42,
+  "repeat_seeds": [
+    42,
+    43,
+    44
+  ],
   "bootstrap_replicates": 1000,
   "entropy_chunk_size": 8,
   "kernel_features": 2048,
   "kernel_temperature": 0.6,
-  "kernel_seed": 101,
+  "kernel_seed": 42,
   "kernel_chunk_size": 4096,
   "soft_chunk_size": 32,
   "align_ridge": 1e-05,
@@ -26,11 +35,8 @@
     180
   ],
   "alignments": [
-    "identical",
-    "linear",
     "soft",
-    "kernel",
-    "text"
+    "kernel"
   ],
   "max_new_tokens": 4096,
   "generation_seed": 77

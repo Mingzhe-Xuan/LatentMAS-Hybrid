@@ -1,45 +1,41 @@
 # C0: alignment-aware latent CoT entropy
 
-C0 compares five independent Qwen3-8B recurrences on AIME 2024, HumanEval+,
-and MedQA:
-`identical`, `linear`, `soft`, `kernel`, and `text`. For the four latent recurrences,
-the current pre-unembedding hidden state is transformed by the selected
-alignment and fed back through `inputs_embeds`. The `text` recurrence performs
-greedy argmax decoding followed by ordinary token-embedding feedback, and runs
-for the same fixed number of steps as the latent recurrences. Entropy is then
-computed from the next pre-unembedding hidden states using
+C0 compares `soft` and `kernel` recurrence for Qwen3-8B and Qwen3-14B on
+AIME 2024, HumanEval+, and MedQA. The current pre-unembedding hidden state is
+transformed by the selected alignment and fed back through `inputs_embeds`.
+Entropy is computed from the next pre-unembedding hidden states using
 `softmax(W_out h + b)`.
 
 The mappings use the repository implementations in `alignment.py`:
 
-- `identical`: identity feedback with target embedding mean-norm scaling;
-- `linear`: ridge least-squares mapping from `W_out` to `W_in`, followed by
-  target-norm scaling;
 - `soft`: full-vocabulary `softmax((W_out h + b) / tau) @ W_in`, with no
   token sampling or argmax;
 - `kernel`: ORF positive-feature approximation using the configured feature
-  count, temperature and seed; this approximates the `soft` recurrence;
-- `text`: greedy argmax decoding followed by ordinary token-embedding feedback.
+  count, temperature and repeat seed; this approximates the `soft` recurrence.
 
 Every recurrence starts from the sequential LatentMAS Planner prompt, which
 asks for a concise step-by-step plan and explicitly forbids producing the final
 answer. By default, one invocation runs the three datasets in the fixed order
 `aime2024`, `humanevalplus`, `medqa`. The requested split is used for
 HumanEval+ and MedQA; AIME 2024 is resolved to its available `train` split.
-The model and alignment states are constructed once, while each dataset keeps
-a separate trajectory cache. Each dataset contributes one panel to the output
-figure; each panel contains differently colored mean
-entropy-versus-step curves for all five recurrences with 95% bootstrap bands.
+The complete matrix is `2 models × 3 repeat seeds × 3 datasets = 18`
+trajectory files. Repeat seeds are fixed to `42`, `43`, and `44`; each seed
+controls both question selection and the kernel random features. Every
+model/seed cell runs in an isolated process so GPU memory is released before
+loading the next model. Each dataset contributes one panel to the output
+figure with mean entropy-versus-step curves for both recurrences and 95%
+bootstrap bands.
 The default trajectory length is 150 steps (indexed 0 through 149).
 
 ```bash
 python exp/latent_cot/run.py \
   --study c0 \
-  --model_name Qwen/Qwen3-8B \
+  --model_names Qwen/Qwen3-8B Qwen/Qwen3-14B \
+  --repeat_seeds 42 43 44 --alignments soft kernel \
   --split test \
-  --max_questions 50 --latent_steps 150 --probe_seed 42 \
+  --max_questions 50 --latent_steps 150 \
   --kernel_features 2048 --kernel_temperature 0.6 \
-  --kernel_seed 101 --kernel_chunk_size 4096 --soft_chunk_size 32 --align_ridge 1e-5
+  --kernel_chunk_size 4096 --soft_chunk_size 32 --align_ridge 1e-5
 ```
 
 PBS submission needs no dataset or alignment argument:
@@ -50,9 +46,8 @@ qsub -v "EXP_TARGET=latent_cot" exp.sh
 
 `--dataset aime2024`, `--dataset humanevalplus`, or `--dataset medqa` remains
 available for single-dataset debugging.
-Because the recurrence schema includes soft and text feedback alongside the
-other latent alignments, old C0 trajectory caches are not compatible; the new cache
-filename contains the recurrence, Planner prompt version, and kernel
+Old C0 trajectory caches are not compatible; the new cache filename contains
+the model, repeat seed, `soft/kernel` recurrence list, Planner prompt version, and kernel
 configuration, so no manual deletion is required. Trajectory `.pt` files and
 their integrity manifests are written under the repository-level `trj/`
 directory.
@@ -62,7 +57,7 @@ Each invocation writes under `exp_result/latent_cot/runs/`:
 - `metrics/c0_entropy_by_step.parquet`: one row per dataset, alignment,
   question and step;
 - `summaries/c0_summary.json`: per-dataset and per-alignment statistics;
-- `figures/c0_entropy_vs_step.pdf`: three dataset panels with five colored curves;
+- `figures/c0_entropy_vs_step.pdf`: three dataset panels with two colored curves;
 - `figures/c0_entropy_vs_step.json`: figure provenance and alignment settings;
 - `run_manifest.json`: parameters, cache provenance and failure counts.
 

@@ -35,7 +35,6 @@ from data import (
     load_medqa,
 )
 from trajectory import (
-    ALIGNMENTS,
     collect,
     load_model,
     prompt_template_sha256,
@@ -45,7 +44,7 @@ from reasoning_models import resolve_manual_think
 from utils import auto_device, set_seed
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 OUTPUT_ROOT = ROOT / "exp_result" / "latent_cot"
 RUNS_DIR = OUTPUT_ROOT / "runs"
 TRAJECTORY_DIR = ROOT / "trj"
@@ -55,6 +54,12 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--study", choices=["c0", "c1", "c2", "c3", "c4", "c5"], default="c0")
     parser.add_argument("--model_name", default=None)
+    parser.add_argument(
+        "--model_names",
+        nargs="+",
+        default=None,
+        help="C0 model matrix; defaults to Qwen3-8B and Qwen3-14B.",
+    )
     parser.add_argument(
         "--dataset",
         choices=[
@@ -87,7 +92,7 @@ def parse_args(argv=None):
         "--alignments",
         nargs="+",
         choices=["identical", "linear", "soft", "kernel", "text"],
-        default=["identical", "linear", "soft", "kernel", "text"],
+        default=None,
     )
     parser.add_argument(
         "--max_new_tokens",
@@ -96,7 +101,7 @@ def parse_args(argv=None):
         help="Judger generation limit; C1/C2/C3 default to run.sh's AIME limit (20000).",
     )
     parser.add_argument("--generation_seed", type=int, default=42)
-    parser.add_argument("--repeat_seeds", type=int, nargs="+", default=[42, 43, 44, 45])
+    parser.add_argument("--repeat_seeds", type=int, nargs="+", default=None)
     parser.add_argument("--noise_seed_offset", type=int, default=10000)
     parser.add_argument("--noise_alpha", type=float, default=0.05)
     parser.add_argument("--sample_seed", type=int, default=42)
@@ -144,7 +149,9 @@ def parse_args(argv=None):
         action=argparse.BooleanOptionalAction,
         default=None,
     )
+    parser.add_argument("--c0_single_cell", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+    model_name_was_explicit = args.model_name is not None
     if args.study == "c4":
         # C4 is intentionally a fixed ablation matrix.
         args.dataset = "all" if args.dataset is None else args.dataset
@@ -163,6 +170,23 @@ def parse_args(argv=None):
         args.noise_seed_offset = 10000
     if args.model_name is None:
         args.model_name = "Qwen/Qwen3-8B"
+    if args.study == "c0":
+        if args.model_names is None:
+            args.model_names = (
+                [args.model_name]
+                if model_name_was_explicit
+                else ["Qwen/Qwen3-8B", "Qwen/Qwen3-14B"]
+            )
+        if args.repeat_seeds is None:
+            args.repeat_seeds = [42, 43, 44]
+        if args.alignments is None:
+            args.alignments = ["soft", "kernel"]
+    else:
+        args.model_names = None
+        if args.repeat_seeds is None:
+            args.repeat_seeds = [42, 43, 44, 45]
+        if args.alignments is None:
+            args.alignments = ["identical", "linear", "soft", "kernel", "text"]
     if args.dataset is None:
         args.dataset = "all"
     if args.max_questions is None:
@@ -202,6 +226,15 @@ def parse_args(argv=None):
             parser.error("C5 --noise_alpha must be positive")
         if not args.c5_dev_allow_override and args.noise_alpha != 0.05:
             parser.error("Formal C5 requires --noise_alpha 0.05")
+    if args.study == "c0":
+        if len(set(args.model_names)) != len(args.model_names):
+            parser.error("--model_names must not contain duplicates")
+        if len(set(args.repeat_seeds)) != len(args.repeat_seeds):
+            parser.error("--repeat_seeds must not contain duplicates")
+        if not args.model_names or not args.repeat_seeds:
+            parser.error("C0 requires at least one model and repeat seed")
+        if set(args.alignments) != {"soft", "kernel"} or len(args.alignments) != 2:
+            parser.error("C0 requires exactly --alignments soft kernel")
     if args.study in {"c1", "c2", "c3"} and args.dataset not in {
         "all",
         "mbppplus",
@@ -333,7 +366,7 @@ def trajectory_paths(args):
             f"q={args.max_questions}",
             f"seed={args.probe_seed}",
             f"k={args.latent_steps}",
-            f"a={cache_component('-'.join(ALIGNMENTS))}",
+            f"a={cache_component('-'.join(args.alignments))}",
             f"km={args.kernel_features}",
             f"kt={cache_component(repr(args.kernel_temperature))}",
             f"ks={args.kernel_seed}",
@@ -431,8 +464,8 @@ def expected_manifest(args, indexed_items, wrapper):
             "prompt_template_sha256": prompt_template_sha256(args.dataset),
             "latent_steps": args.latent_steps,
             "question_selection_seed": args.probe_seed,
-            "alignments": list(ALIGNMENTS),
-            "recurrence": "soft_kernel_and_greedy_text_feedback_comparison_v4",
+            "alignments": list(args.alignments),
+            "recurrence": "soft_kernel_feedback_comparison_v5",
             "alignment_config": {
                 "linear_ridge": args.align_ridge,
                 "kernel_features": args.kernel_features,
@@ -446,9 +479,15 @@ def expected_manifest(args, indexed_items, wrapper):
             ),
             "generation": {
                 "do_sample": False,
-                "decoding": "greedy",
-                "text_generation_performed": True,
-                "text_decoding": "greedy_fixed_step_count",
+                "decoding": (
+                    "greedy" if "text" in args.alignments else "not_applicable"
+                ),
+                "text_generation_performed": "text" in args.alignments,
+                "text_decoding": (
+                    "greedy_fixed_step_count"
+                    if "text" in args.alignments
+                    else "not_applicable"
+                ),
             },
             "trust_remote_code": bool(args.trust_remote_code),
 
@@ -510,7 +549,7 @@ def validate_trajectory(trajectory, manifest, args):
     expected_pairs = {
         (item_id, alignment)
         for item_id in manifest.get("cache_identity", {}).get("question_ids", [])
-        for alignment in ALIGNMENTS
+        for alignment in args.alignments
     }
     actual_pairs = {
         (record.get("item_id"), record.get("alignment")) for record in records
@@ -571,7 +610,7 @@ def load_or_collect(args, indexed_items, wrapper, logger):
             "dataset": args.dataset,
             "split": args.split,
             "latent_steps": args.latent_steps,
-            "alignments": list(ALIGNMENTS),
+            "alignments": list(args.alignments),
             "prompt_template_version": prompt_template_version(args.dataset),
             "trajectory_is_complete": all(r["rollout_complete"] for r in records),
         }
@@ -752,7 +791,7 @@ def plot_summary(summaries, path, context):
         "text": "#e45756",
     }
     for axis, dataset in zip(flat_axes, datasets):
-        for alignment in ALIGNMENTS:
+        for alignment in summaries[dataset]["alignments"]:
             steps = summaries[dataset]["alignments"][alignment]["steps"]
             x = np.array([row["step"] for row in steps])
             mean = np.array(
@@ -792,7 +831,7 @@ def plot_summary(summaries, path, context):
         axis.set_visible(False)
     flat_axes[0].set_ylabel("Output entropy (nats)")
     figure.suptitle(
-        "C0: entropy by latent and text recurrence\n"
+        "C0: entropy by soft and kernel recurrence\n"
         "Solid lines: mean across questions; shaded bands: 95% bootstrap CI"
     )
     figure.tight_layout()
@@ -825,6 +864,44 @@ def create_run_dir(args):
         suffix += 1
     path.mkdir(parents=True)
     return path
+
+
+def c0_cell_command(args, model_name, repeat_seed):
+    """Build one isolated C0 model/seed process for reliable GPU cleanup."""
+    command = [
+        sys.executable,
+        "-u",
+        str(Path(__file__).resolve()),
+        "--study", "c0",
+        "--c0_single_cell",
+        "--model_name", str(model_name),
+        "--dataset", args.dataset,
+        "--split", args.split,
+        "--max_questions", str(args.max_questions),
+        "--latent_steps", str(args.latent_steps),
+        "--alignments", *args.alignments,
+        "--repeat_seeds", str(repeat_seed),
+        "--probe_seed", str(repeat_seed),
+        "--kernel_seed", str(repeat_seed),
+        "--bootstrap_replicates", str(args.bootstrap_replicates),
+        "--entropy_chunk_size", str(args.entropy_chunk_size),
+        "--kernel_features", str(args.kernel_features),
+        "--kernel_temperature", str(args.kernel_temperature),
+        "--kernel_chunk_size", str(args.kernel_chunk_size),
+        "--soft_chunk_size", str(args.soft_chunk_size),
+        "--align_ridge", str(args.align_ridge),
+        "--max_new_tokens", str(args.max_new_tokens),
+        "--temperature", str(args.temperature),
+        "--top_p", str(args.top_p),
+        "--device", str(args.device),
+        "--trust_remote_code" if args.trust_remote_code else "--no-trust_remote_code",
+        "--think" if args.think else "--no-think",
+    ]
+    if args.reuse_trajectory:
+        command.append("--reuse_trajectory")
+    if args.force_recollect:
+        command.append("--force_recollect")
+    return command
 
 
 def main(argv=None):
@@ -870,6 +947,23 @@ def main(argv=None):
             )
             run_directories.append(run_mas_study(dataset_args, logger, model_holder))
         return run_directories[0] if len(run_directories) == 1 else run_directories
+    if not args.c0_single_cell:
+        cell_count = len(args.model_names) * len(args.repeat_seeds)
+        completed = []
+        for index, model_name in enumerate(args.model_names, start=1):
+            for repeat_seed in args.repeat_seeds:
+                logger.info(
+                    "C0 matrix cell %d/%d started: model=%s seed=%d.",
+                    len(completed) + 1,
+                    cell_count,
+                    model_name,
+                    repeat_seed,
+                )
+                command = c0_cell_command(args, model_name, repeat_seed)
+                subprocess.run(command, cwd=ROOT, check=True)
+                completed.append({"model_name": model_name, "seed": repeat_seed})
+        logger.info("C0 matrix completed: %s", completed)
+        return completed
     run_dir = create_run_dir(args)
     run_manifest_path = run_dir / "run_manifest.json"
     started = time.time()
@@ -920,7 +1014,7 @@ def main(argv=None):
                     [row for row in rows if row["alignment"] == alignment],
                     dataset_args,
                 )
-                for alignment in ALIGNMENTS
+                for alignment in dataset_args.alignments
             }
             summary = {
                 "dataset": dataset,
@@ -985,7 +1079,7 @@ def main(argv=None):
             "split": args.split,
             "question_selection_seed": args.probe_seed,
             "latent_steps": args.latent_steps,
-            "alignments": list(ALIGNMENTS),
+            "alignments": list(args.alignments),
             "metrics": str(metrics_path),
             "summary": str(summary_path),
         }
@@ -998,7 +1092,7 @@ def main(argv=None):
                 if row["dataset"] == dataset and row["alignment"] == alignment
             )
             for dataset in datasets
-            for alignment in ALIGNMENTS
+            for alignment in args.alignments
         }
         if any(count == 0 for count in valid_rows_by_series.values()):
             failed = [name for name, count in valid_rows_by_series.items() if not count]
@@ -1016,9 +1110,17 @@ def main(argv=None):
                 "tokenizer_fingerprint": first_summary["tokenizer_fingerprint"],
                 "generation": {
                     "do_sample": False,
-                    "decoding": "greedy",
-                    "text_generation_performed": True,
-                    "text_decoding": "greedy_fixed_step_count",
+                    "decoding": (
+                        "greedy"
+                        if "text" in args.alignments
+                        else "not_applicable"
+                    ),
+                    "text_generation_performed": "text" in args.alignments,
+                    "text_decoding": (
+                        "greedy_fixed_step_count"
+                        if "text" in args.alignments
+                        else "not_applicable"
+                    ),
                 },
                 "output_embedding_has_bias": first_summary[
                     "output_embedding_has_bias"
