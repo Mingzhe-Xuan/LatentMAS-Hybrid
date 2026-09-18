@@ -187,11 +187,11 @@ class MasArgumentTests(unittest.TestCase):
         args = load_parse_args()(["--study", "c2", "--dataset", "aime2025"])
         self.assertEqual(args.dataset, "aime2025")
 
-    def test_c0_defaults_remain_backward_compatible(self):
+    def test_c0_defaults_match_recollection_contract(self):
         args = load_parse_args()([])
-        self.assertEqual(args.model_name, "Qwen/Qwen3-4B")
+        self.assertEqual(args.model_name, "Qwen/Qwen3-8B")
         self.assertEqual(args.dataset, "all")
-        self.assertEqual(args.max_questions, 512)
+        self.assertEqual(args.max_questions, 50)
 
 
 class MasCacheTests(unittest.TestCase):

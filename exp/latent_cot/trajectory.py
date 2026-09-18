@@ -22,40 +22,19 @@ ALIGNMENTS = ("identical", "linear", "soft", "kernel", "text")
 SYSTEM_PROMPT = (
     "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
 )
-PROMPT_TEMPLATES = {
-    "gsm8k": {
-        "version": "c0_gsm8k_question_v1",
-        "user_template": """Solve the following math problem. Reason step by step.
+PLANNER_USER_TEMPLATE = """You are a Planner Agent. Given an input question, design a clear, step-by-step plan for how to solve the question.
 
 Question: {question}
 
-Work out the solution carefully.""",
-    },
-    "mbppplus": {
-        "version": "c0_mbppplus_question_v1",
-        "user_template": """Solve the following Python programming problem. Reason step by step.
-
-Task: {question}
-
-Work out a correct and self-contained solution carefully.""",
-    },
-    "arc_challenge": {
-        "version": "c0_arc_challenge_question_v1",
-        "user_template": """Solve the following science multiple-choice problem. Reason step by step.
-
-Question and choices:
-{question}
-
-Work out the solution carefully and identify the correct option.""",
-    },
-    "aime2025": {
-        "version": "c0_aime2025_question_v1",
-        "user_template": """Solve the following AIME mathematics problem. Reason step by step.
-
-Problem: {question}
-
-Work out the solution carefully and give the final integer answer.""",
-    },
+Your outlined plan should be concise with a few bulletpoints for each step. Do not produce the final answer.
+Now output your plan to solve the question below:
+"""
+PROMPT_TEMPLATES = {
+    dataset: {
+        "version": f"c0_{dataset}_sequential_planner_v1",
+        "user_template": PLANNER_USER_TEMPLATE,
+    }
+    for dataset in ("aime2024", "humanevalplus", "medqa")
 }
 
 

@@ -1,0 +1,401 @@
+{
+  "study": "c6",
+  "sampling_unit": "one sampled prefix position within each question",
+  "uncertainty_unit": "question-cluster bootstrap",
+  "datasets": {
+    "aime2025": {
+      "linear|text": {
+        "rows": 3000,
+        "questions": 30,
+        "sampled_token_equal": {
+          "mean": 0.332,
+          "median": 0.0,
+          "ci95_low": 0.311,
+          "ci95_high": 0.35267500000000007
+        },
+        "top5_overlap_fraction": {
+          "mean": 0.3072666666666667,
+          "median": 0.2,
+          "ci95_low": 0.299665,
+          "ci95_high": 0.3144666666666666
+        },
+        "top5_any_overlap": {
+          "mean": 0.7423333333333333,
+          "median": 1.0,
+          "ci95_low": 0.7256666666666668,
+          "ci95_high": 0.7569999999999999
+        },
+        "top10_overlap_fraction": {
+          "mean": 0.30223333333333335,
+          "median": 0.3,
+          "ci95_low": 0.2925991666666667,
+          "ci95_high": 0.31089999999999995
+        },
+        "kl_left_right_nats": {
+          "mean": 19.995745611199258,
+          "median": 22.99745750427246,
+          "ci95_low": 19.40874088194588,
+          "ci95_high": 20.651220840973323
+        },
+        "kl_right_left_nats": {
+          "mean": 5.983432326814931,
+          "median": 3.6826868057250977,
+          "ci95_low": 5.658439023236404,
+          "ci95_high": 6.309880304377451
+        },
+        "symmetric_kl_nats": {
+          "mean": 12.989588969007096,
+          "median": 14.439269781112671,
+          "ci95_low": 12.610246713780665,
+          "ci95_high": 13.4316561082067
+        }
+      },
+      "kernel|text": {
+        "rows": 3000,
+        "questions": 30,
+        "sampled_token_equal": {
+          "mean": 0.06266666666666666,
+          "median": 0.0,
+          "ci95_low": 0.05233333333333334,
+          "ci95_high": 0.07433333333333333
+        },
+        "top5_overlap_fraction": {
+          "mean": 0.11406666666666666,
+          "median": 0.0,
+          "ci95_low": 0.10399666666666668,
+          "ci95_high": 0.12567166666666665
+        },
+        "top5_any_overlap": {
+          "mean": 0.395,
+          "median": 0.0,
+          "ci95_low": 0.3703333333333333,
+          "ci95_high": 0.422
+        },
+        "top10_overlap_fraction": {
+          "mean": 0.13263333333333333,
+          "median": 0.1,
+          "ci95_low": 0.12360000000000002,
+          "ci95_high": 0.14243750000000002
+        },
+        "kl_left_right_nats": {
+          "mean": 34.99872538298806,
+          "median": 37.06245040893555,
+          "ci95_low": 34.30700151345619,
+          "ci95_high": 35.66783472836733
+        },
+        "kl_right_left_nats": {
+          "mean": 20.281720317399216,
+          "median": 19.510122299194336,
+          "ci95_low": 19.396582067377306,
+          "ci95_high": 21.12116606586248
+        },
+        "symmetric_kl_nats": {
+          "mean": 27.640222850193638,
+          "median": 28.92082166671753,
+          "ci95_low": 27.015213062005003,
+          "ci95_high": 28.20309900668435
+        }
+      },
+      "linear|soft": {
+        "rows": 3000,
+        "questions": 30,
+        "sampled_token_equal": {
+          "mean": 0.33466666666666667,
+          "median": 0.0,
+          "ci95_low": 0.3156583333333333,
+          "ci95_high": 0.354
+        },
+        "top5_overlap_fraction": {
+          "mean": 0.3084,
+          "median": 0.2,
+          "ci95_low": 0.300465,
+          "ci95_high": 0.3155333333333333
+        },
+        "top5_any_overlap": {
+          "mean": 0.7426666666666667,
+          "median": 1.0,
+          "ci95_low": 0.7253333333333335,
+          "ci95_high": 0.759
+        },
+        "top10_overlap_fraction": {
+          "mean": 0.3035666666666667,
+          "median": 0.3,
+          "ci95_low": 0.29466666666666674,
+          "ci95_high": 0.31220083333333337
+        },
+        "kl_left_right_nats": {
+          "mean": 19.867641721493584,
+          "median": 22.475318908691406,
+          "ci95_low": 19.23615136593896,
+          "ci95_high": 20.525551391185534
+        },
+        "kl_right_left_nats": {
+          "mean": 5.979418759523127,
+          "median": 3.699199676513672,
+          "ci95_low": 5.666144659628142,
+          "ci95_high": 6.294434275289135
+        },
+        "symmetric_kl_nats": {
+          "mean": 12.923530240508354,
+          "median": 14.32607614994049,
+          "ci95_low": 12.505521613953505,
+          "ci95_high": 13.353718594921462
+        }
+      },
+      "kernel|soft": {
+        "rows": 3000,
+        "questions": 30,
+        "sampled_token_equal": {
+          "mean": 0.06366666666666666,
+          "median": 0.0,
+          "ci95_low": 0.052666666666666674,
+          "ci95_high": 0.07566666666666665
+        },
+        "top5_overlap_fraction": {
+          "mean": 0.11420000000000001,
+          "median": 0.0,
+          "ci95_low": 0.10293333333333335,
+          "ci95_high": 0.1254
+        },
+        "top5_any_overlap": {
+          "mean": 0.3953333333333333,
+          "median": 0.0,
+          "ci95_low": 0.3703249999999999,
+          "ci95_high": 0.4223333333333334
+        },
+        "top10_overlap_fraction": {
+          "mean": 0.13313333333333333,
+          "median": 0.1,
+          "ci95_low": 0.12380000000000001,
+          "ci95_high": 0.14363416666666667
+        },
+        "kl_left_right_nats": {
+          "mean": 34.911215323153435,
+          "median": 37.024972915649414,
+          "ci95_low": 34.25934402265027,
+          "ci95_high": 35.62367038158376
+        },
+        "kl_right_left_nats": {
+          "mean": 20.295702277572428,
+          "median": 19.510122299194336,
+          "ci95_low": 19.4363389750005,
+          "ci95_high": 21.16794889452891
+        },
+        "symmetric_kl_nats": {
+          "mean": 27.603458800362933,
+          "median": 28.891589403152466,
+          "ci95_low": 26.97402787989643,
+          "ci95_high": 28.172233887763003
+        }
+      }
+    },
+    "mbppplus": {
+      "linear|text": {
+        "rows": 5000,
+        "questions": 50,
+        "sampled_token_equal": {
+          "mean": 0.3658,
+          "median": 0.0,
+          "ci95_low": 0.3476000000000001,
+          "ci95_high": 0.38439999999999996
+        },
+        "top5_overlap_fraction": {
+          "mean": 0.31884000000000007,
+          "median": 0.2,
+          "ci95_low": 0.309158,
+          "ci95_high": 0.328921
+        },
+        "top5_any_overlap": {
+          "mean": 0.7114,
+          "median": 1.0,
+          "ci95_low": 0.6949949999999998,
+          "ci95_high": 0.7280049999999999
+        },
+        "top10_overlap_fraction": {
+          "mean": 0.31536000000000003,
+          "median": 0.3,
+          "ci95_low": 0.30635799999999996,
+          "ci95_high": 0.3249
+        },
+        "kl_left_right_nats": {
+          "mean": 22.639319270260287,
+          "median": 23.46076488494873,
+          "ci95_low": 21.896774581957114,
+          "ci95_high": 23.38559269417827
+        },
+        "kl_right_left_nats": {
+          "mean": 8.216169358829223,
+          "median": 5.001754283905029,
+          "ci95_low": 7.840766264623024,
+          "ci95_high": 8.592516063327452
+        },
+        "symmetric_kl_nats": {
+          "mean": 15.427744314544755,
+          "median": 15.864197015762329,
+          "ci95_low": 14.8613493439325,
+          "ci95_high": 15.943405668016814
+        }
+      },
+      "kernel|text": {
+        "rows": 5000,
+        "questions": 50,
+        "sampled_token_equal": {
+          "mean": 0.0402,
+          "median": 0.0,
+          "ci95_low": 0.032400000000000005,
+          "ci95_high": 0.049199999999999994
+        },
+        "top5_overlap_fraction": {
+          "mean": 0.06116,
+          "median": 0.0,
+          "ci95_low": 0.053799,
+          "ci95_high": 0.068401
+        },
+        "top5_any_overlap": {
+          "mean": 0.214,
+          "median": 0.0,
+          "ci95_low": 0.19099499999999997,
+          "ci95_high": 0.237005
+        },
+        "top10_overlap_fraction": {
+          "mean": 0.0749,
+          "median": 0.0,
+          "ci95_low": 0.067299,
+          "ci95_high": 0.0827205
+        },
+        "kl_left_right_nats": {
+          "mean": 42.99419464585435,
+          "median": 44.87582588195801,
+          "ci95_low": 42.434214860988014,
+          "ci95_high": 43.536319365582024
+        },
+        "kl_right_left_nats": {
+          "mean": 29.222870877431497,
+          "median": 31.187498092651367,
+          "ci95_low": 28.30576667296327,
+          "ci95_high": 30.10474795882975
+        },
+        "symmetric_kl_nats": {
+          "mean": 36.10853276164292,
+          "median": 37.95311880111694,
+          "ci95_low": 35.44319271380884,
+          "ci95_high": 36.748652858451614
+        }
+      },
+      "linear|soft": {
+        "rows": 5000,
+        "questions": 50,
+        "sampled_token_equal": {
+          "mean": 0.3662,
+          "median": 0.0,
+          "ci95_low": 0.34959499999999993,
+          "ci95_high": 0.385
+        },
+        "top5_overlap_fraction": {
+          "mean": 0.31892000000000004,
+          "median": 0.2,
+          "ci95_low": 0.309398,
+          "ci95_high": 0.328562
+        },
+        "top5_any_overlap": {
+          "mean": 0.712,
+          "median": 1.0,
+          "ci95_low": 0.6953949999999999,
+          "ci95_high": 0.728605
+        },
+        "top10_overlap_fraction": {
+          "mean": 0.31554,
+          "median": 0.3,
+          "ci95_low": 0.3063195,
+          "ci95_high": 0.3247805
+        },
+        "kl_left_right_nats": {
+          "mean": 22.61567775006748,
+          "median": 23.418734550476074,
+          "ci95_low": 21.861371908166856,
+          "ci95_high": 23.361502335087025
+        },
+        "kl_right_left_nats": {
+          "mean": 8.224013347437086,
+          "median": 5.006717920303345,
+          "ci95_low": 7.860299387570313,
+          "ci95_high": 8.591417517818895
+        },
+        "symmetric_kl_nats": {
+          "mean": 15.419845548752281,
+          "median": 15.84425139427185,
+          "ci95_low": 14.920948549529905,
+          "ci95_high": 15.939174848770696
+        }
+      },
+      "kernel|soft": {
+        "rows": 5000,
+        "questions": 50,
+        "sampled_token_equal": {
+          "mean": 0.0402,
+          "median": 0.0,
+          "ci95_low": 0.032,
+          "ci95_high": 0.04880000000000001
+        },
+        "top5_overlap_fraction": {
+          "mean": 0.061360000000000005,
+          "median": 0.0,
+          "ci95_low": 0.054359,
+          "ci95_high": 0.06832099999999999
+        },
+        "top5_any_overlap": {
+          "mean": 0.2146,
+          "median": 0.0,
+          "ci95_low": 0.19299,
+          "ci95_high": 0.23720499999999997
+        },
+        "top10_overlap_fraction": {
+          "mean": 0.07502,
+          "median": 0.0,
+          "ci95_low": 0.0676195,
+          "ci95_high": 0.08306100000000002
+        },
+        "kl_left_right_nats": {
+          "mean": 42.973807811407376,
+          "median": 44.875,
+          "ci95_low": 42.36320557704611,
+          "ci95_high": 43.558740477281354
+        },
+        "kl_right_left_nats": {
+          "mean": 29.227548667473577,
+          "median": 31.187515258789062,
+          "ci95_low": 28.333906332343513,
+          "ci95_high": 30.19795110849949
+        },
+        "symmetric_kl_nats": {
+          "mean": 36.100678239440484,
+          "median": 37.93738317489624,
+          "ci95_low": 35.40580770596608,
+          "ci95_high": 36.7876149323139
+        }
+      }
+    }
+  },
+  "prefix_replay_audit": {
+    "aime2025": {
+      "prefixes": 3000,
+      "cosine_min": 0.9983988404273987,
+      "cosine_median": 1.0000004768371582,
+      "max_abs_max": 2.5,
+      "below_tolerance": 0,
+      "below_tolerance_fraction": 0.0,
+      "tolerance": 0.98,
+      "strict": false
+    },
+    "mbppplus": {
+      "prefixes": 5000,
+      "cosine_min": 0.9982462525367737,
+      "cosine_median": 0.9999568164348602,
+      "max_abs_max": 2.25,
+      "below_tolerance": 0,
+      "below_tolerance_fraction": 0.0,
+      "tolerance": 0.98,
+      "strict": false
+    }
+  }
+}

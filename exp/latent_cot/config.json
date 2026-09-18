@@ -1,9 +1,9 @@
 {
   "study": "c0",
-  "model_name": "Qwen/Qwen3-4B",
+  "model_name": "Qwen/Qwen3-8B",
   "dataset": "all",
   "split": "test",
-  "max_questions": 512,
+  "max_questions": 50,
   "latent_steps": 150,
   "probe_seed": 42,
   "bootstrap_replicates": 1000,

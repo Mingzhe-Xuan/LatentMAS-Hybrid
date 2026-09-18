@@ -8,6 +8,7 @@ smoke_test.sh
 exp_result/
 exp_state.txt
 exp/cache/
+trj/
 test_result.txt
 test_state.txt
 state/

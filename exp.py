@@ -153,10 +153,7 @@ def build_command(
         study = resolve("study", "STUDY", "c0")
         model_pair = resolve("model_pair", "MODEL_PAIR", "c0")
         mas_study = study in {"c1", "c2", "c3"}
-        model_name = resolve(
-            "model_name", "MODEL_NAME",
-            "Qwen/Qwen3-8B" if mas_study else "Qwen/Qwen3-4B",
-        )
+        model_name = resolve("model_name", "MODEL_NAME", "Qwen/Qwen3-8B")
         dataset = resolve(
             "dataset", "DATASET", "all"
         )

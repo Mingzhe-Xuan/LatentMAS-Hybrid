@@ -27,7 +27,13 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from data import load_aime2025, load_arc_challenge, load_gsm8k, load_mbppplus
+from data import (
+    load_aime2024,
+    load_aime2025,
+    load_humanevalplus,
+    load_mbppplus,
+    load_medqa,
+)
 from trajectory import (
     ALIGNMENTS,
     collect,
@@ -42,7 +48,7 @@ from utils import auto_device, set_seed
 SCHEMA_VERSION = 4
 OUTPUT_ROOT = ROOT / "exp_result" / "latent_cot"
 RUNS_DIR = OUTPUT_ROOT / "runs"
-TRAJECTORY_DIR = ROOT / "exp" / "cache" / "trajectories"
+TRAJECTORY_DIR = ROOT / "trj"
 
 
 def parse_args(argv=None):
@@ -51,7 +57,14 @@ def parse_args(argv=None):
     parser.add_argument("--model_name", default=None)
     parser.add_argument(
         "--dataset",
-        choices=["all", "gsm8k", "mbppplus", "arc_challenge", "aime2025"],
+        choices=[
+            "all",
+            "aime2024",
+            "humanevalplus",
+            "medqa",
+            "mbppplus",
+            "aime2025",
+        ],
         default=None,
     )
     parser.add_argument("--split", default="test")
@@ -149,13 +162,11 @@ def parse_args(argv=None):
         args.sample_seed = 42
         args.noise_seed_offset = 10000
     if args.model_name is None:
-        args.model_name = (
-            "Qwen/Qwen3-4B" if args.study == "c0" else "Qwen/Qwen3-8B"
-        )
+        args.model_name = "Qwen/Qwen3-8B"
     if args.dataset is None:
         args.dataset = "all"
     if args.max_questions is None:
-        args.max_questions = 512 if args.study == "c0" else 30
+        args.max_questions = 50 if args.study == "c0" else 30
     if args.max_new_tokens is None:
         # Preserve C0's historical limit while making the end-to-end MAS
         # studies comparable to run.sh's AIME2025 configuration.
@@ -197,6 +208,15 @@ def parse_args(argv=None):
         "aime2025",
     }:
         parser.error("C1/C2/C3 require --dataset all, mbppplus, or aime2025")
+    if args.study == "c0" and args.dataset not in {
+        "all",
+        "aime2024",
+        "humanevalplus",
+        "medqa",
+    }:
+        parser.error(
+            "C0 requires --dataset all, aime2024, humanevalplus, or medqa"
+        )
     if args.max_new_tokens < 1:
         parser.error("--max_new_tokens must be positive")
     if args.reuse_trajectory and args.force_recollect:
@@ -333,20 +353,21 @@ def trajectory_paths(args):
 
 def selected_datasets(args):
     if args.dataset == "all":
-        return ("gsm8k", "mbppplus", "arc_challenge", "aime2025")
+        return ("aime2024", "humanevalplus", "medqa")
     return (args.dataset,)
 
 
 def resolved_dataset_split(dataset, requested_split):
-    # The Hugging Face AIME 2025 dataset exposes its evaluation set as `train`.
-    return "train" if dataset == "aime2025" else requested_split
+    # The Hugging Face AIME datasets expose their evaluation sets as `train`.
+    return "train" if dataset in {"aime2024", "aime2025"} else requested_split
 
 
 def sampled_items(args):
     loaders = {
-        "gsm8k": load_gsm8k,
+        "aime2024": load_aime2024,
+        "humanevalplus": load_humanevalplus,
+        "medqa": load_medqa,
         "mbppplus": load_mbppplus,
-        "arc_challenge": load_arc_challenge,
         "aime2025": load_aime2025,
     }
     indexed = list(enumerate(loaders[args.dataset](split=args.split)))
@@ -717,9 +738,10 @@ def plot_summary(summaries, path, context):
     )
     flat_axes = [axis for row in axes for axis in row]
     display_names = {
-        "gsm8k": "GSM8K",
+        "aime2024": "AIME 2024",
+        "humanevalplus": "HumanEval+",
+        "medqa": "MedQA",
         "mbppplus": "MBPP+",
-        "arc_challenge": "ARC-Challenge",
         "aime2025": "AIME 2025",
     }
     colors = {

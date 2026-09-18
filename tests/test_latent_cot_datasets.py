@@ -21,7 +21,12 @@ RUN_SOURCE = ROOT / "exp" / "latent_cot" / "run.py"
 def load_prompt_functions():
     tree = ast.parse(TRAJECTORY_SOURCE.read_text(encoding="utf-8"))
     selected = []
-    wanted_assignments = {"ALIGNMENTS", "SYSTEM_PROMPT", "PROMPT_TEMPLATES"}
+    wanted_assignments = {
+        "ALIGNMENTS",
+        "SYSTEM_PROMPT",
+        "PLANNER_USER_TEMPLATE",
+        "PROMPT_TEMPLATES",
+    }
     wanted_functions = {
         "prompt_template_version",
         "prompt_messages",
@@ -53,9 +58,10 @@ def load_prompt_functions():
 
 
 def load_run_functions(
-    gsm8k_loader,
-    mbppplus_loader,
-    arc_challenge_loader=lambda split: (),
+    aime2024_loader,
+    humanevalplus_loader,
+    medqa_loader,
+    mbppplus_loader=lambda split: (),
     aime2025_loader=lambda split: (),
 ):
     tree = ast.parse(RUN_SOURCE.read_text(encoding="utf-8"))
@@ -67,9 +73,10 @@ def load_run_functions(
         in {"selected_datasets", "resolved_dataset_split", "sampled_items"}
     ]
     namespace = {
-        "load_gsm8k": gsm8k_loader,
+        "load_aime2024": aime2024_loader,
+        "load_humanevalplus": humanevalplus_loader,
+        "load_medqa": medqa_loader,
         "load_mbppplus": mbppplus_loader,
-        "load_arc_challenge": arc_challenge_loader,
         "load_aime2025": aime2025_loader,
         "random": random,
     }
@@ -217,89 +224,72 @@ PROMPTS = load_prompt_functions()
 
 
 class LatentCotPromptTests(unittest.TestCase):
-    def test_gsm8k_prompt_remains_unchanged(self):
-        messages = PROMPTS["prompt_messages"]("What is 2 + 2?", "gsm8k")
-        self.assertEqual(
-            messages[1]["content"],
-            "Solve the following math problem. Reason step by step.\n\n"
-            "Question: What is 2 + 2?\n\n"
-            "Work out the solution carefully.",
-        )
-
-    def test_mbppplus_prompt_uses_parallel_programming_structure(self):
-        messages = PROMPTS["prompt_messages"]("Write add(a, b).", "mbppplus")
+    def test_c0_uses_planner_prompt(self):
+        messages = PROMPTS["prompt_messages"]("What is 2 + 2?", "aime2024")
         content = messages[1]["content"]
-        self.assertIn("Python programming problem", content)
-        self.assertIn("Reason step by step", content)
-        self.assertIn("Task: Write add(a, b).", content)
-        self.assertIn("self-contained solution", content)
+        self.assertIn("You are a Planner Agent", content)
+        self.assertIn("Question: What is 2 + 2?", content)
+        self.assertIn("Do not produce the final answer", content)
 
-    def test_arc_challenge_prompt_preserves_multiple_choice_structure(self):
-        content = PROMPTS["prompt_messages"](
-            "Which is correct?\na: one\nb: two", "arc_challenge"
-        )[1]["content"]
-        self.assertIn("science multiple-choice problem", content)
-        self.assertIn("a: one\nb: two", content)
-        self.assertIn("identify the correct option", content)
-
-    def test_aime2025_prompt_requests_integer_answer(self):
-        content = PROMPTS["prompt_messages"]("Find n.", "aime2025")[1][
-            "content"
-        ]
-        self.assertIn("AIME mathematics problem", content)
-        self.assertIn("final integer answer", content)
+    def test_all_c0_datasets_share_the_planner_prompt(self):
+        prompt_messages = PROMPTS["prompt_messages"]
+        contents = {
+            prompt_messages("same question", dataset)[1]["content"]
+            for dataset in ("aime2024", "humanevalplus", "medqa")
+        }
+        self.assertEqual(len(contents), 1)
 
     def test_dataset_prompts_have_distinct_versions_and_hashes(self):
         version = PROMPTS["prompt_template_version"]
         digest = PROMPTS["prompt_template_sha256"]
-        self.assertEqual(version("gsm8k"), "c0_gsm8k_question_v1")
-        self.assertEqual(version("mbppplus"), "c0_mbppplus_question_v1")
         self.assertEqual(
-            version("arc_challenge"), "c0_arc_challenge_question_v1"
+            version("aime2024"), "c0_aime2024_sequential_planner_v1"
         )
-        self.assertEqual(version("aime2025"), "c0_aime2025_question_v1")
         self.assertEqual(
-            len({digest(name) for name in PROMPTS["PROMPT_TEMPLATES"]}), 4
+            version("humanevalplus"), "c0_humanevalplus_sequential_planner_v1"
+        )
+        self.assertEqual(version("medqa"), "c0_medqa_sequential_planner_v1")
+        self.assertEqual(
+            len({digest(name) for name in PROMPTS["PROMPT_TEMPLATES"]}), 3
         )
 
 
 class LatentCotDatasetDispatchTests(unittest.TestCase):
-    def test_default_all_selects_four_datasets_in_plot_order(self):
-        functions = load_run_functions(lambda split: (), lambda split: ())
-        selected = functions["selected_datasets"](SimpleNamespace(dataset="all"))
-        self.assertEqual(
-            selected, ("gsm8k", "mbppplus", "arc_challenge", "aime2025")
+    def test_default_all_selects_requested_datasets_in_plot_order(self):
+        functions = load_run_functions(
+            lambda split: (), lambda split: (), lambda split: ()
         )
+        selected = functions["selected_datasets"](SimpleNamespace(dataset="all"))
+        self.assertEqual(selected, ("aime2024", "humanevalplus", "medqa"))
 
     def test_single_dataset_selection_remains_available(self):
-        functions = load_run_functions(lambda split: (), lambda split: ())
-        selected = functions["selected_datasets"](
-            SimpleNamespace(dataset="mbppplus")
+        functions = load_run_functions(
+            lambda split: (), lambda split: (), lambda split: ()
         )
-        self.assertEqual(selected, ("mbppplus",))
+        selected = functions["selected_datasets"](
+            SimpleNamespace(dataset="medqa")
+        )
+        self.assertEqual(selected, ("medqa",))
 
-    def test_mbppplus_loader_receives_requested_split(self):
+    def test_humanevalplus_loader_receives_requested_split(self):
         calls = []
 
-        def gsm8k_loader(split):
-            raise AssertionError("GSM8K loader must not be called")
-
-        def mbppplus_loader(split):
+        def humanevalplus_loader(split):
             calls.append(split)
             return ({"question": f"task-{index}"} for index in range(4))
 
         sampled_items = load_run_functions(
-            gsm8k_loader, mbppplus_loader
+            lambda split: (), humanevalplus_loader, lambda split: ()
         )["sampled_items"]
         args = SimpleNamespace(
-            dataset="mbppplus", split="test", probe_seed=42, max_questions=2
+            dataset="humanevalplus", split="test", probe_seed=42, max_questions=2
         )
         rows = sampled_items(args)
         self.assertEqual(calls, ["test"])
         self.assertEqual(len(rows), 2)
         self.assertTrue(all(row[1]["question"].startswith("task-") for row in rows))
 
-    def test_aime2025_uses_train_split_when_test_is_requested(self):
+    def test_aime2024_uses_train_split_when_test_is_requested(self):
         calls = []
 
         def aime2025_loader(split):
@@ -307,11 +297,11 @@ class LatentCotDatasetDispatchTests(unittest.TestCase):
             return ({"question": "aime-task"},)
 
         functions = load_run_functions(
-            lambda split: (), lambda split: (), lambda split: (), aime2025_loader
+            aime2025_loader, lambda split: (), lambda split: ()
         )
-        split = functions["resolved_dataset_split"]("aime2025", "test")
+        split = functions["resolved_dataset_split"]("aime2024", "test")
         args = SimpleNamespace(
-            dataset="aime2025", split=split, probe_seed=42, max_questions=1
+            dataset="aime2024", split=split, probe_seed=42, max_questions=1
         )
         rows = functions["sampled_items"](args)
         self.assertEqual(split, "train")
@@ -320,7 +310,7 @@ class LatentCotDatasetDispatchTests(unittest.TestCase):
 
 
 class LatentCotPlotTests(unittest.TestCase):
-    def test_combined_result_uses_four_labeled_subplots(self):
+    def test_combined_result_uses_three_labeled_subplots(self):
         fake_plot = FakePlot()
         plot_summary = load_plot_summary(fake_plot)
         step = {
@@ -334,10 +324,9 @@ class LatentCotPlotTests(unittest.TestCase):
         series = {alignment: {"steps": [step]} for alignment in alignments}
         plot_summary(
             {
-                "gsm8k": {"alignments": series},
-                "mbppplus": {"alignments": series},
-                "arc_challenge": {"alignments": series},
-                "aime2025": {"alignments": series},
+                "aime2024": {"alignments": series},
+                "humanevalplus": {"alignments": series},
+                "medqa": {"alignments": series},
             },
             ROOT / "unused.pdf",
             {},
@@ -347,10 +336,10 @@ class LatentCotPlotTests(unittest.TestCase):
         self.assertIn("Solid lines: mean across questions", fake_plot.figure.title)
         self.assertIn("shaded bands: 95% bootstrap CI", fake_plot.figure.title)
         self.assertEqual(
-            [axis.title for axis in fake_plot.axes],
-            ["GSM8K", "MBPP+", "ARC-Challenge", "AIME 2025"],
+            [axis.title for axis in fake_plot.axes[:3]],
+            ["AIME 2024", "HumanEval+", "MedQA"],
         )
-        for axis in fake_plot.axes:
+        for axis in fake_plot.axes[:3]:
             self.assertEqual(
                 [line["label"] for line in axis.lines], list(alignments)
             )
@@ -433,7 +422,7 @@ class LatentCotAlignmentTests(unittest.TestCase):
                 7,
                 {"question": "question"},
                 3,
-                "gsm8k",
+                "aime2024",
                 alignment,
                 state,
             )
@@ -463,6 +452,10 @@ class LatentCotAlignmentTests(unittest.TestCase):
 
 
 class LatentCotTrajectoryCacheTests(unittest.TestCase):
+    def test_c0_trajectory_files_are_kept_under_repository_trj(self):
+        source = RUN_SOURCE.read_text(encoding="utf-8")
+        self.assertIn('TRAJECTORY_DIR = ROOT / "trj"', source)
+
     def test_legacy_implementation_hash_is_ignored(self):
         compare = load_cache_difference_functions()["trajectory_cache_differences"]
         expected = {
