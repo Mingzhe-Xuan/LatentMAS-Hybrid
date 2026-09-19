@@ -44,7 +44,7 @@ from reasoning_models import resolve_manual_think
 from utils import auto_device, set_seed
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 OUTPUT_ROOT = ROOT / "exp_result" / "latent_cot"
 RUNS_DIR = OUTPUT_ROOT / "runs"
 TRAJECTORY_DIR = ROOT / "trj"
@@ -143,6 +143,14 @@ def parse_args(argv=None):
         action="store_true",
         help="Ignore a compatible cache and collect rollouts again.",
     )
+    parser.add_argument(
+        "--skip_completed_trajectories",
+        action="store_true",
+        help=(
+            "Skip C0 model/seed cells whose trajectory files are all complete; "
+            "within partial cells, reuse complete datasets and recollect incomplete ones."
+        ),
+    )
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument(
         "--trust_remote_code",
@@ -180,7 +188,7 @@ def parse_args(argv=None):
         if args.repeat_seeds is None:
             args.repeat_seeds = [42, 43, 44]
         if args.alignments is None:
-            args.alignments = ["soft", "kernel"]
+            args.alignments = ["linear", "soft", "kernel"]
     else:
         args.model_names = None
         if args.repeat_seeds is None:
@@ -233,8 +241,11 @@ def parse_args(argv=None):
             parser.error("--repeat_seeds must not contain duplicates")
         if not args.model_names or not args.repeat_seeds:
             parser.error("C0 requires at least one model and repeat seed")
-        if set(args.alignments) != {"soft", "kernel"} or len(args.alignments) != 2:
-            parser.error("C0 requires exactly --alignments soft kernel")
+        if (
+            set(args.alignments) != {"linear", "soft", "kernel"}
+            or len(args.alignments) != 3
+        ):
+            parser.error("C0 requires exactly --alignments linear soft kernel")
     if args.study in {"c1", "c2", "c3"} and args.dataset not in {
         "all",
         "mbppplus",
@@ -254,6 +265,13 @@ def parse_args(argv=None):
         parser.error("--max_new_tokens must be positive")
     if args.reuse_trajectory and args.force_recollect:
         parser.error("--reuse_trajectory and --force_recollect are mutually exclusive")
+    if args.skip_completed_trajectories and (
+        args.reuse_trajectory or args.force_recollect
+    ):
+        parser.error(
+            "--skip_completed_trajectories cannot be combined with "
+            "--reuse_trajectory or --force_recollect"
+        )
     if args.max_questions < 1 or args.latent_steps < 1:
         parser.error("--max_questions and --latent_steps must be positive")
     if args.bootstrap_replicates < 1 or args.entropy_chunk_size < 1:
@@ -408,6 +426,84 @@ def sampled_items(args):
     return indexed[: args.max_questions]
 
 
+def trajectory_manifest_is_complete(manifest):
+    record_count = manifest.get("record_count")
+    return (
+        isinstance(record_count, int)
+        and record_count > 0
+        and manifest.get("complete_record_count") == record_count
+        and manifest.get("failed_record_count") == 0
+        and not manifest.get("failed_records_by_reason")
+    )
+
+
+def completed_trajectory_path(args):
+    """Return a complete, statically compatible C0 trajectory, if present."""
+    trajectory_path, manifest_path = trajectory_paths(args)
+    if not trajectory_path.is_file() or not manifest_path.is_file():
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        identity = manifest.get("cache_identity", {})
+        alignment_config = identity.get("alignment_config", {})
+        expected_static = {
+            "experiment": "c0",
+            "dataset": args.dataset,
+            "split": args.split,
+            "model_name": args.model_name,
+            "prompt_template_version": prompt_template_version(args.dataset),
+            "prompt_template_sha256": prompt_template_sha256(args.dataset),
+            "latent_steps": args.latent_steps,
+            "question_selection_seed": args.probe_seed,
+            "alignments": list(args.alignments),
+            "recurrence": "linear_soft_kernel_feedback_comparison_v6",
+            "trust_remote_code": bool(args.trust_remote_code),
+        }
+        expected_alignment = {
+            "linear_ridge": args.align_ridge,
+            "kernel_features": args.kernel_features,
+            "kernel_temperature": args.kernel_temperature,
+            "kernel_seed": args.kernel_seed,
+            "kernel_chunk_size": args.kernel_chunk_size,
+            "soft_chunk_size": args.soft_chunk_size,
+        }
+        if manifest.get("schema_version") != SCHEMA_VERSION:
+            return None
+        if any(identity.get(key) != value for key, value in expected_static.items()):
+            return None
+        if alignment_config != expected_alignment:
+            return None
+        if not trajectory_manifest_is_complete(manifest):
+            return None
+        if file_sha256(trajectory_path) != manifest.get("trajectory_sha256"):
+            return None
+    except (KeyError, OSError, TypeError, ValueError):
+        return None
+    return trajectory_path
+
+
+def completed_c0_cell_paths(args, model_name, repeat_seed):
+    paths = []
+    for dataset in selected_datasets(args):
+        dataset_args = argparse.Namespace(
+            **{
+                **vars(args),
+                "model_name": model_name,
+                "model_names": [model_name],
+                "repeat_seeds": [repeat_seed],
+                "probe_seed": repeat_seed,
+                "kernel_seed": repeat_seed,
+                "dataset": dataset,
+                "split": resolved_dataset_split(dataset, args.split),
+            }
+        )
+        path = completed_trajectory_path(dataset_args)
+        if path is None:
+            return None
+        paths.append(path)
+    return paths
+
+
 def tokenizer_fingerprint(tokenizer):
     payload = {
         "vocab": sorted(tokenizer.get_vocab().items()),
@@ -465,7 +561,7 @@ def expected_manifest(args, indexed_items, wrapper):
             "latent_steps": args.latent_steps,
             "question_selection_seed": args.probe_seed,
             "alignments": list(args.alignments),
-            "recurrence": "soft_kernel_feedback_comparison_v5",
+            "recurrence": "linear_soft_kernel_feedback_comparison_v6",
             "alignment_config": {
                 "linear_ridge": args.align_ridge,
                 "kernel_features": args.kernel_features,
@@ -579,24 +675,68 @@ def load_or_collect(args, indexed_items, wrapper, logger):
     expected = expected_manifest(args, indexed_items, wrapper)
     trajectory_path, manifest_path = trajectory_paths(args)
     have_pt, have_manifest = trajectory_path.exists(), manifest_path.exists()
-    if have_pt != have_manifest and not args.force_recollect:
+    if (
+        have_pt != have_manifest
+        and not args.force_recollect
+        and not args.skip_completed_trajectories
+    ):
         raise RuntimeError(
             f"Incomplete C0 trajectory cache; use --force_recollect: {trajectory_path}"
         )
     cache_hit = have_pt and have_manifest and not args.force_recollect
     if cache_hit:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        differences = trajectory_cache_differences(expected, manifest)
-        if differences:
-            raise RuntimeError(
-                "Refusing incompatible C0 trajectory cache:\n"
-                + json.dumps(differences, indent=2, ensure_ascii=False, default=str)
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError):
+            if args.skip_completed_trajectories:
+                cache_hit = False
+                logger.info(
+                    "C0 unreadable trajectory manifest will be recollected: %s",
+                    trajectory_path,
+                )
+            else:
+                raise
+        if cache_hit:
+            differences = trajectory_cache_differences(expected, manifest)
+            if differences:
+                if args.skip_completed_trajectories:
+                    cache_hit = False
+                    logger.info(
+                        "C0 incompatible trajectory will be recollected: %s",
+                        trajectory_path,
+                    )
+                else:
+                    raise RuntimeError(
+                        "Refusing incompatible C0 trajectory cache:\n"
+                        + json.dumps(
+                            differences,
+                            indent=2,
+                            ensure_ascii=False,
+                            default=str,
+                        )
+                    )
+        if cache_hit:
+            actual_sha = file_sha256(trajectory_path)
+            if actual_sha != manifest.get("trajectory_sha256"):
+                if args.skip_completed_trajectories:
+                    cache_hit = False
+                    logger.info(
+                        "C0 corrupt trajectory will be recollected: %s",
+                        trajectory_path,
+                    )
+                else:
+                    raise RuntimeError("C0 trajectory SHA256 integrity check failed.")
+        if cache_hit and (
+            args.skip_completed_trajectories
+            and not trajectory_manifest_is_complete(manifest)
+        ):
+            cache_hit = False
+            logger.info(
+                "C0 incomplete trajectory will be recollected: %s", trajectory_path
             )
-        actual_sha = file_sha256(trajectory_path)
-        if actual_sha != manifest.get("trajectory_sha256"):
-            raise RuntimeError("C0 trajectory SHA256 integrity check failed.")
-        logger.info("C0 Phase A skipped: reusing %s", trajectory_path)
-    else:
+        elif cache_hit:
+            logger.info("C0 Phase A skipped: reusing %s", trajectory_path)
+    if not cache_hit:
         if args.reuse_trajectory:
             raise FileNotFoundError(
                 f"--reuse_trajectory requested but cache is absent: {trajectory_path}"
@@ -831,7 +971,7 @@ def plot_summary(summaries, path, context):
         axis.set_visible(False)
     flat_axes[0].set_ylabel("Output entropy (nats)")
     figure.suptitle(
-        "C0: entropy by soft and kernel recurrence\n"
+        "C0: entropy by linear, soft, and kernel recurrence\n"
         "Solid lines: mean across questions; shaded bands: 95% bootstrap CI"
     )
     figure.tight_layout()
@@ -901,6 +1041,8 @@ def c0_cell_command(args, model_name, repeat_seed):
         command.append("--reuse_trajectory")
     if args.force_recollect:
         command.append("--force_recollect")
+    if args.skip_completed_trajectories:
+        command.append("--skip_completed_trajectories")
     return command
 
 
@@ -950,8 +1092,30 @@ def main(argv=None):
     if not args.c0_single_cell:
         cell_count = len(args.model_names) * len(args.repeat_seeds)
         completed = []
-        for index, model_name in enumerate(args.model_names, start=1):
+        for model_name in args.model_names:
             for repeat_seed in args.repeat_seeds:
+                if args.skip_completed_trajectories:
+                    existing_paths = completed_c0_cell_paths(
+                        args, model_name, repeat_seed
+                    )
+                    if existing_paths is not None:
+                        logger.info(
+                            "C0 matrix cell %d/%d skipped as complete: "
+                            "model=%s seed=%d paths=%s.",
+                            len(completed) + 1,
+                            cell_count,
+                            model_name,
+                            repeat_seed,
+                            [str(path) for path in existing_paths],
+                        )
+                        completed.append(
+                            {
+                                "model_name": model_name,
+                                "seed": repeat_seed,
+                                "skipped_complete": True,
+                            }
+                        )
+                        continue
                 logger.info(
                     "C0 matrix cell %d/%d started: model=%s seed=%d.",
                     len(completed) + 1,
@@ -961,7 +1125,13 @@ def main(argv=None):
                 )
                 command = c0_cell_command(args, model_name, repeat_seed)
                 subprocess.run(command, cwd=ROOT, check=True)
-                completed.append({"model_name": model_name, "seed": repeat_seed})
+                completed.append(
+                    {
+                        "model_name": model_name,
+                        "seed": repeat_seed,
+                        "skipped_complete": False,
+                    }
+                )
         logger.info("C0 matrix completed: %s", completed)
         return completed
     run_dir = create_run_dir(args)

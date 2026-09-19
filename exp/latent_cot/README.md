@@ -1,13 +1,15 @@
 # C0: alignment-aware latent CoT entropy
 
-C0 compares `soft` and `kernel` recurrence for Qwen3-8B and Qwen3-14B on
-AIME 2024, HumanEval+, and MedQA. The current pre-unembedding hidden state is
-transformed by the selected alignment and fed back through `inputs_embeds`.
+C0 compares `linear`, `soft`, and `kernel` recurrence for Qwen3-8B and
+Qwen3-14B on AIME 2024, HumanEval+, and MedQA. The current pre-unembedding
+hidden state is transformed by the selected alignment and fed back through `inputs_embeds`.
 Entropy is computed from the next pre-unembedding hidden states using
 `softmax(W_out h + b)`.
 
 The mappings use the repository implementations in `alignment.py`:
 
+- `linear`: ridge least-squares mapping from `W_out` to `W_in`, followed by
+  target-norm scaling;
 - `soft`: full-vocabulary `softmax((W_out h + b) / tau) @ W_in`, with no
   token sampling or argmax;
 - `kernel`: ORF positive-feature approximation using the configured feature
@@ -19,7 +21,8 @@ answer. By default, one invocation runs the three datasets in the fixed order
 `aime2024`, `humanevalplus`, `medqa`. The requested split is used for
 HumanEval+ and MedQA; AIME 2024 is resolved to its available `train` split.
 The complete matrix is `2 models × 3 repeat seeds × 3 datasets = 18`
-trajectory files. Repeat seeds are fixed to `42`, `43`, and `44`; each seed
+trajectory files. Each file contains all three alignments. Repeat seeds are
+fixed to `42`, `43`, and `44`; each seed
 controls both question selection and the kernel random features. Every
 model/seed cell runs in an isolated process so GPU memory is released before
 loading the next model. Each dataset contributes one panel to the output
@@ -31,7 +34,7 @@ The default trajectory length is 150 steps (indexed 0 through 149).
 python exp/latent_cot/run.py \
   --study c0 \
   --model_names Qwen/Qwen3-8B Qwen/Qwen3-14B \
-  --repeat_seeds 42 43 44 --alignments soft kernel \
+  --repeat_seeds 42 43 44 --alignments linear soft kernel \
   --split test \
   --max_questions 50 --latent_steps 150 \
   --kernel_features 2048 --kernel_temperature 0.6 \
@@ -44,10 +47,22 @@ PBS submission needs no dataset or alignment argument:
 qsub -v "EXP_TARGET=latent_cot" exp.sh
 ```
 
+For resumable collection, add `--skip_completed_trajectories` to the Python
+entry point, `--skip-completed-trajectories` to `exp.py`/`exp.sh`, or set
+`SKIP_COMPLETED_TRAJECTORIES=1` for PBS. A whole model/seed cell is skipped
+before model loading when all three `.pt` files have compatible complete
+manifests and valid SHA256 hashes. In a partially complete cell, complete
+datasets are reused and missing, partial, or failed datasets are recollected.
+
+```bash
+python exp.py --latent_cot --skip-completed-trajectories
+qsub -v "EXP_TARGET=latent_cot,SKIP_COMPLETED_TRAJECTORIES=1" exp.sh
+```
+
 `--dataset aime2024`, `--dataset humanevalplus`, or `--dataset medqa` remains
 available for single-dataset debugging.
 Old C0 trajectory caches are not compatible; the new cache filename contains
-the model, repeat seed, `soft/kernel` recurrence list, Planner prompt version, and kernel
+the model, repeat seed, `linear/soft/kernel` recurrence list, Planner prompt version, and kernel
 configuration, so no manual deletion is required. Trajectory `.pt` files and
 their integrity manifests are written under the repository-level `trj/`
 directory.
@@ -57,7 +72,7 @@ Each invocation writes under `exp_result/latent_cot/runs/`:
 - `metrics/c0_entropy_by_step.parquet`: one row per dataset, alignment,
   question and step;
 - `summaries/c0_summary.json`: per-dataset and per-alignment statistics;
-- `figures/c0_entropy_vs_step.pdf`: three dataset panels with two colored curves;
+- `figures/c0_entropy_vs_step.pdf`: three dataset panels with three colored curves;
 - `figures/c0_entropy_vs_step.json`: figure provenance and alignment settings;
 - `run_manifest.json`: parameters, cache provenance and failure counts.
 

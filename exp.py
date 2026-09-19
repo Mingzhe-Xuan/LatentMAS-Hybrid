@@ -85,6 +85,11 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the resolved command without launching the experiment.",
     )
+    parser.add_argument(
+        "--skip-completed-trajectories",
+        action="store_true",
+        help="For C0, skip model/seed cells with complete trajectory caches.",
+    )
     return parser
 
 
@@ -222,7 +227,9 @@ def build_command(
         elif study == "c0":
             args.extend(["--model_names", *c0_model_names])
             args.extend(["--repeat_seeds", *c0_repeat_seeds])
-            args.extend(["--alignments", "soft", "kernel"])
+            args.extend(["--alignments", "linear", "soft", "kernel"])
+            if namespace.skip_completed_trajectories:
+                args.append("--skip_completed_trajectories")
         model_summary = (
             " ".join(c0_model_names) if study == "c0" else model_name
         )

@@ -34,6 +34,8 @@ Options override the plan_v2 main-experiment defaults for the selected target:
   --model-name NAME         Run one model in latent_cot C0
   --model-names "NAMES"     Space-separated latent_cot C0 model matrix
   --repeat-seeds "INTS"     Space-separated latent_cot C0 repeat seeds
+  --skip-completed-trajectories
+                            Skip complete latent_cot C0 trajectory cells
   --agent-models "NAMES"    One or four space-separated models for approximator
   --dataset NAME --split NAME
   --method NAME             e.g. identical, linear, kernel, exact, all
@@ -55,6 +57,7 @@ AGENT_MODELS="${AGENT_MODELS:-}"
 MODEL_NAME="${MODEL_NAME:-}"
 C0_MODEL_NAMES="${C0_MODEL_NAMES:-}"
 C0_REPEAT_SEEDS="${C0_REPEAT_SEEDS:-}"
+SKIP_COMPLETED_TRAJECTORIES="${SKIP_COMPLETED_TRAJECTORIES:-0}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -67,6 +70,7 @@ while [[ $# -gt 0 ]]; do
         --model-name) MODEL_NAME="$2"; shift 2 ;;
         --model-names) C0_MODEL_NAMES="$2"; shift 2 ;;
         --repeat-seeds) C0_REPEAT_SEEDS="$2"; shift 2 ;;
+        --skip-completed-trajectories) SKIP_COMPLETED_TRAJECTORIES="1"; shift ;;
         --dataset) DATASET="$2"; shift 2 ;;
         --split) SPLIT="$2"; shift 2 ;;
         --method) METHOD="$2"; shift 2 ;;
@@ -158,7 +162,10 @@ case "${EXP_TARGET}" in
             C0_REPEAT_SEEDS="${C0_REPEAT_SEEDS:-42 43 44}"
             read -r -a C0_MODEL_ARRAY <<< "${C0_MODEL_NAMES}"
             read -r -a C0_SEED_ARRAY <<< "${C0_REPEAT_SEEDS}"
-            ARGS=(--study "${STUDY}" --model_names "${C0_MODEL_ARRAY[@]}" --repeat_seeds "${C0_SEED_ARRAY[@]}" --alignments soft kernel --dataset "${DATASET}" --split "${SPLIT}" --max_questions "${MAX_QUESTIONS}" --latent_steps "${LATENT_STEPS}" --kernel_features "${M}" --kernel_temperature "${TAU}" --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" --align_ridge "${ALIGN_RIDGE}" --device "${DEVICE}")
+            ARGS=(--study "${STUDY}" --model_names "${C0_MODEL_ARRAY[@]}" --repeat_seeds "${C0_SEED_ARRAY[@]}" --alignments linear soft kernel --dataset "${DATASET}" --split "${SPLIT}" --max_questions "${MAX_QUESTIONS}" --latent_steps "${LATENT_STEPS}" --kernel_features "${M}" --kernel_temperature "${TAU}" --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" --align_ridge "${ALIGN_RIDGE}" --device "${DEVICE}")
+            if [[ "${SKIP_COMPLETED_TRAJECTORIES}" == "1" ]]; then
+                ARGS+=(--skip_completed_trajectories)
+            fi
             ORF_SEED="per-repeat:${C0_REPEAT_SEEDS}"
         fi
         ;;

@@ -194,13 +194,21 @@ class MasArgumentTests(unittest.TestCase):
             args.model_names, ["Qwen/Qwen3-8B", "Qwen/Qwen3-14B"]
         )
         self.assertEqual(args.repeat_seeds, [42, 43, 44])
-        self.assertEqual(args.alignments, ["soft", "kernel"])
+        self.assertEqual(args.alignments, ["linear", "soft", "kernel"])
         self.assertEqual(args.dataset, "all")
         self.assertEqual(args.max_questions, 50)
 
     def test_c0_single_model_override_remains_available(self):
         args = load_parse_args()(["--model_name", "custom/model"])
         self.assertEqual(args.model_names, ["custom/model"])
+
+    def test_c0_skip_completed_flag_is_explicit_and_exclusive(self):
+        args = load_parse_args()(["--skip_completed_trajectories"])
+        self.assertTrue(args.skip_completed_trajectories)
+        with self.assertRaises(SystemExit):
+            load_parse_args()(
+                ["--skip_completed_trajectories", "--force_recollect"]
+            )
 
 
 class MasCacheTests(unittest.TestCase):

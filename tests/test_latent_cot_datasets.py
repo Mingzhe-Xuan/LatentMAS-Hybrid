@@ -90,7 +90,11 @@ def load_run_functions(
 
 def load_cache_difference_functions():
     tree = ast.parse(RUN_SOURCE.read_text(encoding="utf-8"))
-    wanted = {"identity_differences", "trajectory_cache_differences"}
+    wanted = {
+        "identity_differences",
+        "trajectory_cache_differences",
+        "trajectory_manifest_is_complete",
+    }
     selected = [
         node
         for node in tree.body
@@ -494,12 +498,31 @@ class LatentCotTrajectoryCacheTests(unittest.TestCase):
             think=True,
             reuse_trajectory=False,
             force_recollect=False,
+            skip_completed_trajectories=True,
         )
         command = load_c0_cell_command()(args, "Qwen/Qwen3-14B", 44)
         self.assertIn("Qwen/Qwen3-14B", command)
         self.assertEqual(command[command.index("--probe_seed") + 1], "44")
         self.assertEqual(command[command.index("--kernel_seed") + 1], "44")
         self.assertEqual(command[command.index("--repeat_seeds") + 1], "44")
+        self.assertIn("--skip_completed_trajectories", command)
+
+    def test_only_zero_failure_complete_manifests_are_skippable(self):
+        is_complete = load_cache_difference_functions()[
+            "trajectory_manifest_is_complete"
+        ]
+        complete = {
+            "record_count": 150,
+            "complete_record_count": 150,
+            "failed_record_count": 0,
+            "failed_records_by_reason": {},
+        }
+        self.assertTrue(is_complete(complete))
+        self.assertFalse(is_complete({**complete, "complete_record_count": 149}))
+        self.assertFalse(is_complete({**complete, "failed_record_count": 1}))
+        self.assertFalse(
+            is_complete({**complete, "failed_records_by_reason": {"oom": 1}})
+        )
 
     def test_legacy_implementation_hash_is_ignored(self):
         compare = load_cache_difference_functions()["trajectory_cache_differences"]

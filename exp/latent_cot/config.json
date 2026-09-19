@@ -35,9 +35,11 @@
     180
   ],
   "alignments": [
+    "linear",
     "soft",
     "kernel"
   ],
+  "skip_completed_trajectories": false,
   "max_new_tokens": 4096,
   "generation_seed": 77
 }
