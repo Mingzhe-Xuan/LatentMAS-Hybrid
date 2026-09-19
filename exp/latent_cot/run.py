@@ -48,6 +48,7 @@ SCHEMA_VERSION = 6
 OUTPUT_ROOT = ROOT / "exp_result" / "latent_cot"
 RUNS_DIR = OUTPUT_ROOT / "runs"
 TRAJECTORY_DIR = ROOT / "trj"
+SKIP_TRAJECTORY_DIR = ROOT / "trj_new"
 
 
 def parse_args(argv=None):
@@ -145,6 +146,8 @@ def parse_args(argv=None):
     )
     parser.add_argument(
         "--skip_completed_trajectories",
+        "--skip_complete_trajectories",
+        dest="skip_completed_trajectories",
         action="store_true",
         help=(
             "Skip C0 model/seed cells whose trajectory files are all complete; "
@@ -374,7 +377,7 @@ def cache_component(value):
     return "v-" + "".join(encoded)
 
 
-def trajectory_paths(args):
+def trajectory_paths(args, directory=None):
     stem = "__".join(
         (
             "c0",
@@ -396,10 +399,20 @@ def trajectory_paths(args):
     )
     if len(stem) + len(".manifest.json") > 240:
         raise ValueError("C0 trajectory cache filename exceeds 240 characters.")
-    return (
-        TRAJECTORY_DIR / f"{stem}.pt",
-        TRAJECTORY_DIR / f"{stem}.manifest.json",
-    )
+    if directory is None:
+        directory = (
+            SKIP_TRAJECTORY_DIR
+            if args.skip_completed_trajectories
+            else TRAJECTORY_DIR
+        )
+    directory = Path(directory)
+    return directory / f"{stem}.pt", directory / f"{stem}.manifest.json"
+
+
+def trajectory_search_directories(args):
+    if args.skip_completed_trajectories:
+        return (SKIP_TRAJECTORY_DIR, TRAJECTORY_DIR)
+    return (TRAJECTORY_DIR,)
 
 
 def selected_datasets(args):
@@ -439,47 +452,52 @@ def trajectory_manifest_is_complete(manifest):
 
 def completed_trajectory_path(args):
     """Return a complete, statically compatible C0 trajectory, if present."""
-    trajectory_path, manifest_path = trajectory_paths(args)
-    if not trajectory_path.is_file() or not manifest_path.is_file():
-        return None
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        identity = manifest.get("cache_identity", {})
-        alignment_config = identity.get("alignment_config", {})
-        expected_static = {
-            "experiment": "c0",
-            "dataset": args.dataset,
-            "split": args.split,
-            "model_name": args.model_name,
-            "prompt_template_version": prompt_template_version(args.dataset),
-            "prompt_template_sha256": prompt_template_sha256(args.dataset),
-            "latent_steps": args.latent_steps,
-            "question_selection_seed": args.probe_seed,
-            "alignments": list(args.alignments),
-            "recurrence": "linear_soft_kernel_feedback_comparison_v6",
-            "trust_remote_code": bool(args.trust_remote_code),
-        }
-        expected_alignment = {
-            "linear_ridge": args.align_ridge,
-            "kernel_features": args.kernel_features,
-            "kernel_temperature": args.kernel_temperature,
-            "kernel_seed": args.kernel_seed,
-            "kernel_chunk_size": args.kernel_chunk_size,
-            "soft_chunk_size": args.soft_chunk_size,
-        }
-        if manifest.get("schema_version") != SCHEMA_VERSION:
-            return None
-        if any(identity.get(key) != value for key, value in expected_static.items()):
-            return None
-        if alignment_config != expected_alignment:
-            return None
-        if not trajectory_manifest_is_complete(manifest):
-            return None
-        if file_sha256(trajectory_path) != manifest.get("trajectory_sha256"):
-            return None
-    except (KeyError, OSError, TypeError, ValueError):
-        return None
-    return trajectory_path
+    for directory in trajectory_search_directories(args):
+        trajectory_path, manifest_path = trajectory_paths(args, directory)
+        if not trajectory_path.is_file() or not manifest_path.is_file():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            identity = manifest.get("cache_identity", {})
+            alignment_config = identity.get("alignment_config", {})
+            expected_static = {
+                "experiment": "c0",
+                "dataset": args.dataset,
+                "split": args.split,
+                "model_name": args.model_name,
+                "prompt_template_version": prompt_template_version(args.dataset),
+                "prompt_template_sha256": prompt_template_sha256(args.dataset),
+                "latent_steps": args.latent_steps,
+                "question_selection_seed": args.probe_seed,
+                "alignments": list(args.alignments),
+                "recurrence": "linear_soft_kernel_feedback_comparison_v6",
+                "trust_remote_code": bool(args.trust_remote_code),
+            }
+            expected_alignment = {
+                "linear_ridge": args.align_ridge,
+                "kernel_features": args.kernel_features,
+                "kernel_temperature": args.kernel_temperature,
+                "kernel_seed": args.kernel_seed,
+                "kernel_chunk_size": args.kernel_chunk_size,
+                "soft_chunk_size": args.soft_chunk_size,
+            }
+            if manifest.get("schema_version") != SCHEMA_VERSION:
+                continue
+            if any(
+                identity.get(key) != value
+                for key, value in expected_static.items()
+            ):
+                continue
+            if alignment_config != expected_alignment:
+                continue
+            if not trajectory_manifest_is_complete(manifest):
+                continue
+            if file_sha256(trajectory_path) != manifest.get("trajectory_sha256"):
+                continue
+        except (KeyError, OSError, TypeError, ValueError):
+            continue
+        return trajectory_path
+    return None
 
 
 def completed_c0_cell_paths(args, model_name, repeat_seed):
@@ -673,7 +691,13 @@ def validate_trajectory(trajectory, manifest, args):
 
 def load_or_collect(args, indexed_items, wrapper, logger):
     expected = expected_manifest(args, indexed_items, wrapper)
-    trajectory_path, manifest_path = trajectory_paths(args)
+    output_trajectory_path, output_manifest_path = trajectory_paths(args)
+    trajectory_path, manifest_path = output_trajectory_path, output_manifest_path
+    if args.skip_completed_trajectories:
+        completed_path = completed_trajectory_path(args)
+        if completed_path is not None:
+            trajectory_path = completed_path
+            manifest_path = completed_path.with_suffix(".manifest.json")
     have_pt, have_manifest = trajectory_path.exists(), manifest_path.exists()
     if (
         have_pt != have_manifest
@@ -737,6 +761,8 @@ def load_or_collect(args, indexed_items, wrapper, logger):
         elif cache_hit:
             logger.info("C0 Phase A skipped: reusing %s", trajectory_path)
     if not cache_hit:
+        trajectory_path = output_trajectory_path
+        manifest_path = output_manifest_path
         if args.reuse_trajectory:
             raise FileNotFoundError(
                 f"--reuse_trajectory requested but cache is absent: {trajectory_path}"

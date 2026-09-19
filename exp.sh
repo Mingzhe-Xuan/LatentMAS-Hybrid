@@ -70,7 +70,7 @@ while [[ $# -gt 0 ]]; do
         --model-name) MODEL_NAME="$2"; shift 2 ;;
         --model-names) C0_MODEL_NAMES="$2"; shift 2 ;;
         --repeat-seeds) C0_REPEAT_SEEDS="$2"; shift 2 ;;
-        --skip-completed-trajectories) SKIP_COMPLETED_TRAJECTORIES="1"; shift ;;
+        --skip-completed-trajectories|--skip-complete-trajectories) SKIP_COMPLETED_TRAJECTORIES="1"; shift ;;
         --dataset) DATASET="$2"; shift 2 ;;
         --split) SPLIT="$2"; shift 2 ;;
         --method) METHOD="$2"; shift 2 ;;

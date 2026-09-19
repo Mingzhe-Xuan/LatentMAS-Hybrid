@@ -51,8 +51,11 @@ For resumable collection, add `--skip_completed_trajectories` to the Python
 entry point, `--skip-completed-trajectories` to `exp.py`/`exp.sh`, or set
 `SKIP_COMPLETED_TRAJECTORIES=1` for PBS. A whole model/seed cell is skipped
 before model loading when all three `.pt` files have compatible complete
-manifests and valid SHA256 hashes. In a partially complete cell, complete
-datasets are reused and missing, partial, or failed datasets are recollected.
+manifests and valid SHA256 hashes. Complete inputs are searched first in
+`trj_new/` and then in `trj/`. In a partially complete cell, complete datasets
+from either directory are reused, while missing, partial, failed, corrupt, or
+incompatible datasets are recollected exclusively into `trj_new/`; the
+original `trj/` files are never overwritten in this mode.
 
 ```bash
 python exp.py --latent_cot --skip-completed-trajectories

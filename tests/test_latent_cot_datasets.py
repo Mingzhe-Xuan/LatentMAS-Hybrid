@@ -475,6 +475,8 @@ class LatentCotTrajectoryCacheTests(unittest.TestCase):
     def test_c0_trajectory_files_are_kept_under_repository_trj(self):
         source = RUN_SOURCE.read_text(encoding="utf-8")
         self.assertIn('TRAJECTORY_DIR = ROOT / "trj"', source)
+        self.assertIn('SKIP_TRAJECTORY_DIR = ROOT / "trj_new"', source)
+        self.assertIn("if args.skip_completed_trajectories", source)
 
     def test_matrix_cell_uses_repeat_seed_for_sampling_and_kernel(self):
         args = SimpleNamespace(

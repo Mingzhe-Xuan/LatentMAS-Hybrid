@@ -87,6 +87,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--skip-completed-trajectories",
+        "--skip-complete-trajectories",
+        dest="skip_completed_trajectories",
         action="store_true",
         help="For C0, skip model/seed cells with complete trajectory caches.",
     )
