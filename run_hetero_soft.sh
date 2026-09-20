@@ -1,15 +1,14 @@
 #!/bin/bash
-#PBS -N x_hetero
+#PBS -N x_hetero_soft
 #PBS -P ds_ccds_wei.lu
 #PBS -q gpu_ded
 #PBS -l walltime=72:00:00
 #PBS -l select=1:ncpus=12:ngpus=1
-#PBS -J 1-48%3
+#PBS -J 1-12%3
 #PBS -j oe
 
-# Cross-model TextMAS and latent-alignment matrix used to populate
-# docs/paper.tex table 2.
-# The only agents are a Sender Planner and a Receiver Judger, matching analysis/.
+# Cross-model exact-Soft latent-alignment jobs for the six retained datasets.
+# The only agents are a Sender Planner and a Receiver Judger.
 
 set -euo pipefail
 
@@ -32,7 +31,7 @@ SOFT_CHUNK_SIZE="${SOFT_CHUNK_SIZE:-32}"
 EARLY_STOPPING_LENGTH_THRESHOLD="${EARLY_STOPPING_LENGTH_THRESHOLD:-auto}"
 EARLY_STOPPING_ENTROPY_THRESHOLD="${EARLY_STOPPING_ENTROPY_THRESHOLD:-auto}"
 REPETITION_PENALTY="${REPETITION_PENALTY:-1.10}"
-PROGRESS_FILE="${PROGRESS_FILE:-${SUBMIT_DIR}/state_hetero.txt}"
+PROGRESS_FILE="${PROGRESS_FILE:-${SUBMIT_DIR}/state_hetero_soft.txt}"
 
 # With LATENT_ONLY=false and SEQUENTIAL_INFO_ONLY=false, Planner -> Judger
 # experiments use the complete hidden-state sequence in this exact order:
@@ -47,7 +46,7 @@ for arg in "$@"; do
         --force_all) FORCE_ALL=true ;;
         *)
             echo "ERROR: unknown argument: ${arg}" >&2
-            echo "Usage: bash run_hetero.sh [--force_all]" >&2
+            echo "Usage: bash run_hetero_soft.sh [--force_all]" >&2
             exit 2
             ;;
     esac
@@ -57,14 +56,11 @@ done
 DATASETS=(aime2024 aime2025 gpqa humanevalplus mbppplus medqa)
 SENDERS=("Qwen/Qwen3-14B" "Qwen/Qwen3-8B")
 RECEIVERS=("Qwen/Qwen3-8B" "Qwen/Qwen3-14B")
-METHODS=(text_mas latent_mas_hybrid latent_mas_hybrid latent_mas_hybrid)
-ALIGNMENTS=(identical linear soft kernel)
 PROMPT=sequential
 
 DATASET_COUNT=${#DATASETS[@]}
 DIRECTION_COUNT=${#SENDERS[@]}
-EXPERIMENT_COUNT=${#METHODS[@]}
-TOTAL_COUNT=$((DATASET_COUNT * DIRECTION_COUNT * EXPERIMENT_COUNT))
+TOTAL_COUNT=$((DATASET_COUNT * DIRECTION_COUNT))
 
 if ! [[ "${MAX_CONCURRENT_GPUS}" =~ ^[1-9][0-9]*$ ]]; then
     echo "ERROR: MAX_CONCURRENT_GPUS must be a positive integer." >&2
@@ -72,7 +68,7 @@ if ! [[ "${MAX_CONCURRENT_GPUS}" =~ ^[1-9][0-9]*$ ]]; then
 fi
 
 # Like run_all.sh, a direct invocation submits one dynamic PBS array; each cell
-# owns one GPU and one dataset/direction/alignment configuration.
+# owns one GPU and one dataset/direction Soft configuration.
 if [[ -z "${PBS_ARRAY_INDEX:-}" ]]; then
     if ! command -v qsub >/dev/null 2>&1; then
         echo "ERROR: qsub was not found in PATH." >&2
@@ -98,16 +94,14 @@ if ! [[ "${CONFIG_OFFSET}" =~ ^[0-9]+$ ]] || (( CONFIG_OFFSET >= TOTAL_COUNT ));
     exit 2
 fi
 
-EXPERIMENT_INDEX=$((CONFIG_OFFSET % EXPERIMENT_COUNT))
-DATASET_DIRECTION_INDEX=$((CONFIG_OFFSET / EXPERIMENT_COUNT))
-DATASET_INDEX=$((DATASET_DIRECTION_INDEX % DATASET_COUNT))
-DIRECTION_INDEX=$((DATASET_DIRECTION_INDEX / DATASET_COUNT))
+DATASET_INDEX=$((CONFIG_OFFSET % DATASET_COUNT))
+DIRECTION_INDEX=$((CONFIG_OFFSET / DATASET_COUNT))
 
 TASK="${DATASETS[${DATASET_INDEX}]}"
 SENDER_MODEL="${SENDERS[${DIRECTION_INDEX}]}"
 RECEIVER_MODEL="${RECEIVERS[${DIRECTION_INDEX}]}"
-CONFIG_METHOD="${METHODS[${EXPERIMENT_INDEX}]}"
-CONFIG_ALIGNMENT="${ALIGNMENTS[${EXPERIMENT_INDEX}]}"
+CONFIG_METHOD=latent_mas_hybrid
+CONFIG_ALIGNMENT=soft
 CONFIG_PROMPT="${PROMPT}"
 MODEL_NAME="${SENDER_MODEL}"
 AGENT_MODELS="${SENDER_MODEL} ${RECEIVER_MODEL}"
@@ -115,12 +109,7 @@ AGENT_MODELS="${SENDER_MODEL} ${RECEIVER_MODEL}"
 sender_slug="$(printf '%s' "${SENDER_MODEL}" | tr -c 'A-Za-z0-9._-' '_')"
 receiver_slug="$(printf '%s' "${RECEIVER_MODEL}" | tr -c 'A-Za-z0-9._-' '_')"
 STATE_DIR="${SUBMIT_DIR}/state/hetero"
-if [[ "${CONFIG_METHOD}" = "text_mas" ]]; then
-    state_config_slug=textmas
-else
-    state_config_slug="${CONFIG_ALIGNMENT}"
-fi
-STATE_PATH="${STATE_DIR}/${TASK}_${state_config_slug}_${sender_slug}_to_${receiver_slug}_state.txt"
+STATE_PATH="${STATE_DIR}/${TASK}_soft_${sender_slug}_to_${receiver_slug}_state.txt"
 mkdir -p "${STATE_DIR}"
 
 append_progress() {

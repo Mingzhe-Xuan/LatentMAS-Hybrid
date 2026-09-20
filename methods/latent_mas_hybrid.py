@@ -2,7 +2,14 @@ from typing import Dict, List, Optional, Tuple
 import copy
 
 from . import Agent, default_agents
-from models import ModelWrapper, _AlignmentTimer, _past_length, _sync_cuda
+from models import (
+    ModelWrapper,
+    SOFT_LATENT_MAX_STEPS,
+    _AlignmentTimer,
+    _past_length,
+    _sync_cuda,
+    latent_vocab_decode_steps,
+)
 from prompts import build_agent_message_sequential_latent_mas, build_agent_message_hierarchical_latent_mas
 from reasoning_models import append_manual_reasoning_cue, resolve_manual_think
 from utils import build_agent_metrics, extract_gsm8k_answer, normalize_answer, extract_markdown_python_block, run_with_timeout
@@ -195,10 +202,32 @@ class LatentMASMethod:
         latent_hidden_list = []
         running_mask = combined_mask
         latent_started_at = time.perf_counter()
-        for _ in range(self.latent_steps):
-            latent_vec = alignment_timer.measure(
-                lambda: agent_model._apply_latent_realignment(last_hidden, agent_model.model)
-            )
+        soft_early_stopping = agent_model.align_method == "soft"
+        decode_step_limit = SOFT_LATENT_MAX_STEPS if soft_early_stopping else self.latent_steps
+        low_entropy_run = torch.zeros(
+            combined_embeds.shape[0], dtype=torch.long, device=last_hidden.device
+        )
+        entropy_length_threshold = int(
+            getattr(self.args, "early_stopping_length_threshold", 256)
+        )
+        entropy_threshold = float(
+            getattr(self.args, "early_stopping_entropy_threshold", 0.01)
+        )
+        actual_steps = 0
+        for _ in range(decode_step_limit):
+            logits_entropy = None
+            if soft_early_stopping:
+                latent_vec, logits_entropy = alignment_timer.measure(
+                    lambda: agent_model._apply_latent_realignment(
+                        last_hidden, agent_model.model, return_entropy=True
+                    )
+                )
+            else:
+                latent_vec = alignment_timer.measure(
+                    lambda: agent_model._apply_latent_realignment(
+                        last_hidden, agent_model.model
+                    )
+                )
             latent_embed = latent_vec.unsqueeze(1)
             next_mask = torch.ones(
                 (latent_embed.shape[0], 1),
@@ -219,6 +248,15 @@ class LatentMASMethod:
             # These are h_1...h_K. The prompt's final h_0 is already present in
             # prefill_hidden and must not be duplicated in the latent segment.
             latent_hidden_list.append(last_hidden.unsqueeze(1))
+            actual_steps += 1
+            if logits_entropy is not None:
+                low_entropy_run = torch.where(
+                    logits_entropy < entropy_threshold,
+                    low_entropy_run + 1,
+                    torch.zeros_like(low_entropy_run),
+                )
+                if bool(torch.all(low_entropy_run >= entropy_length_threshold).item()):
+                    break
 
         if latent_hidden_list:
             latent_hidden_states = torch.cat(latent_hidden_list, dim=1)
@@ -250,7 +288,11 @@ class LatentMASMethod:
             "prefill_seconds": prefill_seconds,
             "latent_decode_seconds": latent_decode_seconds,
             "alignment_seconds": alignment_timer.seconds(),
-            "latent_output_counts": [self.latent_steps] * combined_embeds.shape[0],
+            "latent_output_counts": [actual_steps] * combined_embeds.shape[0],
+            "text_output_counts": [
+                latent_vocab_decode_steps(agent_model.align_method, actual_steps)
+            ]
+            * combined_embeds.shape[0],
             "timing_source": "model_stage_boundaries",
         }
         return next_context, next_context_mask, past
@@ -439,11 +481,12 @@ class LatentMASMethod:
                             "input": wrapped_prompts[idx],
                             "input_ids": prompt_id_rows[idx],
                             "input_tokens": prompt_tokens_batch[idx],
-                            "latent_steps": self.latent_steps,
+                            "latent_steps": phase_metrics["latent_output_counts"][idx],
                             "output": "",
                             "metrics": build_agent_metrics(
                                 text_input_tokens=len(prompt_id_rows[idx]),
                                 latent_input_tokens=context_input_counts[idx],
+                                text_output_tokens=phase_metrics["text_output_counts"][idx],
                                 latent_output_tokens=phase_metrics["latent_output_counts"][idx],
                                 phase_metrics=phase_metrics,
                                 batch_size=batch_size,

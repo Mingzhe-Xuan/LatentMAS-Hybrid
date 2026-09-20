@@ -1,7 +1,10 @@
 import re
 from argparse import Namespace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
+
+import torch
 
 from methods.latent_mas_hybrid import LatentMASMethod
 from methods.text_mas import TextMASMethod
@@ -61,6 +64,73 @@ def test_hybrid_role_mapping_and_run_sh_forwarding() -> None:
     assert 'elif len(agent_models) == 2:' in HYBRID
     assert 'Agent(name="Planner", role="planner")' in HYBRID
     assert 'Agent(name="Judger", role="judger")' in HYBRID
+
+
+def test_hybrid_soft_counts_vocab_decodes_as_text_output() -> None:
+    assert "latent_vocab_decode_steps" in HYBRID
+    assert '"text_output_counts": [' in HYBRID
+    assert 'text_output_tokens=phase_metrics["text_output_counts"][idx]' in HYBRID
+
+
+def test_hybrid_soft_uses_run_all_entropy_stopping_and_actual_steps() -> None:
+    class FakeModel:
+        def __call__(self, *, inputs_embeds, **_kwargs):
+            return SimpleNamespace(
+                past_key_values=None,
+                hidden_states=[inputs_embeds],
+            )
+
+    class FakeWrapper:
+        device = "cpu"
+        align_method = "soft"
+
+        def __init__(self):
+            self.model = FakeModel()
+            self.calls = 0
+
+        def _apply_latent_realignment(self, hidden, _model, *, return_entropy=False):
+            self.calls += 1
+            assert return_entropy
+            return hidden, torch.zeros(hidden.shape[0])
+
+    class FakeTimer:
+        def measure(self, callback):
+            return callback()
+
+        def seconds(self):
+            return 0.0
+
+    method = object.__new__(LatentMASMethod)
+    method.args = Namespace(
+        early_stopping_length_threshold=2,
+        early_stopping_entropy_threshold=0.01,
+    )
+    method.latent_steps = 0
+    method.latent_only = True
+    method.sequential_info_only = True
+    wrapper = FakeWrapper()
+
+    context, mask, _ = method._prefill_and_latent(
+        wrapper,
+        torch.ones(2, 3, 4),
+        torch.ones(2, 3, dtype=torch.long),
+        prompt_width=3,
+        alignment_timer=FakeTimer(),
+    )
+
+    assert wrapper.calls == 2
+    assert context.shape == (2, 2, 4)
+    assert mask.shape == (2, 2)
+    assert wrapper.last_latent_metrics["latent_output_counts"] == [2, 2]
+    assert wrapper.last_latent_metrics["text_output_counts"] == [2, 2]
+
+
+def test_hetero_forwards_run_all_early_stopping_controls() -> None:
+    assert 'EARLY_STOPPING_LENGTH_THRESHOLD="${EARLY_STOPPING_LENGTH_THRESHOLD:-auto}"' in HETERO
+    assert 'EARLY_STOPPING_ENTROPY_THRESHOLD="${EARLY_STOPPING_ENTROPY_THRESHOLD:-auto}"' in HETERO
+    assert "EARLY_STOPPING_LENGTH_THRESHOLD=${EARLY_STOPPING_LENGTH_THRESHOLD}" in HETERO
+    assert "EARLY_STOPPING_ENTROPY_THRESHOLD=${EARLY_STOPPING_ENTROPY_THRESHOLD}" in HETERO
+    assert "export EARLY_STOPPING_LENGTH_THRESHOLD EARLY_STOPPING_ENTROPY_THRESHOLD" in HETERO
 
 
 def test_hetero_explicitly_preserves_complete_context_in_order() -> None:
