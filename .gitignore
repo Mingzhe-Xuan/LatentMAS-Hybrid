@@ -15,6 +15,7 @@ test_state.txt
 state/
 state_*/
 *plot*/
+figure/
 analysis_cache/
 analysis_result/
 analysis/jobs/
