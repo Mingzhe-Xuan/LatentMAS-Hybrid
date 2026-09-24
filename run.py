@@ -22,7 +22,8 @@ from data import (
     load_gpqa_diamond,
     load_mbppplus,
     load_humanevalplus,
-    load_medqa
+    load_medqa,
+    load_local_dev,
 )
 from methods.baseline import BaselineMethod
 from methods.latent_mas import LatentMASMethod
@@ -472,7 +473,9 @@ def main():
     batch: List[Dict] = []
     
     # dataset loading
-    if args.task == "gsm8k":
+    if args.split == "dev":
+        dataset_iter = load_local_dev(args.task)
+    elif args.task == "gsm8k":
         dataset_iter = load_gsm8k(split=args.split)
     elif args.task == "aime2024":
         dataset_iter = load_aime2024(split="train")
