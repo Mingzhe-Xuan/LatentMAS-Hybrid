@@ -61,7 +61,7 @@ if [ "${SINGLE_CONFIG}" = true ]; then
             ;;
         latent_mas|latent_mas_hybrid)
             case "${CONFIG_ALIGNMENT}" in
-                identical|linear|kernel|kernel_early_stopping|soft) ;;
+                identical|linear|kernel|kernel_early_stopping|soft|text) ;;
                 *) echo "ERROR: invalid CONFIG_ALIGNMENT=${CONFIG_ALIGNMENT}"; exit 2 ;;
             esac
             ;;
@@ -80,7 +80,8 @@ if [ "${CAPTURE_ALL_OUTPUT}" = true ] && [ "${RUN_OUTPUT_WRAPPED}" != true ]; th
     mkdir -p "$(dirname "${STATE_FILE}")"
     export FULL_EXP TASK_ONLY STATE_FILE RUN_SCRIPT RESULT_ROOT LOG_ROOT
     export SINGLE_CONFIG CONFIG_METHOD CONFIG_PROMPT CONFIG_ALIGNMENT AGENT_MODELS
-    export GENERATE_BS GENERATE_BS_DIVISOR
+    export GENERATE_BS GENERATE_BS_DIVISOR SEED TIMES
+    export KERNEL_GATE_MODE KERNEL_FIXED_FEATURE KERNEL_TOPK
     export CAPTURE_ALL_OUTPUT RUN_OUTPUT_WRAPPED=true
     exec bash "${BASH_SOURCE[0]}" "$@" > "${STATE_FILE}" 2>&1
 fi
@@ -205,7 +206,7 @@ except (OSError, json.JSONDecodeError):
     print(max(1, fallback // int(sys.argv[2])))
 PY
 }
-SEED=42               # Random seed for reproducibility.
+SEED="${SEED:-42}"     # Random seed for reproducibility.
 # Empty means use params_dict.json[TASK].times; fallback: 1. Each repetition
 # uses SEED, SEED+1, ... and is included in a per-configuration average JSON.
 TIMES="${TIMES:-}"
@@ -267,6 +268,9 @@ ALIGN_RIDGE="${ALIGN_RIDGE:-1e-5}"                 # Linear ridge.
 KERNEL_FEATURES="${KERNEL_FEATURES:-1024}"         # Random-feature count.
 KERNEL_TEMPERATURE="${KERNEL_TEMPERATURE:-0.6}"   # Kernel temperature.
 KERNEL_CHUNK_SIZE="${KERNEL_CHUNK_SIZE:-4096}"    # Kernel chunk size.
+KERNEL_GATE_MODE="${KERNEL_GATE_MODE:-soft}"      # soft, argmax, fixed, or topk.
+KERNEL_FIXED_FEATURE="${KERNEL_FIXED_FEATURE:-0}" # Feature used by fixed gate.
+KERNEL_TOPK="${KERNEL_TOPK:-8}"                   # Features retained by top-k gate.
 SOFT_TEMPERATURE="${SOFT_TEMPERATURE:-0.6}"       # Exact softmax temperature.
 SOFT_CHUNK_SIZE="${SOFT_CHUNK_SIZE:-32}"          # Hidden queries per softmax chunk.
 EARLY_STOPPING_LENGTH_THRESHOLD="${EARLY_STOPPING_LENGTH_THRESHOLD:-auto}"
@@ -306,6 +310,9 @@ COMMON=(
     --kernel_features "${KERNEL_FEATURES}"   # run.py default: 1024; used by kernel
     --kernel_temperature "${KERNEL_TEMPERATURE}" # run.py default: 0.6; used by kernel
     --kernel_chunk_size "${KERNEL_CHUNK_SIZE}" # run.py default: 4096; used by kernel
+    --kernel_gate_mode "${KERNEL_GATE_MODE}"
+    --kernel_fixed_feature "${KERNEL_FIXED_FEATURE}"
+    --kernel_topk "${KERNEL_TOPK}"
     --soft_temperature "${SOFT_TEMPERATURE}" # run.py default: 0.6; used by soft
     --soft_chunk_size "${SOFT_CHUNK_SIZE}" # run.py default: 32; used by soft
 
@@ -350,7 +357,7 @@ fi
 ##   --device2 DEVICE         default: None, then run.py uses --device.
 ##   --agent_models MODEL...  default: None; used by heterogeneous text_mas and latent_mas_hybrid.
 ##
-## --align_method choices/default: identical (default), linear, kernel, kernel_early_stopping, soft.
+## --align_method choices/default: identical (default), linear, kernel, kernel_early_stopping, soft, text.
 ## The current suite runs all five methods explicitly below.
 
 ## ========================== Run Experiment Suite =============================
@@ -368,6 +375,14 @@ run_repeated() {
     # identical/linear/kernel/kernel_early_stopping/soft suites would overwrite one another.
     if [[ "${method}" = "latent_mas" || "${method}" = "latent_mas_hybrid" ]]; then
         method_slug="${method}_${align_method}"
+        if [[ "${align_method}" = "kernel" && "${KERNEL_GATE_MODE}" != "soft" ]]; then
+            method_slug="${method_slug}_${KERNEL_GATE_MODE}"
+            if [[ "${KERNEL_GATE_MODE}" = "fixed" ]]; then
+                method_slug="${method_slug}_${KERNEL_FIXED_FEATURE}"
+            elif [[ "${KERNEL_GATE_MODE}" = "topk" ]]; then
+                method_slug="${method_slug}_${KERNEL_TOPK}"
+            fi
+        fi
     fi
     config_name="${TASK}_${method_slug}_${prompt}_${MODEL_SLUG}_${RUN_TIME}"
     result_dir="${RESULT_ROOT}/${config_name}"

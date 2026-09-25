@@ -29,6 +29,9 @@ class AlignmentState:
     output_bias: Optional[torch.Tensor] = None  # [vocab]
     temperature: float = 1.0
     query_chunk_size: int = 32
+    kernel_gate_mode: str = "soft"
+    kernel_fixed_feature: int = 0
+    kernel_topk: int = 8
 
 
 def build_orf(feature_count: int, dimension: int, *, seed: int, device: torch.device) -> torch.Tensor:
@@ -77,6 +80,9 @@ def build_kernel_state(
     temperature: float,
     seed: int,
     chunk_size: int,
+    gate_mode: str = "soft",
+    fixed_feature: int = 0,
+    topk: int = 8,
 ) -> AlignmentState:
     """Pre-aggregate S and z in sections 5--8 of algo_detail.md."""
     if output_weight.ndim != 2 or input_weight.ndim != 2:
@@ -86,6 +92,12 @@ def build_kernel_state(
         raise ValueError("Kernel alignment requires equal vocabulary sizes")
     if temperature <= 0:
         raise ValueError("kernel temperature must be positive")
+    if gate_mode not in {"soft", "argmax", "fixed", "topk"}:
+        raise ValueError(f"Unsupported kernel gate mode: {gate_mode}")
+    if not 0 <= fixed_feature < feature_count:
+        raise ValueError("kernel fixed feature must be in [0, feature_count)")
+    if gate_mode == "topk" and not 1 <= topk <= feature_count:
+        raise ValueError("kernel top-k must be in [1, feature_count]")
     device = output_weight.device
     omega = build_orf(feature_count, d_a, seed=seed, device=device)
     d_b = input_weight.shape[1]
@@ -109,6 +121,9 @@ def build_kernel_state(
         numerator=s,
         denominator=z,
         temperature=temperature,
+        kernel_gate_mode=gate_mode,
+        kernel_fixed_feature=fixed_feature,
+        kernel_topk=topk,
     )
 
 
@@ -286,6 +301,24 @@ def apply_alignment(hidden: torch.Tensor, state: AlignmentState) -> torch.Tensor
     elif state.method == "kernel":
         assert state.omega is not None and state.numerator is not None and state.denominator is not None
         u = positive_features(flat_hidden / state.temperature, state.omega, stabilize=True)
+        if state.kernel_gate_mode == "fixed":
+            index = state.kernel_fixed_feature
+            prototype = state.numerator[:, index] / state.denominator[index]
+            aligned = prototype.unsqueeze(0).expand(flat_hidden.shape[0], -1)
+            return aligned.reshape(*hidden.shape[:-1], aligned.shape[-1]).to(original_dtype)
+        feature_weights = u * state.denominator.unsqueeze(0)
+        if state.kernel_gate_mode == "argmax":
+            indices = feature_weights.argmax(dim=-1)
+            selected_s = state.numerator.T[indices]
+            aligned = selected_s / state.denominator[indices].unsqueeze(-1)
+            return aligned.reshape(*hidden.shape[:-1], aligned.shape[-1]).to(original_dtype)
+        if state.kernel_gate_mode == "topk":
+            weights, indices = feature_weights.topk(state.kernel_topk, dim=-1)
+            selected_s = state.numerator.T[indices]
+            selected_z = state.denominator[indices]
+            prototypes = selected_s / selected_z.unsqueeze(-1)
+            aligned = (weights.unsqueeze(-1) * prototypes).sum(dim=-2) / weights.sum(dim=-1, keepdim=True)
+            return aligned.reshape(*hidden.shape[:-1], aligned.shape[-1]).to(original_dtype)
         denom = u @ state.denominator
         if not torch.isfinite(denom).all() or (denom <= torch.finfo(denom.dtype).eps).any():
             raise FloatingPointError("Kernel alignment denominator is non-positive or non-finite")

@@ -41,7 +41,7 @@ def latent_vocab_decode_steps(align_method: str, actual_steps: int) -> int:
     Kernel early stopping computes full-vocabulary logits only at its entropy
     check interval; its other latent steps use the kernel approximation.
     """
-    if align_method == "soft":
+    if align_method in ("soft", "text"):
         return actual_steps
     if align_method == "kernel_early_stopping":
         return actual_steps // KERNEL_ENTROPY_CHECK_INTERVAL
@@ -339,6 +339,9 @@ class ModelWrapper:
                 temperature=float(getattr(self.args, "kernel_temperature", 0.6)),
                 seed=int(getattr(self.args, "kernel_seed", getattr(self.args, "seed", 42))),
                 chunk_size=int(getattr(self.args, "kernel_chunk_size", 4096)),
+                gate_mode=str(getattr(self.args, "kernel_gate_mode", "soft")),
+                fixed_feature=int(getattr(self.args, "kernel_fixed_feature", 0)),
+                topk=int(getattr(self.args, "kernel_topk", 8)),
             )
         if self.align_method == "soft":
             return build_soft_state(
@@ -597,8 +600,13 @@ class ModelWrapper:
 
         alignment_timer = _AlignmentTimer(self.device)
         latent_started_at = time.perf_counter()
-        early_stopping_enabled = self.align_method in ("soft", "kernel_early_stopping")
-        if self.align_method == "soft":
+        fixed_budget = bool(getattr(self.args, "fixed_latent_budget", False))
+        if fixed_budget and latent_steps < 0:
+            raise ValueError("fixed latent budget must be nonnegative")
+        early_stopping_enabled = not fixed_budget and self.align_method in ("soft", "kernel_early_stopping")
+        if fixed_budget:
+            decode_step_limit = latent_steps
+        elif self.align_method == "soft":
             decode_step_limit = SOFT_LATENT_MAX_STEPS
         elif self.align_method == "kernel_early_stopping":
             decode_step_limit = KERNEL_EARLY_STOPPING_MAX_STEPS
@@ -689,7 +697,7 @@ class ModelWrapper:
             actual_steps += 1
             if step_observer is not None:
                 step_observer(step + 1, last_hidden)
-            if logits_entropy is not None:
+            if early_stopping_enabled and logits_entropy is not None:
                 low_entropy_run = torch.where(
                     logits_entropy < entropy_threshold,
                     low_entropy_run + 1,
@@ -772,8 +780,13 @@ class ModelWrapper:
 
         alignment_timer = _AlignmentTimer(self.HF_device)
         latent_started_at = time.perf_counter()
-        early_stopping_enabled = self.align_method in ("soft", "kernel_early_stopping")
-        if self.align_method == "soft":
+        fixed_budget = bool(getattr(self.args, "fixed_latent_budget", False))
+        if fixed_budget and latent_steps < 0:
+            raise ValueError("fixed latent budget must be nonnegative")
+        early_stopping_enabled = not fixed_budget and self.align_method in ("soft", "kernel_early_stopping")
+        if fixed_budget:
+            decode_step_limit = latent_steps
+        elif self.align_method == "soft":
             decode_step_limit = SOFT_LATENT_MAX_STEPS
         elif self.align_method == "kernel_early_stopping":
             decode_step_limit = KERNEL_EARLY_STOPPING_MAX_STEPS
@@ -837,7 +850,7 @@ class ModelWrapper:
             last_hidden = outputs.hidden_states[-1][:, -1, :]
             curr_output_embedding.append(latent_embed.detach())
             actual_steps += 1
-            if logits_entropy is not None:
+            if early_stopping_enabled and logits_entropy is not None:
                 low_entropy_run = torch.where(
                     logits_entropy < entropy_threshold,
                     low_entropy_run + 1,

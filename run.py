@@ -285,6 +285,8 @@ def main():
     parser.add_argument("--split", type=str, default="test")
     parser.add_argument("--max_new_tokens", type=int, default=None, help="Maximum new tokens per agent; defaults to params_dict.json[task].max_token, otherwise 20000.")
     parser.add_argument("--latent_steps", type=int, default=45, help="Number of latent steps for LatentMAS method")
+    parser.add_argument("--fixed_latent_budget", action="store_true",
+                        help="Execute exactly latent_steps, disabling entropy-based stopping for controlled comparisons.")
     parser.add_argument(
         "--sequential_info_only",
         action="store_true",
@@ -322,7 +324,7 @@ def main():
             "template adds one, and enabled for all other models."
         ),
     )
-    parser.add_argument("--align_method", dest="align_method", choices=["identical", "linear", "kernel", "kernel_early_stopping", "soft"], default="identical",
+    parser.add_argument("--align_method", dest="align_method", choices=["identical", "linear", "kernel", "kernel_early_stopping", "soft", "text"], default="identical",
                         help="Latent-to-input alignment: identity, linear, kernel, entropy-stopped kernel, or exact soft-token expectation.")
     parser.add_argument("--align_ridge", dest="align_ridge", type=float, default=1e-5,
                         help="Ridge regularization for --align_method linear.")
@@ -334,6 +336,16 @@ def main():
                         help="ORF seed; defaults to --seed when omitted.")
     parser.add_argument("--kernel_chunk_size", dest="kernel_chunk_size", type=int, default=4096,
                         help="Vocabulary chunk size used to precompute kernel statistics.")
+    parser.add_argument(
+        "--kernel_gate_mode",
+        choices=["soft", "argmax", "fixed", "topk"],
+        default="soft",
+        help="Kernel prototype gate: existing soft, hard argmax, fixed feature, or renormalized top-k.",
+    )
+    parser.add_argument("--kernel_fixed_feature", type=int, default=0,
+                        help="Feature index used by --kernel_gate_mode fixed.")
+    parser.add_argument("--kernel_topk", type=int, default=8,
+                        help="Number of retained prototypes for --kernel_gate_mode topk.")
     parser.add_argument("--soft_temperature", dest="soft_temperature", type=float, default=0.6,
                         help="Exact soft-token temperature; distinct from generation and kernel temperatures.")
     parser.add_argument("--soft_chunk_size", dest="soft_chunk_size", type=int, default=32,
@@ -377,6 +389,8 @@ def main():
                         help="Two models select Planner/Judger mode; four models map to Planner/Critic/Refiner/Judger.")
 
     args = parser.parse_args()
+    if args.fixed_latent_budget and args.latent_steps < 0:
+        parser.error("--latent_steps must be nonnegative with --fixed_latent_budget")
 
     if args.repetition_penalty <= 0:
         parser.error("--repetition_penalty must be greater than zero")
@@ -397,6 +411,10 @@ def main():
         parser.error("--soft_temperature must be positive")
     if args.soft_chunk_size <= 0:
         parser.error("--soft_chunk_size must be positive")
+    if not 0 <= args.kernel_fixed_feature < args.kernel_features:
+        parser.error("--kernel_fixed_feature must be in [0, --kernel_features)")
+    if not 1 <= args.kernel_topk <= args.kernel_features:
+        parser.error("--kernel_topk must be in [1, --kernel_features]")
     if args.early_stopping_length_threshold <= 0:
         parser.error("--early_stopping_length_threshold must be positive")
     if args.early_stopping_entropy_threshold < 0:
@@ -547,6 +565,15 @@ def main():
             "method": args.method,
             "prompt": args.prompt,
             "align_method": args.align_method,
+            "latent_steps": args.latent_steps,
+            "fixed_latent_budget": args.fixed_latent_budget,
+            "kernel_features": args.kernel_features,
+            "kernel_temperature": args.kernel_temperature,
+            "kernel_seed": args.kernel_seed,
+            "kernel_chunk_size": args.kernel_chunk_size,
+            "kernel_gate_mode": args.kernel_gate_mode,
+            "kernel_fixed_feature": args.kernel_fixed_feature,
+            "kernel_topk": args.kernel_topk,
             "soft_temperature": args.soft_temperature,
             "soft_chunk_size": args.soft_chunk_size,
             "soft_latent_max_steps": 10000,
